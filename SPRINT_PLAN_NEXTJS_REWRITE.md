@@ -82,7 +82,7 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 - [x] Manual test: overlapping booking rejected at DB level (`23P01` exclusion violation confirmed via raw SQL insert)
 
 **Checklist before moving to Sprint 3:**
-- [ ] Constraint tests written and passing, not just "assumed to work like Laravel version"
+- [x] Constraint tests written and passing, not just "assumed to work like Laravel version"
 - [ ] Schema reviewed against old Laravel schema for parity — nothing silently dropped
 
 ---
