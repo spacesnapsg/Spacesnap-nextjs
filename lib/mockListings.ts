@@ -31,6 +31,14 @@ export type Listing = RentalListing | ConsumableListing;
 
 export const MOCK_CURRENT_SUPPLIER_ID = 1;
 
+export const MOCK_LISTING_RATINGS: Record<number, { average: number; count: number }> = {
+  1: { average: 4.8, count: 132 },
+  2: { average: 4.5, count: 64 },
+  4: { average: 4.9, count: 208 },
+  5: { average: 4.6, count: 91 },
+  7: { average: 4.3, count: 47 },
+};
+
 export const MOCK_LISTINGS: Listing[] = [
   {
     id: 1,

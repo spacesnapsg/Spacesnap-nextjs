@@ -18,7 +18,8 @@ import Button from "@/components/Button";
 import Input from "@/components/Input";
 import BookingModal from "@/components/BookingModal";
 import RequestPurchaseModal from "@/components/RequestPurchaseModal";
-import { MOCK_LISTINGS, type Listing, type ListingType } from "@/lib/mockListings";
+import RatingDisplay from "@/components/RatingDisplay";
+import { MOCK_LISTINGS, MOCK_LISTING_RATINGS, type Listing, type ListingType } from "@/lib/mockListings";
 import { getCompanyName } from "@/lib/mockCompanies";
 import { MOCK_CERTIFICATES, MOCK_USER_CERTIFICATES } from "@/lib/mockPassport";
 
@@ -89,7 +90,17 @@ function ListingBody({
   return (
     <div className="p-5 flex flex-col gap-3 flex-1">
       <div className="flex items-start justify-between gap-2">
-        <h3 className="font-semibold text-body-text leading-snug line-clamp-2">{listing.name}</h3>
+        <div className="min-w-0">
+          <h3 className="font-semibold text-body-text leading-snug line-clamp-2">{listing.name}</h3>
+          {listing.type !== "consumable" && MOCK_LISTING_RATINGS[listing.id] && (
+            <div className="mt-1">
+              <RatingDisplay
+                average={MOCK_LISTING_RATINGS[listing.id].average}
+                count={MOCK_LISTING_RATINGS[listing.id].count}
+              />
+            </div>
+          )}
+        </div>
         <span
           className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${TYPE_BADGE_STYLES[listing.type]}`}
         >

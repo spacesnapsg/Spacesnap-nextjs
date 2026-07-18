@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Award, CalendarCheck, CalendarClock, MapPin, Wallet } from "lucide-react";
 import Card from "@/components/Card";
+import RatingStars from "@/components/RatingStars";
 import { MOCK_CURRENT_USER_WALLET } from "@/lib/mockWallet";
 import { MOCK_LISTINGS } from "@/lib/mockListings";
 import {
@@ -53,6 +54,12 @@ function formatRelativeTime(dateString: string) {
 
 function getListingName(listingId: number) {
   return MOCK_LISTINGS.find((listing) => listing.id === listingId)?.name ?? "Unknown Listing";
+}
+
+function isRentalBooking(activity: { action_type: ActivityActionType; related_listing_id: number | null }) {
+  if (activity.action_type !== "booking" || activity.related_listing_id == null) return false;
+  const listing = MOCK_LISTINGS.find((listing) => listing.id === activity.related_listing_id);
+  return listing?.type === "space" || listing?.type === "equipment";
 }
 
 function getInitial(name: string) {
@@ -167,10 +174,16 @@ export default function UserDashboardPage() {
                 <span className={`h-9 w-9 shrink-0 rounded-full flex items-center justify-center ${className}`}>
                   <Icon size={18} />
                 </span>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm text-body-text font-medium truncate">{activity.description}</p>
                   <p className="text-xs text-muted-text">{formatRelativeTime(activity.created_at)}</p>
                 </div>
+                {isRentalBooking(activity) && (
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <p className="text-xs text-muted-text">Please rate your session!</p>
+                    <RatingStars />
+                  </div>
+                )}
               </div>
             );
           })}
