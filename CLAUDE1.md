@@ -194,3 +194,80 @@ origin than the API routes.
 - 🟡 Cookie `Secure`/`__Secure-` behavior and CORS are only verified against
   localhost HTTP; both need a second pass against the real Railway URL with
   `AUTH_TRUST_HOST`/`AUTH_URL` set, per the checklist gate.
+
+## Sprint 3, Session 3 — CRUD: Spaces + Credentials (2026-07-19)
+
+Built the Spaces (Listings) and read-side Credentials API routes. Manually
+exercised against the seeded dev DB (`ben@acmecoworking.sg`, real login via
+the credentials flow + CSRF, not just eyeballed), not just typechecked.
+
+### Field naming: DB-column names, no translation layer
+
+Decision (flagged per the session scope): the API request/response contract
+uses the same field names as the Prisma model / DB columns throughout —
+`type`, `priceDay`, `priceWeek`, `priceMonth`, `pricePerUnit`,
+`stockQuantity`, `packSize` — **not** the old Laravel API's
+`listing_type`/`credits_daily`/`credits_weekly`/`credits_monthly`/
+`credits_per_unit`/`stock` contract (see CODEBASEAPI_SUMMARY.md §6). Applied
+consistently across all new routes in `app/api/listings/`,
+`app/api/supplier/listings/`, `app/api/credentials/`.
+
+### Credentials: disambiguated via schema, scoped read-only this session
+
+Confirmed against `prisma/schema.prisma`: "credentials" = `UserCertificate`
+(earned/held record — user, certificate, earnedDate, expiryDate), mapped to
+`user_certificates`, distinct from `Certificate` (the catalog/definition,
+Session 4). The schema disambiguated this cleanly, no need to stop and ask.
+
+Write access was a real open question, though: the old backend never had a
+create/update endpoint for `user_certificates` (only `GET /me/certificates`,
+read-own), "admin scope" is explicitly out of scope for this session, and
+the actual issuance mechanism (training pass → credential) is Sprint 4's
+job. Asked before building — decision: **read-only this session**. Built
+`GET /api/credentials` (mine) only, mirroring the old `mine()` endpoint.
+Write endpoints are Sprint 4 scope, once the issuing actor/flow is designed
+alongside the training-credentialing logic, not before.
+
+### Spaces (Listings): gaps fixed at rebuild time, not ported as-is
+
+Per the "known gaps get fixed when rebuilt, not deferred again" ground rule,
+found and fixed a real gap while re-reading `SupplierListingController`
+directly (not just the summary doc): `location`, `description`, `image_url`,
+`require_approval`, and `pack_size` were all fillable on the old `Listing`
+model and exposed in `ListingResource`, but **never validated/settable**
+through `SupplierListingController::rules()` — a supplier could never
+actually set them via the old API, only via seeders. Confirmed the
+already-built (mocked) `AddEditListingModal` collects location, description,
+and a require-approval toggle, so this wasn't a design choice to preserve.
+All five are now proper optional fields on create/update in
+`app/api/supplier/listings/route.ts` and `.../[id]/route.ts`.
+
+`is_available` also now settable directly in the create/update body (the
+modal has an inline toggle for it), in addition to the dedicated
+`PATCH .../[id]/availability` endpoint that mirrors the old
+`toggleAvailability` route (used by the Inventory card's quick-toggle
+button). Both paths write the same column, no conflict.
+
+**Important divergence from the old system, not a bug**: this rewrite's own
+`listings_pricing_matches_type` CHECK constraint (migration
+`20260718171756_listings_pricing_check`, Sprint 2) requires `pack_size` to
+be set for consumables — the old Laravel DB constraint did not. The
+app-layer mirror in `lib/listings.ts` (`assertPricingMatchesType`) enforces
+*this repo's* constraint, confirmed by reading the actual migration SQL, not
+the old CODEBASEAPI_SUMMARY.md §4 description (which is a summary of the old
+system's laxer version). Verified live: `POST` a consumables listing with
+`pricePerUnit`+`stockQuantity` but no `packSize` → clean 422, not a raw
+`23514` DB error.
+
+No `DELETE` endpoint exists (matches the old backend — `SupplierListingController`
+never had a `destroy()` either; not an oversight here, a deliberate port).
+
+### Auth pattern for new routes
+
+No route protection exists yet (see Session 2 above — still a Sprint 4 item),
+so every supplier route calls `auth()` from `auth.ts` directly and checks
+`isSupplier` + `companyId` itself (`lib/supplier-auth.ts`), same pattern as
+the old `supplier` middleware (`is_supplier` only, not company-admin) plus
+the `ListingPolicy::update` company-ownership check. Verified live:
+cross-tenant `PATCH` on another company's listing → 403; unauthenticated
+`GET /api/supplier/listings` and `GET /api/credentials` → 401.
