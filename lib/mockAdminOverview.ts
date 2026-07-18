@@ -11,7 +11,6 @@ export const MOCK_ADMIN_STATS: AdminStat[] = [
 ];
 
 export const MOCK_PENDING_BOOKINGS = 12;
-export const MOCK_PENDING_VERIFICATIONS = 8;
 export const MOCK_PROMOTION_REQUESTS = 3;
 
 export type CertificateSource = "platform" | "supplier_created";

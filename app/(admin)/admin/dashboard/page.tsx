@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Users, Building2, CalendarCheck, DollarSign, Award } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
@@ -8,7 +9,6 @@ import Modal from "@/components/Modal";
 import {
   MOCK_ADMIN_STATS,
   MOCK_PENDING_BOOKINGS,
-  MOCK_PENDING_VERIFICATIONS,
   MOCK_PROMOTION_REQUESTS,
   MOCK_PENDING_CERTIFICATES,
   type PendingCertificate,
@@ -115,6 +115,7 @@ function CertificateReviewModal({
 }
 
 export default function AdminOverviewPage() {
+  const router = useRouter();
   const [certificates, setCertificates] = useState<PendingCertificate[]>(MOCK_PENDING_CERTIFICATES);
   const [certModalOpen, setCertModalOpen] = useState(false);
 
@@ -126,8 +127,7 @@ export default function AdminOverviewPage() {
     setCertificates((prev) => prev.filter((c) => c.id !== id));
   }
 
-  const totalPending =
-    MOCK_PENDING_BOOKINGS + MOCK_PENDING_VERIFICATIONS + MOCK_PROMOTION_REQUESTS + certificates.length;
+  const totalPending = MOCK_PENDING_BOOKINGS + MOCK_PROMOTION_REQUESTS + certificates.length;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -153,18 +153,17 @@ export default function AdminOverviewPage() {
         </div>
 
         <div className="mt-4">
-          <ApprovalRow icon={CalendarCheck} label="Pending Bookings" count={MOCK_PENDING_BOOKINGS} onReview={() => {}} />
           <ApprovalRow
-            icon={Users}
-            label="Pending Verifications"
-            count={MOCK_PENDING_VERIFICATIONS}
-            onReview={() => {}}
+            icon={CalendarCheck}
+            label="Pending Bookings"
+            count={MOCK_PENDING_BOOKINGS}
+            onReview={() => router.push("/admin-approvals")}
           />
           <ApprovalRow
             icon={Building2}
             label="Company Admin Promotion Requests"
             count={MOCK_PROMOTION_REQUESTS}
-            onReview={() => {}}
+            onReview={() => router.push("/admin-approvals")}
           />
           <ApprovalRow
             icon={Award}

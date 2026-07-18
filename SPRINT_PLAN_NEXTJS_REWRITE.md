@@ -49,9 +49,17 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 - [x] Admin Page Users and Companies
 - [x] Admin Page Financials
 - [x] Admin Page Certificates and Training
-- [ ] Admin Approvals
+- [x] Admin Approvals
 
-AdminNavbar: /admin/dashboard, /admin-users, /admin-companies, /admin-financials, and /admin/certificates now all resolve. /admin-approvals remains a dead link carried straight over from the old app (AdminNavbar in spacesnap-web links to it with no matching route there either) — tracked as its own checklist item above.
+AdminNavbar: /admin/dashboard, /admin-users, /admin-companies, /admin-financials, /admin/certificates, and /admin-approvals now all resolve — the dead link carried over from the old app (AdminNavbar in spacesnap-web linked to it with no matching route there either) is closed. The new page consolidates pending-approval categories the backend exposes as separate endpoints (bookings, promotions, certificates) into one tabbed view. Overview's "Pending Approvals" Review buttons now route here instead of being no-ops.
+
+**Verifications removed from this page (2026-07-18) — revisit before Sprint 3 wires the real endpoint.** Built it initially, then pulled it because its semantics are underspecified and I was guessing. What's actually known, from `CODEBASE_SUMMARY.md`:
+- There's an `is_verified` boolean on `users`, explicitly documented as distinct from Laravel's `email_verified_at` — it means "System Admin reviewed and approved this user," not automatic email-ownership confirmation.
+- Backend has `GET /admin/verifications/pending` and `PATCH /admin/verifications/{u}/approve` (`UserController@pendingVerifications` / `approveVerification`) — approve only, no reject endpoint exists.
+- What's *not* documented anywhere (checked `Sprint_Plan.md` and the audit TODOs too): what puts a user into the pending-verification queue in the first place (auto on signup? triggered by some action? tied to an ID/doc upload that doesn't otherwise appear in the schema?), and what `is_verified` actually gates, if anything — unlike credential-gating (Sprint 4) there's no documented feature that checks this flag.
+- The mock data I'd built in guessed a "user vs. supplier" distinction for pending verifications — that was invented for the UI shape, not backed by anything in the docs. Don't treat it as a real requirement if this gets rebuilt.
+
+Bottom line: don't rebuild the Verifications tab until the trigger/effect of `is_verified` is nailed down — probably worth a quick grep of `spacesnap-api` (`UserController@pendingVerifications`) to see what actually populates that pending list, since the frontend-facing docs don't say.
 Sign-out is still unwired in both UserNavbar.tsx and SupplierNavbar.tsx — same gap as the old app (buttons present, never call clearSession()).
 Notifications page doesn't exist as a route, only the NotificationsPanel dropdown component — matches old app structure where /notifications was a page but this port hasn't built it yet.
 The old app's known admin red/orange color never got tokenized (hardcoded arbitrary hex values). Worth a quick check that this rewrite's from-admin-red-start to-admin-orange-end classes are real theme tokens and didn't reintroduce that gap.
