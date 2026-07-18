@@ -46,7 +46,7 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 - [x] Active nav-state highlighting
 - [x] Responsive/visual polish pass
 - [x] Admin Page Overview
-- [ ] Admin Page Users and Companies
+- [x] Admin Page Users and Companies
 - [ ] Admin Page Financials
 - [ ] Admin Page Certificates and Training
 

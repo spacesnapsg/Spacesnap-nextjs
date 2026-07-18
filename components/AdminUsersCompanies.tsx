@@ -1,0 +1,298 @@
+"use client";
+
+import { useState } from "react";
+import { usePathname } from "next/navigation";
+import { Search, ChevronDown } from "lucide-react";
+import Card from "@/components/Card";
+import {
+  MOCK_ADMIN_USERS,
+  MOCK_ADMIN_COMPANIES,
+  type AdminUser,
+  type AdminCompany,
+  type UserRole,
+  type AccountStatus,
+} from "@/lib/mockAdminUsersCompanies";
+
+type MainTab = "users" | "companies";
+type RoleFilter = "all" | UserRole;
+
+const MAIN_TABS: { id: MainTab; label: string }[] = [
+  { id: "users", label: "Users" },
+  { id: "companies", label: "Companies" },
+];
+
+const ROLE_FILTERS: { id: RoleFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "user", label: "User" },
+  { id: "supplier", label: "Supplier" },
+  { id: "company_admin", label: "Company Admin" },
+  { id: "system_admin", label: "System Admin" },
+];
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  user: "User",
+  supplier: "Supplier",
+  company_admin: "Company Admin",
+  system_admin: "System Admin",
+};
+
+const ROLE_BADGE_STYLES: Record<UserRole, string> = {
+  user: "bg-user-teal-start/15 text-user-teal-start border-user-teal-start/30",
+  supplier: "bg-supplier-purple-start/15 text-supplier-purple-end border-supplier-purple-start/30",
+  company_admin: "bg-amber/15 text-amber border-amber/30",
+  system_admin: "bg-gradient-to-r from-admin-red-start/20 to-admin-orange-end/20 text-admin-orange-end border-admin-orange-end/30",
+};
+
+const STATUS_BADGE_STYLES: Record<AccountStatus, string> = {
+  active: "bg-success-green/15 text-success-green border-success-green/30",
+  suspended: "bg-white/10 text-muted-text border-white/20",
+};
+
+function RoleBadge({ role }: { role: UserRole }) {
+  return (
+    <span className={`inline-block shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium ${ROLE_BADGE_STYLES[role]}`}>
+      {ROLE_LABELS[role]}
+    </span>
+  );
+}
+
+function StatusBadge({ status }: { status: AccountStatus }) {
+  return (
+    <span className={`inline-block shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium ${STATUS_BADGE_STYLES[status]}`}>
+      {status === "active" ? "Active" : "Suspended"}
+    </span>
+  );
+}
+
+function ToggleStatusButton({ status, onClick }: { status: AccountStatus; onClick: () => void }) {
+  const isActive = status === "active";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-9 px-4 rounded text-sm font-medium border transition-colors ${
+        isActive
+          ? "border-error-red text-error-red hover:bg-error-red/10"
+          : "border-success-green text-success-green hover:bg-success-green/10"
+      }`}
+    >
+      {isActive ? "Suspend" : "Reinstate"}
+    </button>
+  );
+}
+
+function UsersTab({
+  users,
+  onToggleStatus,
+}: {
+  users: AdminUser[];
+  onToggleStatus: (id: number) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
+
+  const query = search.trim().toLowerCase();
+  const filteredUsers = users.filter((u) => {
+    const matchesRole = roleFilter === "all" || u.role === roleFilter;
+    const matchesQuery =
+      !query || u.name.toLowerCase().includes(query) || u.email.toLowerCase().includes(query);
+    return matchesRole && matchesQuery;
+  });
+
+  return (
+    <Card>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <h2 className="text-lg font-semibold text-body-text">All Users</h2>
+
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-text pointer-events-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name or email..."
+              className="w-full sm:w-64 bg-background border border-border/40 rounded py-3 pr-4 pl-10 text-sm text-body-text placeholder:text-muted-text focus:outline-none focus:border-admin-red-start transition-colors"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {ROLE_FILTERS.map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                onClick={() => setRoleFilter(filter.id)}
+                className={`h-9 px-4 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+                  roleFilter === filter.id
+                    ? "bg-gradient-to-r from-admin-red-start to-admin-orange-end text-white"
+                    : "text-muted-text hover:text-body-text"
+                }`}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {filteredUsers.length === 0 ? (
+        <p className="text-sm text-muted-text text-center py-12">No users found</p>
+      ) : (
+        <div className="overflow-x-auto mt-6">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Name</th>
+                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Email</th>
+                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Role</th>
+                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Company</th>
+                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Member Since</th>
+                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Status</th>
+                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredUsers.map((user) => (
+                <tr key={user.id} className="border-b border-border/60 last:border-0">
+                  <td className="py-3 px-3 text-sm text-body-text font-medium whitespace-nowrap">{user.name}</td>
+                  <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.email}</td>
+                  <td className="py-3 px-3">
+                    <RoleBadge role={user.role} />
+                  </td>
+                  <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.company || "—"}</td>
+                  <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.memberSince}</td>
+                  <td className="py-3 px-3">
+                    <StatusBadge status={user.status} />
+                  </td>
+                  <td className="py-3 px-3">
+                    <ToggleStatusButton status={user.status} onClick={() => onToggleStatus(user.id)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function CompanyRow({
+  company,
+  expanded,
+  onToggle,
+}: {
+  company: AdminCompany;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="bg-background rounded p-4">
+      <button type="button" onClick={onToggle} className="w-full flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="font-medium text-body-text truncate">{company.name}</span>
+          <span className="shrink-0 inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs text-muted-text">
+            {company.suppliers.length} supplier{company.suppliers.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <ChevronDown size={18} className={`shrink-0 text-muted-text transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+
+      {expanded && (
+        <div className="mt-4 flex flex-col gap-2 pl-4 border-l border-border">
+          {company.suppliers.map((supplier) => (
+            <div key={supplier.email} className="flex items-center justify-between gap-3 bg-card rounded px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-sm text-body-text truncate">{supplier.name}</p>
+                <p className="text-xs text-muted-text truncate">{supplier.email}</p>
+              </div>
+              <StatusBadge status={supplier.status} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompaniesTab({
+  companies,
+  expandedIds,
+  onToggle,
+}: {
+  companies: AdminCompany[];
+  expandedIds: Set<number>;
+  onToggle: (id: number) => void;
+}) {
+  return (
+    <Card>
+      <h2 className="text-lg font-semibold text-body-text mb-6">All Companies</h2>
+      <div className="flex flex-col gap-3">
+        {companies.map((company) => (
+          <CompanyRow key={company.id} company={company} expanded={expandedIds.has(company.id)} onToggle={() => onToggle(company.id)} />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+export default function AdminUsersCompanies() {
+  const pathname = usePathname();
+  const [activeTab, setActiveTab] = useState<MainTab>(pathname?.includes("companies") ? "companies" : "users");
+  const [users, setUsers] = useState<AdminUser[]>(MOCK_ADMIN_USERS);
+  const [expandedCompanyIds, setExpandedCompanyIds] = useState<Set<number>>(new Set());
+
+  // System Admin can suspend/reinstate ANY user regardless of role — this is a
+  // platform-wide action, separate from Company Admin's supplier-suspend
+  // feature (which is scoped to suppliers within their own company). These are
+  // two distinct features and should not be merged even though the UI looks similar.
+  function handleToggleStatus(id: number) {
+    // TODO: call PATCH /api/admin/users/{id}/suspend or /reinstate once the
+    // backend admin panel exists — this only updates local mock state for now.
+    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: u.status === "active" ? "suspended" : "active" } : u)));
+  }
+
+  function handleToggleCompany(id: number) {
+    setExpandedCompanyIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
+      <div className="mb-8">
+        <h1 className="text-3xl sm:text-4xl font-extrabold bg-gradient-to-r from-admin-red-start to-admin-orange-end bg-clip-text text-transparent">
+          Users & Companies
+        </h1>
+        <p className="text-muted-text mt-1">Manage platform users and company accounts</p>
+      </div>
+
+      <div className="inline-flex bg-card border border-border rounded-full p-1 gap-1 w-fit mb-6">
+        {MAIN_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`h-9 px-4 rounded-full text-sm font-medium transition-colors ${
+              activeTab === tab.id ? "bg-gradient-to-r from-admin-red-start to-admin-orange-end text-white" : "text-muted-text hover:text-body-text"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "users" ? (
+        <UsersTab users={users} onToggleStatus={handleToggleStatus} />
+      ) : (
+        <CompaniesTab companies={MOCK_ADMIN_COMPANIES} expandedIds={expandedCompanyIds} onToggle={handleToggleCompany} />
+      )}
+    </div>
+  );
+}
