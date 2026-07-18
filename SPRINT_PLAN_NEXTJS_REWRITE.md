@@ -47,8 +47,9 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 - [x] Responsive/visual polish pass
 - [x] Admin Page Overview
 - [x] Admin Page Users and Companies
-- [ ] Admin Page Financials
+- [x] Admin Page Financials
 - [ ] Admin Page Certificates and Training
+- [ ] Admin Approvals
 
 AdminNavbar has 5 of 6 links pointing nowhere — only /admin/dashboard exists as a page. /admin-users, /admin-companies, /admin-financials, /admin/certificates aren't built yet, and /admin-approvals is a dead link carried straight over from the old app (AdminNavbar in spacesnap-web links to it with no matching route there either).
 Sign-out is still unwired in both UserNavbar.tsx and SupplierNavbar.tsx — same gap as the old app (buttons present, never call clearSession()).
