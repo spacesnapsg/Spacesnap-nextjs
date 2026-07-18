@@ -133,6 +133,19 @@ This is the sprint that didn't exist as its own thing in the original build — 
 - [ ] Tier logic: achieved tier per equipment class only increases; higher tier satisfies lower requirement; booking flow compares achieved vs. required and surfaces only the delta
 - [ ] Booking validation: double-booking prevention enforced end-to-end (not just at DB constraint level — surface a clean error in the UI too)
 - [ ] Training/credentialing flow: submit, review, pass/fail, issue credential
+- [ ] **Close the route-protection gap found in the Sprint 3 Session 2 session/cookie
+      review (see `CLAUDE1.md`, "Sprint 3, Session 2" section, 2026-07-19):
+      there is currently no server-side route protection anywhere** — no
+      `middleware.ts`, no `auth()` call in any Server Component/layout, no
+      `redirect()` guard. Confirmed live: with zero session cookie,
+      `/admin/dashboard` and `/supplier` render their full pages to an
+      anonymous request; only the navbar differs by route group, nothing
+      actually checks the caller. Fix by adding `middleware.ts` (or
+      per-layout `auth()` + `redirect()`) gating `(user)`, `(supplier)`, and
+      `(admin)` route groups by the matching `isSupplier`/`isCompanyAdmin`/
+      `isSystemAdmin` flag. This is the last item in Sprint 4 specifically so
+      it closes right before Sprint 5's kiosk/middleware work builds on top
+      of a trust boundary that actually holds.
 
 **Checklist before moving to Sprint 5:**
 - [ ] Tier comparison logic unit-tested with edge cases (equal tier, higher tier, no credential, expired credential)

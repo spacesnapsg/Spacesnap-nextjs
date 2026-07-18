@@ -84,3 +84,113 @@ the actual file from the old repo path above — don't guess or invent structure
 - `/clear` between unrelated tasks; `/compact` mid-task if context gets heavy.
 - This file + `SPRINT_PLAN_NEXTJS_REWRITE.md` are the persistent memory across
   sessions — don't rely on chat history carrying forward.
+
+## Sprint 3, Session 2 — Session/Cookie Handling Review (2026-07-19)
+
+Dedicated review of session/cookie handling across SSR + client, per the
+Sprint 3 checklist gate. Everything below was actually exercised (live
+server, real login/logout/DB writes), not eyeballed from the code.
+
+### 🔴 Critical finding: no server-side route protection exists
+
+There is no `middleware.ts` anywhere in the repo, no `auth()` call in any
+Server Component/layout, no `cookies()` read, and no `redirect()` guard
+anywhere in `app/`. Confirmed live: with **zero session cookie**,
+`GET /admin/dashboard` renders the full admin platform-overview page
+(user counts, revenue, pending approvals), and `GET /supplier` renders the
+full supplier analytics dashboard. The three route-group layouts
+(`app/(user)/layout.tsx`, `app/(supplier)/layout.tsx`,
+`app/(admin)/layout.tsx`) only mount a navbar — they do not check who's
+asking. Role flags (`isSupplier`/`isCompanyAdmin`/`isSystemAdmin`) are
+computed in `auth.ts` but nothing in `app/` ever reads them.
+**This must be fixed before Sprint 3 can be considered done** — it's not a
+polish item, it's every role-scoped page and (likely) every data-fetching
+call being reachable by an anonymous request. Next step: add `middleware.ts`
+(or per-layout `auth()` + `redirect()`) gating each route group by the
+matching role flag before Sprint 3.5 starts.
+
+### Test matrix — confirmed how, not just "looks right"
+
+| Case | Method | Result |
+|---|---|---|
+| Fresh login → session available immediately | Logged in via `/login` UI (Playwright-style browser) as `ethan@example.com`, then again via raw `curl` against `/api/auth/callback/credentials` with a real CSRF token | `Set-Cookie: authjs.session-token=...` returned on the login response; immediate `GET /api/auth/session` on the same cookie jar returns the correct user, no delay/race |
+| Session "refresh" (JWT strategy, not DB strategy — see below) | Suspended the logged-in user directly via `UPDATE users SET status='suspended'`, then re-hit `/api/auth/session` with the still-valid cookie | Returned `null` body **and** `Set-Cookie: authjs.session-token=; Max-Age=0` (cookie cleared) — the `jwt` callback's per-read DB status check (`auth.ts:67-74`) works as designed |
+| Logout clears session | Called `/api/auth/signout` with a valid CSRF token on an authenticated cookie jar | `Set-Cookie: authjs.session-token=; Max-Age=0`; immediate follow-up `/api/auth/session` on that jar returns `null` |
+| Expired/malformed session → clean handling | Sent `Cookie: authjs.session-token=garbage.invalid.token` | `200 OK`, body `null`, cookie cleared — **not** a 500 or unhandled exception |
+| Concurrent tabs, same browser (shared cookie jar) | Logged in once, signed out via one "tab" (request), then re-read session on the same shared jar (simulating a second tab's next action) | Correctly `null` — because both tabs share one browser cookie store, sign-out is reflected immediately on next request. **Caveat:** this only matters in practice if a tab's UI reflects session state, and currently none do (see below) |
+| Concurrent tabs / devices, separate sessions | Logged in twice with two independent cookie jars (two distinct signed JWTs for the same user) | Signing out jar A does **not** invalidate jar B's token — expected for a stateless JWT strategy with no server-side session registry; each token lives until its own ~30-day expiry or its own sign-out. Worth knowing this is the tradeoff of the JWT-strategy decision documented in `auth.ts` |
+
+Note on "session refresh": the sprint-plan checklist item referenced
+"NextAuth's default DB session refresh," but Sprint 3 deliberately switched
+to the **JWT** strategy (Credentials-only providers can't use the database
+strategy — see the comment block at the top of `auth.ts`). The equivalent
+JWT-strategy behavior is the per-read DB status re-check in the `jwt`
+callback, tested above, not a session-table refresh.
+
+### Where session is (and isn't) actually read
+
+- **Route Handlers**: `/api/auth/[...nextauth]/route.ts` (the NextAuth
+  handler itself) — reads/writes the session correctly, confirmed above.
+- **Server Components**: none call `auth()`. Confirmed by grep and by the
+  live unauthenticated-admin-dashboard test above.
+- **Client Components**: `next-auth/react`'s `signIn`/`signOut`/`getSession`
+  are used directly (`app/login/page.tsx`, the three navbar components' sign-
+  out buttons). `useSession()` is not used anywhere, and `<SessionProvider>`
+  does not wrap the app (`app/layout.tsx` has no provider). This is currently
+  harmless (nothing calls the hook that needs the provider) but is a trap for
+  the next person who adds `useSession()` expecting it to just work.
+- **Middleware**: none exists.
+- Sprint-plan note that sign-out was "unwired" in `UserNavbar`/`SupplierNavbar`
+  is **stale** — confirmed all three navbars (`UserNavbar.tsx`,
+  `SupplierNavbar.tsx`, `AdminNavbar.tsx`) now correctly call
+  `signOut({ callbackUrl: "/login" })`.
+
+### Cookie config (secure / sameSite / httpOnly)
+
+No explicit `cookies` block in `auth.ts` — Auth.js v5 defaults apply.
+Confirmed live on `localhost` (HTTP, dev): `authjs.session-token`,
+`HttpOnly`, `SameSite=Lax`, no `Secure` flag, no `__Secure-` name prefix,
+`~30 day` expiry (Auth.js default `maxAge`). That's correct *for HTTP dev*.
+
+**Not yet confirmed against Railway production**, and this is a real gap:
+- No `AUTH_URL` / `AUTH_TRUST_HOST` (or legacy `NEXTAUTH_URL`) is set in
+  `.env`, `.env.example`, or anywhere in the repo. Auth.js v5 only emits the
+  `Secure`-flagged, `__Secure-`-prefixed cookie when it trusts the request
+  as HTTPS. Behind Railway's reverse proxy (TLS terminated at the edge,
+  forwarded to the app over plain HTTP internally, similar to most non-Vercel
+  hosts), Auth.js needs `AUTH_TRUST_HOST=true` (or a correct `AUTH_URL`) to
+  trust `X-Forwarded-Proto` — without it, cookies may be issued without
+  `Secure`, or requests may hit Auth.js's `UntrustedHost` guard.
+  **Action item: set `AUTH_TRUST_HOST=true` and `AUTH_URL=https://<railway-domain>`
+  in the Railway service's env vars, then re-run this same cookie check
+  against the deployed URL** (`curl -i https://<domain>/api/auth/csrf`,
+  confirm `Secure` + `__Secure-authjs.csrf-token` in the response) before
+  Sprint 3.5 starts. This file's test above only proves the *mechanism*
+  works; it does not prove the *production* cookie is actually marked Secure.
+
+### CORS
+
+Locally, no `Access-Control-Allow-Origin` (or any `Access-Control-*`) header
+is returned from `/api/auth/session` or `/api/auth/register` even when sent
+with a cross-origin `Origin` header — confirmed via `curl`. This is the safe
+default (same-origin browser policy applies, nothing explicitly opened up).
+Since this is a single Next.js app (API routes + pages co-located, not a
+separate backend service), CORS risk is inherently low as long as that
+topology holds on Railway. **Not yet confirmed against the actual deployed
+Railway URL** — re-run the same cross-origin `curl` check post-deploy to
+make sure no CORS headers were introduced by a proxy/CDN layer in front of
+the app, and that the frontend isn't accidentally served from a different
+origin than the API routes.
+
+### Bottom line for the Sprint 3 → 3.5 gate
+
+- ✅ Session mechanism itself (login, logout, suspension re-check, malformed-
+  token handling, cookie clearing) is correct and was exercised directly,
+  not assumed.
+- ✅ Sign-out wiring gap from Sprint 1 is fixed.
+- 🔴 **Route protection does not exist** — this is the actual blocker, not
+  the cookie plumbing. Must be built (middleware or per-layout `auth()`
+  guards) before this sprint can close.
+- 🟡 Cookie `Secure`/`__Secure-` behavior and CORS are only verified against
+  localhost HTTP; both need a second pass against the real Railway URL with
+  `AUTH_TRUST_HOST`/`AUTH_URL` set, per the checklist gate.
