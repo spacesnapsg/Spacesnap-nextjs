@@ -3,11 +3,13 @@ import { BarChart3, Package, Building2, FileText, User, UserCircle, LogOut } fro
 import Navbar from "./Navbar";
 import NavGroup, { NavItem } from "./NavGroup";
 import LogoBox from "./LogoBox";
+import NotificationsPanel from "./NotificationsPanel";
 
 export default function SupplierNavbar() {
   return (
     <Navbar
       logo={<LogoBox src="/logos/logo-purple.png" />}
+      notifications={<NotificationsPanel accentGradient="from-supplier-purple-start to-supplier-purple-end" />}
       actions={
         <>
           <Link

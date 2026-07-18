@@ -3,11 +3,13 @@ import { Globe, IdCard, Wallet, LayoutDashboard, LogOut, Building2 } from "lucid
 import Navbar from "./Navbar";
 import NavGroup, { NavItem } from "./NavGroup";
 import LogoBox from "./LogoBox";
+import NotificationsPanel from "./NotificationsPanel";
 
 export default function UserNavbar() {
   return (
     <Navbar
       logo={<LogoBox src="/logos/logo-teal.png" />}
+      notifications={<NotificationsPanel accentGradient="from-user-teal-start to-user-teal-end" />}
       actions={
         <>
           <Link
