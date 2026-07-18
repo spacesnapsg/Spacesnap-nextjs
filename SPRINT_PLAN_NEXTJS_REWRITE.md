@@ -33,18 +33,29 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 - [x] Set up file-based routing matching current nav structure (user/, supplier/, admin/)
 - [x] Three role-specific layouts (UserLayout/teal, SupplierLayout/purple, AdminLayout/red) as Next.js layout.tsx files
 - [x] Shared components ported to TS: Navbar, Button, Card, Input
-- [ ] Login/Signup pages
-- [ ] Discover/Marketplace page + Book Now modal
-- [ ] Digital Passport page + cert detail modal + training tutorials
+- [x] Login/Signup pages
+- [x] Discover/Marketplace page + Book Now modal
+- [x] Digital Passport page + cert detail modal + training tutorials
 - [x] Credit Wallet page + Top Up modal
-- [ ] User Dashboard
-- [ ] Notifications panel (reusable component, both navbars)
-- [ ] Supplier Inventory page + Add/Edit Listing modal
-- [ ] Supplier Tutorials page
-- [ ] Supplier Requests page
-- [ ] Supplier Profile page
-- [ ] Active nav-state highlighting
-- [ ] Responsive/visual polish pass
+- [x] User Dashboard
+- [x] Notifications panel (reusable component, both navbars)
+- [x] Supplier Inventory page + Add/Edit Listing modal
+- [x] Supplier Tutorials page
+- [x] Supplier Requests page
+- [x] Supplier Profile page
+- [x] Active nav-state highlighting
+- [x] Responsive/visual polish pass
+- [x] Admin Page Overview
+- [ ] Admin Page Users and Companies
+- [ ] Admin Page Financials
+- [ ] Admin Page Certificates and Training
+
+AdminNavbar has 5 of 6 links pointing nowhere — only /admin/dashboard exists as a page. /admin-users, /admin-companies, /admin-financials, /admin/certificates aren't built yet, and /admin-approvals is a dead link carried straight over from the old app (AdminNavbar in spacesnap-web links to it with no matching route there either).
+Sign-out is still unwired in both UserNavbar.tsx and SupplierNavbar.tsx — same gap as the old app (buttons present, never call clearSession()).
+Notifications page doesn't exist as a route, only the NotificationsPanel dropdown component — matches old app structure where /notifications was a page but this port hasn't built it yet.
+The old app's known admin red/orange color never got tokenized (hardcoded arbitrary hex values). Worth a quick check that this rewrite's from-admin-red-start to-admin-orange-end classes are real theme tokens and didn't reintroduce that gap.
+
+
 
 **Checklist before moving to Sprint 2:**
 - [ ] Every page renders with mock/static data, no console errors
