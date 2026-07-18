@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { User, Boxes, Scale, type LucideIcon } from "lucide-react";
 import Card from "@/components/Card";
@@ -60,6 +61,7 @@ const ROLES: RoleOption[] = [
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function SignupPage() {
+  const router = useRouter();
   const [formData, setFormData] = useState<SignupFormData>({
     fullName: "",
     email: "",
@@ -71,13 +73,14 @@ export default function SignupPage() {
     agreedToPrivacy: false,
   });
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   function handleChange(e: ChangeEvent<HTMLInputElement>) {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   }
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
     if (
@@ -99,7 +102,30 @@ export default function SignupPage() {
     }
 
     setError("");
-    console.log(formData);
+    setSubmitting(true);
+
+    // Register only takes name/email/password, matching the old Laravel
+    // AuthController@register contract — role/company selection above isn't
+    // backed by that endpoint (it wasn't in the old app either).
+    const response = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: formData.fullName,
+        email: formData.email,
+        password: formData.password,
+      }),
+    });
+
+    setSubmitting(false);
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      setError(data?.message || "Unable to create your account. Please try again.");
+      return;
+    }
+
+    router.push("/login");
   }
 
   return (
@@ -232,8 +258,8 @@ export default function SignupPage() {
 
             {error && <p className="text-sm text-error-red">{error}</p>}
 
-            <Button type="submit" className="w-full mt-2">
-              Create Account
+            <Button type="submit" className="w-full mt-2" disabled={submitting}>
+              {submitting ? "Creating Account..." : "Create Account"}
             </Button>
           </form>
 

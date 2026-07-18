@@ -16,8 +16,17 @@ starting work.
 
 - Next.js (App Router) + TypeScript
 - Backend: Next.js API routes (not a separate Express service)
-- Auth: NextAuth (Auth.js v5) — Credentials provider + Prisma adapter, database
-  session strategy. Not custom JWT/session.
+- Auth: NextAuth (Auth.js v5) — Credentials provider + Prisma adapter, **JWT
+  session strategy** (changed from the original "database session strategy"
+  decision during Sprint 3: Auth.js v5 hard-fails at request time when
+  Credentials is the only provider and the strategy is `"database"` — see
+  `@auth/core/lib/utils/assert.js`, `UnsupportedStrategy`. The adapter stays
+  registered for when an OAuth provider is added later, since only OAuth
+  providers can actually use adapter-backed sessions here. Because a JWT
+  can't be revoked by deleting a row the way a database session can, the
+  `jwt` callback in `auth.ts` re-checks `users.status` from the DB on every
+  session read and forces sign-out if `suspended` — see the callback comment
+  in `auth.ts` for details).
 - ORM: Prisma, with raw SQL migration for the bookings exclusion constraint
   (Prisma can't express `EXCLUDE ... USING gist`)
 - DB (dev): local Postgres, database name `spacesnap_dev`
