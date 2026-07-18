@@ -48,10 +48,10 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 - [x] Admin Page Overview
 - [x] Admin Page Users and Companies
 - [x] Admin Page Financials
-- [ ] Admin Page Certificates and Training
+- [x] Admin Page Certificates and Training
 - [ ] Admin Approvals
 
-AdminNavbar has 5 of 6 links pointing nowhere — only /admin/dashboard exists as a page. /admin-users, /admin-companies, /admin-financials, /admin/certificates aren't built yet, and /admin-approvals is a dead link carried straight over from the old app (AdminNavbar in spacesnap-web links to it with no matching route there either).
+AdminNavbar: /admin/dashboard, /admin-users, /admin-companies, /admin-financials, and /admin/certificates now all resolve. /admin-approvals remains a dead link carried straight over from the old app (AdminNavbar in spacesnap-web links to it with no matching route there either) — tracked as its own checklist item above.
 Sign-out is still unwired in both UserNavbar.tsx and SupplierNavbar.tsx — same gap as the old app (buttons present, never call clearSession()).
 Notifications page doesn't exist as a route, only the NotificationsPanel dropdown component — matches old app structure where /notifications was a page but this port hasn't built it yet.
 The old app's known admin red/orange color never got tokenized (hardcoded arbitrary hex values). Worth a quick check that this rewrite's from-admin-red-start to-admin-orange-end classes are real theme tokens and didn't reintroduce that gap.
