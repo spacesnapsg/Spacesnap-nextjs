@@ -209,9 +209,11 @@ model Certificate {
   @@map("certificates")
 }
 
-// Pricing fields intentionally nullable with no CHECK yet — day/week/month for
-// space/equipment vs. per_unit+stock+pack_size for consumables is enforced at
-// the DB level in the follow-up constraints session, not here.
+// Pricing fields are nullable here because the day/week/month vs.
+// per_unit+stock+pack_size split (space/equipment vs. consumables) is
+// enforced by the `listings_pricing_matches_type` CHECK constraint added in
+// migration 20260718171756_listings_pricing_check (raw SQL — Prisma can't
+// express this cross-column rule natively).
 model Listing {
   id              Int         @id @default(autoincrement())
   companyId       Int         @map("company_id")
@@ -357,9 +359,11 @@ model TrainingSession {
   @@map("training_sessions")
 }
 
-// No overlap EXCLUDE constraint yet — deliberately deferred to the
-// constraints follow-up session (Prisma can't express it natively; it needs
-// a raw SQL migration with btree_gist).
+// Overlap prevention is enforced by the `bookings_no_overlap` EXCLUDE USING
+// gist constraint added in migration 20260718171742_bookings_no_overlap_exclude
+// (raw SQL + btree_gist — Prisma can't express EXCLUDE natively). Any status
+// other than `cancelled` holds the slot; only cancelled bookings are excluded
+// from the overlap check.
 model Booking {
   id          Int           @id @default(autoincrement())
   userId      String        @map("user_id")

@@ -73,13 +73,13 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 
 ## Sprint 2: Database (Prisma + PostgreSQL)
 
-- [ ] Prisma schema: users, suppliers, spaces, credentials, training_records, bookings, transactions, certificates (with pending/approved/rejected states)
-- [ ] Exclusion constraint on `bookings` to prevent overlapping time slots (Prisma doesn't support this natively — needs raw SQL migration)
-- [ ] CHECK constraints for credential-gating rules
-- [ ] `is_verified` boolean on users (admin-review concept — kept distinct from any auth-provider email verification flag)
-- [ ] Foreign keys across all tables
-- [ ] Seed script with test/mock data
-- [ ] Manual test: overlapping booking rejected at DB level
+- [x] Prisma schema: users, suppliers, spaces, credentials, training_records, bookings, transactions, certificates (with pending/approved/rejected states)
+- [x] Exclusion constraint on `bookings` to prevent overlapping time slots (Prisma doesn't support this natively — needs raw SQL migration)
+- [x] CHECK constraints for listing pricing rules (space/equipment vs. consumables)
+- [ ] `is_verified` boolean on users (admin-review concept — kept distinct from any auth-provider email verification flag) — deliberately not added yet, see Sprint 1 notes above on undefined trigger/effect
+- [x] Foreign keys across all tables
+- [x] Seed script with test/mock data
+- [x] Manual test: overlapping booking rejected at DB level (`23P01` exclusion violation confirmed via raw SQL insert)
 
 **Checklist before moving to Sprint 3:**
 - [ ] Constraint tests written and passing, not just "assumed to work like Laravel version"
