@@ -469,3 +469,38 @@ pages — all still read from the `lib/mock*.ts` files (`mockListings.ts`,
 `mockSupplierDashboard.ts`, `mockRequests.ts`, `mockAdmin*.ts`, etc.), not yet
 wired to the real API routes or React Query. Next session per the suggested
 order: Discover/Marketplace.
+
+## Sprint 4, Item 1 — Credential-Gating (2026-07-19)
+
+Task brief asked to block booking creation at the API layer when the user
+lacks a valid, non-expired credential for the listing's required
+certificate(s), scoped strictly to the booking-creation endpoint (tier
+comparison is item 2, double-booking is item 3 — both explicitly untouched).
+
+**Finding: this was already built**, ahead of schedule, in Sprint 3 Session 4
+(see that section above) — `missingCertificateIds()` in `lib/bookings.ts`
+already does the exists-and-not-expired check (`OR: [{ expiryDate: null },
+{ expiryDate: { gte: today } }]`), and `app/api/bookings/route.ts` calls it
+before the `prisma.booking.create` write, returning a clean `422` with
+`missingCertificates: [names]` rather than a raw DB error. No tier concept
+exists anywhere in the schema (confirmed via repo-wide grep for "tier") —
+the task brief's "required tier" language doesn't map to anything built yet,
+consistent with tier logic being its own item; flagging rather than
+inventing a field for it.
+
+Did not just trust the Session 4 notes — re-verified live against the dev
+server (`localhost:3000`) and the seeded DB, real cookie-jar logins via
+`/api/auth/callback/credentials`, cleanup after:
+- `ethan@example.com` (holds an *expired* Fire Safety Marshal cert,
+  expired 2026-01-10) → `POST /api/bookings` on listing 55 (Meeting Room B,
+  requires that cert) → `422 { missingCertificates: ["Fire Safety Marshal"] }`
+- `farah@example.com` (holds a valid, unexpired Forklift cert) →
+  `POST /api/bookings` on listing 56 (Forklift Rental, requires that cert) →
+  `201`, booking created
+- `ethan` → listing 57 (Power Drill Set, no certificate requirement) →
+  `201` — confirms no false-positive blocking on listings with no
+  requirement
+- Both test bookings (ids 98, 99) deleted afterward; DB back to seeded state
+
+No code changes were needed. Updated the Sprint 4 checklist item in
+`SPRINT_PLAN_NEXTJS_REWRITE.md` to checked, with a note on why.

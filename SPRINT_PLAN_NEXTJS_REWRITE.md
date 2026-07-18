@@ -129,7 +129,7 @@ This is the sprint that didn't exist as its own thing in the original build — 
 
 ## Sprint 4: Core Logic
 
-- [ ] Credential-gating: booking blocked without valid, non-expired credential
+- [x] Credential-gating: booking blocked without valid, non-expired credential — existence+expiry check was already built in Sprint 3 Session 4 (`missingCertificateIds`, `lib/bookings.ts`); this item re-verified it live against seeded data, no code changes needed. Schema has no `tier` concept at all (confirmed by grep) — out of scope here per item 2, not silently dropped
 - [ ] Tier logic: achieved tier per equipment class only increases; higher tier satisfies lower requirement; booking flow compares achieved vs. required and surfaces only the delta
 - [ ] Booking validation: double-booking prevention enforced end-to-end (not just at DB constraint level — surface a clean error in the UI too)
 - [ ] Training/credentialing flow: submit, review, pass/fail, issue credential
