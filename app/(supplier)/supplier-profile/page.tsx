@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Mail, MapPin, Calendar, CheckCircle2, Download, FileText, Receipt as ReceiptIcon } from "lucide-react";
+import { useState, type ChangeEvent } from "react";
+import { Mail, MapPin, Calendar, CheckCircle2, Camera, Download, FileText, Receipt as ReceiptIcon } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
@@ -95,15 +95,38 @@ function ProfileCard({
   onToggleEdit: () => void;
   onChange: (field: "name" | "title" | "avatarUrl", value: string) => void;
 }) {
+  function handleAvatarFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        onChange("avatarUrl", reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
   return (
     <Card>
       <div className="flex flex-col items-center text-center">
-        <div className="w-24 h-24 rounded-full bg-supplier-purple-start/20 text-supplier-purple-end border-4 border-supplier-purple-start/20 text-2xl font-semibold flex items-center justify-center overflow-hidden">
-          {profile.avatarUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={profile.avatarUrl} alt="" className="w-full h-full object-cover" />
-          ) : (
-            getInitials(profile.name)
+        <div className="relative">
+          <div className="w-24 h-24 rounded-full bg-supplier-purple-start/20 text-supplier-purple-end border-4 border-supplier-purple-start/20 text-2xl font-semibold flex items-center justify-center overflow-hidden">
+            {profile.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={profile.avatarUrl} alt="" className="w-full h-full object-cover" />
+            ) : (
+              getInitials(profile.name)
+            )}
+          </div>
+          {editing && (
+            <label
+              className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-supplier-purple-start border-2 border-card flex items-center justify-center text-white cursor-pointer hover:bg-supplier-purple-end transition-colors"
+              aria-label="Upload avatar"
+            >
+              <Camera size={14} />
+              <input type="file" accept="image/*" className="hidden" onChange={handleAvatarFile} />
+            </label>
           )}
         </div>
 
@@ -113,30 +136,21 @@ function ProfileCard({
         </span>
 
         {editing ? (
-          <div className="w-full flex flex-col gap-3 mt-4">
-            <div>
-              <label className="text-xs text-muted-text">Name</label>
+          <div className="w-full flex flex-col gap-4 mt-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-muted-text">Full Name</label>
               <Input
                 value={profile.name}
                 onChange={(e) => onChange("name", e.target.value)}
-                className="w-full mt-1.5 focus:!border-supplier-purple-start"
+                className="w-full focus:!border-supplier-purple-start"
               />
             </div>
-            <div>
-              <label className="text-xs text-muted-text">Title</label>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs text-muted-text">Job Title</label>
               <Input
                 value={profile.title}
                 onChange={(e) => onChange("title", e.target.value)}
-                className="w-full mt-1.5 focus:!border-supplier-purple-start"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-muted-text">Avatar URL</label>
-              <Input
-                value={profile.avatarUrl ?? ""}
-                onChange={(e) => onChange("avatarUrl", e.target.value)}
-                placeholder="https://..."
-                className="w-full mt-1.5 focus:!border-supplier-purple-start"
+                className="w-full focus:!border-supplier-purple-start"
               />
             </div>
           </div>
@@ -227,24 +241,23 @@ function BusinessDetailsCard({
           onChange={(v) => setBusiness((b) => ({ ...b, businessName: v }))}
         />
         <FieldDisplay
-          label="Business Description"
-          value={business.businessDescription}
+          label="Business Registration Number"
+          value={business.businessRegistrationNumber}
           editing={editing}
-          multiline
-          onChange={(v) => setBusiness((b) => ({ ...b, businessDescription: v }))}
+          onChange={(v) => setBusiness((b) => ({ ...b, businessRegistrationNumber: v }))}
         />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FieldDisplay
-            label="Contact Email"
-            value={business.contactEmail}
+            label="Finance Contact Email"
+            value={business.financeContactEmail}
             editing={editing}
-            onChange={(v) => setBusiness((b) => ({ ...b, contactEmail: v }))}
+            onChange={(v) => setBusiness((b) => ({ ...b, financeContactEmail: v }))}
           />
           <FieldDisplay
-            label="Years Operating"
-            value={business.yearsOperating}
+            label="Finance Contact Person Name"
+            value={business.financeContactPersonName}
             editing={editing}
-            onChange={(v) => setBusiness((b) => ({ ...b, yearsOperating: v }))}
+            onChange={(v) => setBusiness((b) => ({ ...b, financeContactPersonName: v }))}
           />
         </div>
         <FieldDisplay

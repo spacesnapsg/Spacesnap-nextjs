@@ -25,19 +25,18 @@ export const MOCK_IS_COMPANY_ADMIN = false;
 
 export interface BusinessDetails {
   businessName: string;
-  businessDescription: string;
-  contactEmail: string;
+  businessRegistrationNumber: string;
+  financeContactEmail: string;
   businessLocation: string;
-  yearsOperating: string;
+  financeContactPersonName: string;
 }
 
 export const MOCK_BUSINESS_DETAILS: BusinessDetails = {
   businessName: "Costa Lab Spaces",
-  businessDescription:
-    "We provide fully-equipped wet lab benches and shared equipment for biotech startups in the SF Bay Area.",
-  contactEmail: "contact@labspaces.io",
+  businessRegistrationNumber: "12-3455678",
+  financeContactEmail: "finance@labspaces.io",
   businessLocation: "250 Mission St, San Francisco, CA",
-  yearsOperating: "6",
+  financeContactPersonName: "David Chen",
 };
 
 export interface CompanyAdminDetails {

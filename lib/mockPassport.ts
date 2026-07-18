@@ -11,6 +11,8 @@ export interface Certificate {
   status: CertificateStatus;
   verification_method: VerificationMethod;
   verified_by: string | null;
+  required_for: string;
+  earning_method: string;
 }
 
 export interface UserCertificate {
@@ -43,6 +45,10 @@ export interface CurrentUser {
   role: string;
   location: string;
   email: string;
+  company: string;
+  member_since: string;
+  verified: boolean;
+  avatar_url: string | null;
 }
 
 export const MOCK_CURRENT_USER: CurrentUser = {
@@ -51,6 +57,10 @@ export const MOCK_CURRENT_USER: CurrentUser = {
   role: "Senior Research Scientist",
   location: "San Francisco, CA",
   email: "alex.rivera@example.com",
+  company: "BioNova Labs",
+  member_since: "Jul 15, 2026",
+  verified: true,
+  avatar_url: null,
 };
 
 export const MOCK_CERTIFICATES: Certificate[] = [
@@ -63,6 +73,8 @@ export const MOCK_CERTIFICATES: Certificate[] = [
     status: "approved",
     verification_method: "platform",
     verified_by: null,
+    required_for: "BSL-2 Labs",
+    earning_method: "Proctored practical exam",
   },
   {
     id: 2,
@@ -73,6 +85,8 @@ export const MOCK_CERTIFICATES: Certificate[] = [
     status: "approved",
     verification_method: "platform",
     verified_by: null,
+    required_for: "Equipment Rentals",
+    earning_method: "Online course + quiz",
   },
   {
     id: 3,
@@ -83,6 +97,8 @@ export const MOCK_CERTIFICATES: Certificate[] = [
     status: "approved",
     verification_method: "combined",
     verified_by: "Stanford BioSafety Institute",
+    required_for: "Molecular Biology Labs",
+    earning_method: "External lab certification + practical review",
   },
   {
     id: 4,
@@ -93,6 +109,8 @@ export const MOCK_CERTIFICATES: Certificate[] = [
     status: "approved",
     verification_method: "platform",
     verified_by: null,
+    required_for: "Wet Lab Spaces",
+    earning_method: "Online course + quiz",
   },
   {
     id: 5,
@@ -103,6 +121,8 @@ export const MOCK_CERTIFICATES: Certificate[] = [
     status: "approved",
     verification_method: "external",
     verified_by: "Seattle Cold Chain Co.",
+    required_for: "Cold Storage Equipment",
+    earning_method: "Onsite practicum",
   },
   {
     id: 6,
@@ -113,6 +133,8 @@ export const MOCK_CERTIFICATES: Certificate[] = [
     status: "approved",
     verification_method: "platform",
     verified_by: null,
+    required_for: "Imaging Equipment",
+    earning_method: "Proctored practical exam",
   },
 ];
 
@@ -190,5 +212,115 @@ export const MOCK_VIDEO_COMPLETIONS: VideoCompletion[] = [
     user_id: 1,
     training_video_id: 2,
     completed_at: "2026-03-30",
+  },
+];
+
+export type EnrollmentSessionStatus = "enrolled" | "awaiting" | "open" | "full";
+
+export interface EnrollmentSession {
+  id: number;
+  title: string;
+  category: string;
+  expert_name: string;
+  expert_initials: string;
+  host_company: string;
+  date: string;
+  location: string;
+  spots_remaining: number;
+  endorsement: string;
+  required_for: string;
+  status: EnrollmentSessionStatus;
+}
+
+export const MOCK_ENROLLMENT_SESSIONS: EnrollmentSession[] = [
+  {
+    id: 1,
+    title: "Mass Spectrometry Fundamentals",
+    category: "Equipment",
+    expert_name: "Dr. Elena Vance",
+    expert_initials: "EV",
+    host_company: "Boston BioLabs",
+    date: "Aug 3, 2026, 10:00 AM",
+    location: "Boston, MA",
+    spots_remaining: 4,
+    endorsement: "Mass Spec Operator Endorsement",
+    required_for: "Mass Spectrometry Equipment",
+    status: "enrolled",
+  },
+  {
+    id: 2,
+    title: "BSL-2 Biosafety Practicum",
+    category: "Safety",
+    expert_name: "Dr. Raj Patel",
+    expert_initials: "RP",
+    host_company: "SafetyFirst Labs",
+    date: "Aug 10, 2026, 2:00 PM",
+    location: "San Francisco, CA",
+    spots_remaining: 2,
+    endorsement: "Biosafety Practicum Endorsement",
+    required_for: "BSL-2 Labs",
+    status: "awaiting",
+  },
+  {
+    id: 3,
+    title: "Cryogenic Storage Handling",
+    category: "Equipment",
+    expert_name: "Maria Lopez",
+    expert_initials: "ML",
+    host_company: "Seattle Cold Chain Co.",
+    date: "Aug 18, 2026, 9:00 AM",
+    location: "Seattle, WA",
+    spots_remaining: 10,
+    endorsement: "Cryogenics Handling Endorsement",
+    required_for: "Cold Storage Equipment",
+    status: "open",
+  },
+  {
+    id: 4,
+    title: "Advanced PCR Techniques Workshop",
+    category: "Techniques",
+    expert_name: "Dr. Sam Okoye",
+    expert_initials: "SO",
+    host_company: "Austin Genomics Hub",
+    date: "Sep 2, 2026, 1:00 PM",
+    location: "Austin, TX",
+    spots_remaining: 0,
+    endorsement: "PCR Techniques Endorsement",
+    required_for: "PCR Equipment",
+    status: "full",
+  },
+];
+
+export interface PassportQuizQuestion {
+  id: number;
+  question: string;
+  options: string[];
+}
+
+export const MOCK_PASSPORT_QUIZ_QUESTIONS: PassportQuizQuestion[] = [
+  {
+    id: 1,
+    question: "What is the primary purpose of this training module?",
+    options: [
+      "To review safety procedures",
+      "To learn equipment specs",
+      "To complete a checklist",
+      "To earn credits",
+    ],
+  },
+  {
+    id: 2,
+    question: "Which step should always be completed first?",
+    options: ["Review documentation", "Contact your supervisor", "Put on required PPE", "Start the equipment"],
+  },
+  {
+    id: 3,
+    question: "What should you do if you're unsure about a procedure?",
+    options: ["Proceed carefully", "Ask a supervisor or SME", "Skip the step", "Guess based on experience"],
+  },
+  {
+    id: 4,
+    question: "How often should this training be renewed?",
+    options: ["Every 6 months", "Annually", "Every 2 years", "Never"],
   },
 ];

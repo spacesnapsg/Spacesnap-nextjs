@@ -23,6 +23,7 @@ export interface ConsumableListing extends ListingBase {
   type: "consumable";
   price_per_unit: number;
   unit_label: string;
+  pack_size: string;
   stock_quantity: number;
 }
 
@@ -39,7 +40,7 @@ export const MOCK_LISTINGS: Listing[] = [
     location: "San Francisco, CA",
     description: "A fully equipped wet lab bench in the heart of downtown SF.",
     amenities: ["Fume Hood", "24/7 Access", "Emergency Shower"],
-    required_certificate_ids: [1],
+    required_certificate_ids: [1, 4],
     is_available: true,
     require_approval: false,
     price_day: 45,
@@ -74,6 +75,7 @@ export const MOCK_LISTINGS: Listing[] = [
     require_approval: false,
     price_per_unit: 8,
     unit_label: "case",
+    pack_size: "Case of 100",
     stock_quantity: 500,
   },
   {
@@ -115,11 +117,12 @@ export const MOCK_LISTINGS: Listing[] = [
     description: "Sterile petri dishes, packed 100 to a case.",
     amenities: ["Sterile", "Pack of 100"],
     required_certificate_ids: [],
-    is_available: false,
+    is_available: true,
     require_approval: false,
     price_per_unit: 5,
     unit_label: "pack",
-    stock_quantity: 1200,
+    pack_size: "Pack of 100",
+    stock_quantity: 0,
   },
   {
     id: 7,
@@ -149,6 +152,7 @@ export const MOCK_LISTINGS: Listing[] = [
     require_approval: false,
     price_per_unit: 12,
     unit_label: "box of 200",
+    pack_size: "Box of 200",
     stock_quantity: 300,
   },
 ];

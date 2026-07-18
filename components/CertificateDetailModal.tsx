@@ -63,6 +63,14 @@ export default function CertificateDetailModal({
                 <p className="text-body-text mt-0.5">{certificate.category}</p>
               </div>
               <div>
+                <p className="text-muted-text text-xs">Required For</p>
+                <p className="text-body-text mt-0.5">{certificate.required_for}</p>
+              </div>
+              <div>
+                <p className="text-muted-text text-xs">Earning Method</p>
+                <p className="text-body-text mt-0.5">{certificate.earning_method}</p>
+              </div>
+              <div>
                 <p className="text-muted-text text-xs">Verification Method</p>
                 <p className="text-body-text mt-0.5">
                   {VERIFICATION_LABELS[certificate.verification_method]}
