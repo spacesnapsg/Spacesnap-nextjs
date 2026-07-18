@@ -11,3 +11,393 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserStatus {
+  active
+  suspended
+
+  @@map("user_status")
+}
+
+enum CertificateSource {
+  platform
+  supplier_created
+
+  @@map("certificate_source")
+}
+
+enum CertificateStatus {
+  pending
+  approved
+  rejected
+
+  @@map("certificate_status")
+}
+
+enum ListingType {
+  space
+  equipment
+  consumables
+
+  @@map("listing_type")
+}
+
+enum BookingType {
+  daily
+  weekly
+  monthly
+
+  @@map("booking_type")
+}
+
+enum BookingStatus {
+  pending
+  confirmed
+  active
+  completed
+  cancelled
+
+  @@map("booking_status")
+}
+
+// topup/refund are credit-direction, booking/purchase are debit-direction —
+// amount sign still carries the actual direction, this just makes the ledger
+// readable instead of overloading `booking` for both the original debit and
+// the decline-refund credit like the old schema did.
+enum TransactionType {
+  topup
+  booking
+  refund
+  purchase
+
+  @@map("transaction_type")
+}
+
+// ---------------------------------------------------------------------------
+// Auth.js (NextAuth v5) — required by @auth/prisma-adapter, session strategy
+// "database" per auth.ts. Model names must stay User/Account/Session/
+// VerificationToken so the adapter's p.user/p.account/... calls resolve.
+// ---------------------------------------------------------------------------
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Domain
+// ---------------------------------------------------------------------------
+
+model Company {
+  id                  Int      @id @default(autoincrement())
+  name                String
+  businessName        String?  @map("business_name")
+  businessDescription String?  @map("business_description")
+  contactEmail        String?  @map("contact_email")
+  businessLocation    String?  @map("business_location")
+  yearsOperating      Int?     @map("years_operating")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  users            User[]
+  listings         Listing[]
+  certificates     Certificate[]
+  trainingVideos   TrainingVideo[]
+  trainingSessions TrainingSession[]
+
+  @@map("companies")
+}
+
+// Role is derived from the three booleans, never a single enum column —
+// carried over deliberately from the old schema (see AGENTS/CODEBASEAPI_SUMMARY §6).
+// is_verified is intentionally NOT included: it was a half-built admin-review
+// concept in the old app with no defined trigger or enforcement.
+model User {
+  id                     String     @id @default(cuid())
+  name                   String
+  email                  String     @unique
+  emailVerified          DateTime?  @map("email_verified")
+  password               String
+  title                  String?
+  avatarUrl              String?    @map("avatar_url")
+  isSupplier             Boolean    @default(false) @map("is_supplier")
+  isCompanyAdmin         Boolean    @default(false) @map("is_company_admin")
+  isSystemAdmin          Boolean    @default(false) @map("is_system_admin")
+  companyId              Int?       @map("company_id")
+  promotionRequested     Boolean    @default(false) @map("promotion_requested")
+  stripeCustomerId       String?    @map("stripe_customer_id")
+  stripeConnectAccountId String?    @map("stripe_connect_account_id")
+  status                 UserStatus @default(active)
+  createdAt              DateTime   @default(now()) @map("created_at")
+  updatedAt              DateTime   @updatedAt @map("updated_at")
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  accounts Account[]
+  sessions Session[]
+
+  reviewedCertificates Certificate[]     @relation("CertificateReviewer")
+  userCertificates     UserCertificate[]
+  videoCompletions     VideoCompletion[]
+  bookings             Booking[]
+  transactions         Transaction[]
+
+  @@map("users")
+}
+
+// App-layer rule (not DB-enforced yet): only status=approved certs may be
+// referenced by listing_required_certificates or user_certificates.
+model Certificate {
+  id                 Int                @id @default(autoincrement())
+  name               String
+  icon               String?
+  category           String?
+  submissionNotes    String?            @map("submission_notes")
+  source             CertificateSource  @default(platform)
+  status             CertificateStatus  @default(approved)
+  createdByCompanyId Int?               @map("created_by_company_id")
+  reviewedBy         String?            @map("reviewed_by")
+  reviewedAt         DateTime?          @map("reviewed_at")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  createdByCompany Company? @relation(fields: [createdByCompanyId], references: [id], onDelete: SetNull)
+  reviewer         User?    @relation("CertificateReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+
+  requiredForListings ListingRequiredCertificate[]
+  userCertificates    UserCertificate[]
+
+  @@map("certificates")
+}
+
+// Pricing fields intentionally nullable with no CHECK yet — day/week/month for
+// space/equipment vs. per_unit+stock+pack_size for consumables is enforced at
+// the DB level in the follow-up constraints session, not here.
+model Listing {
+  id              Int         @id @default(autoincrement())
+  companyId       Int         @map("company_id")
+  type            ListingType
+  name            String
+  location        String?
+  description     String?
+  imageUrl        String?     @map("image_url")
+  amenities       Json?
+  isAvailable     Boolean     @default(true) @map("is_available")
+  requireApproval Boolean     @default(false) @map("require_approval")
+  priceDay        Decimal?    @map("price_day") @db.Decimal(10, 2)
+  priceWeek       Decimal?    @map("price_week") @db.Decimal(10, 2)
+  priceMonth      Decimal?    @map("price_month") @db.Decimal(10, 2)
+  pricePerUnit    Decimal?    @map("price_per_unit") @db.Decimal(10, 2)
+  stockQuantity   Int?        @map("stock_quantity")
+  packSize        Int?        @map("pack_size")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  requiredCertificates ListingRequiredCertificate[]
+  bookings             Booking[]
+
+  @@map("listings")
+}
+
+model ListingRequiredCertificate {
+  id            Int      @id @default(autoincrement())
+  listingId     Int      @map("listing_id")
+  certificateId Int      @map("certificate_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  listing     Listing     @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  certificate Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+
+  @@unique([listingId, certificateId])
+  @@map("listing_required_certificates")
+}
+
+// expiryDate nullable — renewal-by-video flow deferred, column ready (matches
+// old schema note).
+model UserCertificate {
+  id            Int       @id @default(autoincrement())
+  userId        String    @map("user_id")
+  certificateId Int       @map("certificate_id")
+  earnedDate    DateTime  @map("earned_date") @db.Date
+  expiryDate    DateTime? @map("expiry_date") @db.Date
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  certificate Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, certificateId])
+  @@map("user_certificates")
+}
+
+// companyId nullable = platform-authored.
+model TrainingVideo {
+  id              Int      @id @default(autoincrement())
+  companyId       Int?     @map("company_id")
+  title           String
+  category        String?
+  description     String?
+  durationSeconds Int?     @map("duration_seconds")
+  videoUrl        String?  @map("video_url")
+  thumbnailUrl    String?  @map("thumbnail_url")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  quizQuestions    QuizQuestion[]
+  videoCompletions VideoCompletion[]
+
+  @@map("training_videos")
+}
+
+// No createdAt/updatedAt on purpose — only completed_at, matches old schema.
+model VideoCompletion {
+  id              Int      @id @default(autoincrement())
+  userId          String   @map("user_id")
+  trainingVideoId Int      @map("training_video_id")
+  completedAt     DateTime @map("completed_at")
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trainingVideo TrainingVideo @relation(fields: [trainingVideoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, trainingVideoId])
+  @@map("video_completions")
+}
+
+model QuizQuestion {
+  id              Int      @id @default(autoincrement())
+  trainingVideoId Int      @map("training_video_id")
+  question        String
+  position        Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  trainingVideo TrainingVideo @relation(fields: [trainingVideoId], references: [id], onDelete: Cascade)
+  answers       QuizAnswer[]
+
+  @@map("quiz_questions")
+}
+
+// Exactly 4 answers / exactly 1 correct per question is an app-layer rule,
+// not a DB constraint (matches old schema).
+model QuizAnswer {
+  id             Int      @id @default(autoincrement())
+  quizQuestionId Int      @map("quiz_question_id")
+  text           String
+  isCorrect      Boolean  @default(false) @map("is_correct")
+  position       Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  quizQuestion QuizQuestion @relation(fields: [quizQuestionId], references: [id], onDelete: Cascade)
+
+  @@map("quiz_answers")
+}
+
+// companyId nullable, sme_name = subject-matter expert, endorsementName =
+// granted on completion.
+model TrainingSession {
+  id              Int      @id @default(autoincrement())
+  companyId       Int?     @map("company_id")
+  title           String
+  smeName         String   @map("sme_name")
+  description     String?
+  sessionDatetime DateTime @map("session_datetime")
+  location        String?
+  endorsementName String?  @map("endorsement_name")
+  capacity        Int
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@map("training_sessions")
+}
+
+// No overlap EXCLUDE constraint yet — deliberately deferred to the
+// constraints follow-up session (Prisma can't express it natively; it needs
+// a raw SQL migration with btree_gist).
+model Booking {
+  id          Int           @id @default(autoincrement())
+  userId      String        @map("user_id")
+  listingId   Int           @map("listing_id")
+  bookingType BookingType   @map("booking_type")
+  startDate   DateTime      @map("start_date") @db.Date
+  endDate     DateTime      @map("end_date") @db.Date
+  credits     Decimal       @db.Decimal(10, 2)
+  status      BookingStatus @default(pending)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  transactions Transaction[]
+
+  @@map("bookings")
+}
+
+// The wallet ledger — balance is always SUM(amount) WHERE user_id = ?, never
+// stored denormalized. bookingId nullable (topups/purchases aren't tied to a
+// booking). Supports one row per credit-affecting event (booking create debit,
+// booking confirm, decline/refund credit, bulk-order purchase, topup) rather
+// than the old app's single create-time-only row.
+model Transaction {
+  id                    Int             @id @default(autoincrement())
+  userId                String          @map("user_id")
+  bookingId             Int?            @map("booking_id")
+  type                  TransactionType
+  amount                Decimal         @db.Decimal(10, 2)
+  stripePaymentIntentId String?         @map("stripe_payment_intent_id")
+  description           String?
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@map("transactions")
+}

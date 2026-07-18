@@ -51,8 +51,6 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 - [x] Admin Page Certificates and Training
 - [x] Admin Approvals
 
-AdminNavbar: /admin/dashboard, /admin-users, /admin-companies, /admin-financials, /admin/certificates, and /admin-approvals now all resolve — the dead link carried over from the old app (AdminNavbar in spacesnap-web linked to it with no matching route there either) is closed. The new page consolidates pending-approval categories the backend exposes as separate endpoints (bookings, promotions, certificates) into one tabbed view. Overview's "Pending Approvals" Review buttons now route here instead of being no-ops.
-
 **Verifications removed from this page (2026-07-18) — revisit before Sprint 3 wires the real endpoint.** Built it initially, then pulled it because its semantics are underspecified and I was guessing. What's actually known, from `CODEBASE_SUMMARY.md`:
 - There's an `is_verified` boolean on `users`, explicitly documented as distinct from Laravel's `email_verified_at` — it means "System Admin reviewed and approved this user," not automatic email-ownership confirmation.
 - Backend has `GET /admin/verifications/pending` and `PATCH /admin/verifications/{u}/approve` (`UserController@pendingVerifications` / `approveVerification`) — approve only, no reject endpoint exists.
