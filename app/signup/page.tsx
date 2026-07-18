@@ -189,7 +189,7 @@ export default function SignupPage() {
             />
             <Input
               name="company"
-              placeholder="Search your company.."
+              placeholder="Search for company or Create new"
               className="w-full"
               value={formData.company}
               onChange={handleChange}
