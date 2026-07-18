@@ -337,7 +337,7 @@ export default function DigitalPassportPage() {
   const earnedCertIds = useMemo(() => new Set(MOCK_USER_CERTIFICATES.map((uc) => uc.certificate_id)), []);
   const completedVideoIds = useMemo(() => new Set(MOCK_VIDEO_COMPLETIONS.map((vc) => vc.training_video_id)), []);
 
-  function handleProfileChange(field: "name" | "role" | "avatar_url", value: string) {
+  function handleProfileChange(field: "name" | "role" | "company" | "avatar_url", value: string) {
     setProfile((p) => ({ ...p, [field]: value }));
   }
 
@@ -441,6 +441,14 @@ export default function DigitalPassportPage() {
                   <Input
                     value={profile.role}
                     onChange={(e) => handleProfileChange("role", e.target.value)}
+                    className="w-full focus:!border-user-teal-start"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-muted-text">Company</label>
+                  <Input
+                    value={profile.company}
+                    onChange={(e) => handleProfileChange("company", e.target.value)}
                     className="w-full focus:!border-user-teal-start"
                   />
                 </div>
