@@ -116,6 +116,11 @@ This is the sprint that didn't exist as its own thing in the original build — 
 - [ ] Bulk order: pricing field on bulk_order_requests (cost = credits_per_unit × quantity), same balance-check + Transaction pattern as booking
 - [ ] `type: purchase` transactions actually created by app code, not only ever seeded for demos
 
+**New schema items (not fixes to the above — tables with no home in this plan until the parity audit):**
+- [ ] `check_ins` table (user_id, listing_id, booking_id nullable, checked_in_at, checked_out_at nullable) — the old app never had a working controller for this (table/model/factory existed, no route). This sprint should decide whether check-in updates booking status, previously unresolved/unconfirmed in the old codebase.
+- [ ] `activity_log` table (user_id, action_type, description, related_listing_id nullable) — supports an activity feed feature; currently has no schema or endpoints in this rewrite.
+- [ ] `training_enrollments` table (user_id, training_session_id, status enum enrolled/awaiting_signoff/completed/cancelled, unique on the pair) — backs the training session "enrolled participants" list, a real feature not previously scoped into this rewrite plan.
+
 **Checklist before moving to Sprint 4:**
 - [ ] Every credit-affecting action (book, confirm, decline, bulk order, top-up) has a corresponding Transaction record — verify this by querying the DB directly after each action, not just checking the UI updated
 - [ ] `.env.testing` + isolated test DB set up from the start (the old build didn't have this until Sprint 3.5 — don't repeat that gap)

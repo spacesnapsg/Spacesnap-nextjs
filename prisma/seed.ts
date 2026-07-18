@@ -303,7 +303,7 @@ async function main() {
       requireApproval: false,
       pricePerUnit: "18.50",
       stockQuantity: 400,
-      packSize: 50,
+      packSize: "Pack of 50",
     },
   });
 

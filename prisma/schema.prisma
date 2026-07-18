@@ -128,7 +128,7 @@ model VerificationToken {
 // ---------------------------------------------------------------------------
 
 model Company {
-  id                  Int      @id @default(autoincrement())
+  id                  BigInt   @id @default(autoincrement())
   name                String
   businessName        String?  @map("business_name")
   businessDescription String?  @map("business_description")
@@ -151,6 +151,10 @@ model Company {
 // carried over deliberately from the old schema (see AGENTS/CODEBASEAPI_SUMMARY §6).
 // is_verified is intentionally NOT included: it was a half-built admin-review
 // concept in the old app with no defined trigger or enforcement.
+// Capabilities are additive (company admin implies supplier), enforced by the
+// `users_company_admin_requires_supplier` CHECK constraint added in migration
+// 20260718192008_users_company_admin_requires_supplier (raw SQL — Prisma
+// can't express cross-column CHECK constraints natively).
 model User {
   id                     String     @id @default(cuid())
   name                   String
@@ -162,7 +166,7 @@ model User {
   isSupplier             Boolean    @default(false) @map("is_supplier")
   isCompanyAdmin         Boolean    @default(false) @map("is_company_admin")
   isSystemAdmin          Boolean    @default(false) @map("is_system_admin")
-  companyId              Int?       @map("company_id")
+  companyId              BigInt?    @map("company_id")
   promotionRequested     Boolean    @default(false) @map("promotion_requested")
   stripeCustomerId       String?    @map("stripe_customer_id")
   stripeConnectAccountId String?    @map("stripe_connect_account_id")
@@ -187,14 +191,14 @@ model User {
 // App-layer rule (not DB-enforced yet): only status=approved certs may be
 // referenced by listing_required_certificates or user_certificates.
 model Certificate {
-  id                 Int                @id @default(autoincrement())
+  id                 BigInt             @id @default(autoincrement())
   name               String
   icon               String?
   category           String?
   submissionNotes    String?            @map("submission_notes")
   source             CertificateSource  @default(platform)
   status             CertificateStatus  @default(approved)
-  createdByCompanyId Int?               @map("created_by_company_id")
+  createdByCompanyId BigInt?            @map("created_by_company_id")
   reviewedBy         String?            @map("reviewed_by")
   reviewedAt         DateTime?          @map("reviewed_at")
   createdAt          DateTime           @default(now()) @map("created_at")
@@ -215,8 +219,8 @@ model Certificate {
 // migration 20260718171756_listings_pricing_check (raw SQL — Prisma can't
 // express this cross-column rule natively).
 model Listing {
-  id              Int         @id @default(autoincrement())
-  companyId       Int         @map("company_id")
+  id              BigInt      @id @default(autoincrement())
+  companyId       BigInt      @map("company_id")
   type            ListingType
   name            String
   location        String?
@@ -230,7 +234,7 @@ model Listing {
   priceMonth      Decimal?    @map("price_month") @db.Decimal(10, 2)
   pricePerUnit    Decimal?    @map("price_per_unit") @db.Decimal(10, 2)
   stockQuantity   Int?        @map("stock_quantity")
-  packSize        Int?        @map("pack_size")
+  packSize        String?     @map("pack_size")
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
 
@@ -243,9 +247,9 @@ model Listing {
 }
 
 model ListingRequiredCertificate {
-  id            Int      @id @default(autoincrement())
-  listingId     Int      @map("listing_id")
-  certificateId Int      @map("certificate_id")
+  id            BigInt   @id @default(autoincrement())
+  listingId     BigInt   @map("listing_id")
+  certificateId BigInt   @map("certificate_id")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -259,9 +263,9 @@ model ListingRequiredCertificate {
 // expiryDate nullable — renewal-by-video flow deferred, column ready (matches
 // old schema note).
 model UserCertificate {
-  id            Int       @id @default(autoincrement())
+  id            BigInt    @id @default(autoincrement())
   userId        String    @map("user_id")
-  certificateId Int       @map("certificate_id")
+  certificateId BigInt    @map("certificate_id")
   earnedDate    DateTime  @map("earned_date") @db.Date
   expiryDate    DateTime? @map("expiry_date") @db.Date
   createdAt     DateTime  @default(now()) @map("created_at")
@@ -276,8 +280,8 @@ model UserCertificate {
 
 // companyId nullable = platform-authored.
 model TrainingVideo {
-  id              Int      @id @default(autoincrement())
-  companyId       Int?     @map("company_id")
+  id              BigInt   @id @default(autoincrement())
+  companyId       BigInt?  @map("company_id")
   title           String
   category        String?
   description     String?
@@ -297,9 +301,9 @@ model TrainingVideo {
 
 // No createdAt/updatedAt on purpose — only completed_at, matches old schema.
 model VideoCompletion {
-  id              Int      @id @default(autoincrement())
+  id              BigInt   @id @default(autoincrement())
   userId          String   @map("user_id")
-  trainingVideoId Int      @map("training_video_id")
+  trainingVideoId BigInt   @map("training_video_id")
   completedAt     DateTime @map("completed_at")
 
   user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -310,8 +314,8 @@ model VideoCompletion {
 }
 
 model QuizQuestion {
-  id              Int      @id @default(autoincrement())
-  trainingVideoId Int      @map("training_video_id")
+  id              BigInt   @id @default(autoincrement())
+  trainingVideoId BigInt   @map("training_video_id")
   question        String
   position        Int      @default(0)
   createdAt       DateTime @default(now()) @map("created_at")
@@ -326,8 +330,8 @@ model QuizQuestion {
 // Exactly 4 answers / exactly 1 correct per question is an app-layer rule,
 // not a DB constraint (matches old schema).
 model QuizAnswer {
-  id             Int      @id @default(autoincrement())
-  quizQuestionId Int      @map("quiz_question_id")
+  id             BigInt   @id @default(autoincrement())
+  quizQuestionId BigInt   @map("quiz_question_id")
   text           String
   isCorrect      Boolean  @default(false) @map("is_correct")
   position       Int      @default(0)
@@ -342,8 +346,8 @@ model QuizAnswer {
 // companyId nullable, sme_name = subject-matter expert, endorsementName =
 // granted on completion.
 model TrainingSession {
-  id              Int      @id @default(autoincrement())
-  companyId       Int?     @map("company_id")
+  id              BigInt   @id @default(autoincrement())
+  companyId       BigInt?  @map("company_id")
   title           String
   smeName         String   @map("sme_name")
   description     String?
@@ -365,9 +369,9 @@ model TrainingSession {
 // other than `cancelled` holds the slot; only cancelled bookings are excluded
 // from the overlap check.
 model Booking {
-  id          Int           @id @default(autoincrement())
+  id          BigInt        @id @default(autoincrement())
   userId      String        @map("user_id")
-  listingId   Int           @map("listing_id")
+  listingId   BigInt        @map("listing_id")
   bookingType BookingType   @map("booking_type")
   startDate   DateTime      @map("start_date") @db.Date
   endDate     DateTime      @map("end_date") @db.Date
@@ -390,9 +394,9 @@ model Booking {
 // booking confirm, decline/refund credit, bulk-order purchase, topup) rather
 // than the old app's single create-time-only row.
 model Transaction {
-  id                    Int             @id @default(autoincrement())
+  id                    BigInt          @id @default(autoincrement())
   userId                String          @map("user_id")
-  bookingId             Int?            @map("booking_id")
+  bookingId             BigInt?         @map("booking_id")
   type                  TransactionType
   amount                Decimal         @db.Decimal(10, 2)
   stripePaymentIntentId String?         @map("stripe_payment_intent_id")
