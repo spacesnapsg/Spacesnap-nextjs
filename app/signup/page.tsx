@@ -1,12 +1,15 @@
 "use client";
 
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
+import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
 import { User, Boxes, Scale, type LucideIcon } from "lucide-react";
 import Card from "@/components/Card";
 import Input from "@/components/Input";
 import Button from "@/components/Button";
+import { getRoleHome } from "@/lib/role-home";
 
 type Role = "member" | "supplier" | "both";
 
@@ -60,8 +63,15 @@ const ROLES: RoleOption[] = [
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+interface RegisterFields {
+  name: string;
+  email: string;
+  password: string;
+}
+
 export default function SignupPage() {
   const router = useRouter();
+  const { data: session, status } = useSession();
   const [formData, setFormData] = useState<SignupFormData>({
     fullName: "",
     email: "",
@@ -73,14 +83,43 @@ export default function SignupPage() {
     agreedToPrivacy: false,
   });
   const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (status === "authenticated" && session?.user) {
+      router.replace(getRoleHome(session.user));
+    }
+  }, [status, session, router]);
+
+  // Register only takes name/email/password, matching the old Laravel
+  // AuthController@register contract — role/company selection above isn't
+  // backed by that endpoint (it wasn't in the old app either).
+  const registerMutation = useMutation({
+    mutationFn: async (fields: RegisterFields) => {
+      const response = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fields),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.message || "Unable to create your account. Please try again.");
+      }
+    },
+    onSuccess: () => {
+      router.push("/login");
+    },
+    onError: (err: Error) => {
+      setError(err.message);
+    },
+  });
 
   function handleChange(e: ChangeEvent<HTMLInputElement>) {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   }
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
     if (
@@ -102,31 +141,14 @@ export default function SignupPage() {
     }
 
     setError("");
-    setSubmitting(true);
-
-    // Register only takes name/email/password, matching the old Laravel
-    // AuthController@register contract — role/company selection above isn't
-    // backed by that endpoint (it wasn't in the old app either).
-    const response = await fetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: formData.fullName,
-        email: formData.email,
-        password: formData.password,
-      }),
+    registerMutation.mutate({
+      name: formData.fullName,
+      email: formData.email,
+      password: formData.password,
     });
-
-    setSubmitting(false);
-
-    if (!response.ok) {
-      const data = await response.json().catch(() => null);
-      setError(data?.message || "Unable to create your account. Please try again.");
-      return;
-    }
-
-    router.push("/login");
   }
+
+  if (status === "authenticated") return null;
 
   return (
     <div className="min-h-screen bg-background text-body-text font-sans flex items-center justify-center px-4 py-12">
@@ -258,8 +280,8 @@ export default function SignupPage() {
 
             {error && <p className="text-sm text-error-red">{error}</p>}
 
-            <Button type="submit" className="w-full mt-2" disabled={submitting}>
-              {submitting ? "Creating Account..." : "Create Account"}
+            <Button type="submit" className="w-full mt-2" disabled={registerMutation.isPending}>
+              {registerMutation.isPending ? "Creating Account..." : "Create Account"}
             </Button>
           </form>
 

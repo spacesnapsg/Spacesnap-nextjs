@@ -1,10 +1,13 @@
 import AdminNavbar from "@/components/AdminNavbar";
+import RoleGuard from "@/components/RoleGuard";
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-background text-body-text font-sans">
-      <AdminNavbar />
-      {children}
-    </div>
+    <RoleGuard guard="systemAdmin">
+      <div className="min-h-screen bg-background text-body-text font-sans">
+        <AdminNavbar />
+        {children}
+      </div>
+    </RoleGuard>
   );
 }

@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { signIn, getSession } from "next-auth/react";
+import { signIn, getSession, useSession } from "next-auth/react";
+import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
 import Card from "@/components/Card";
 import Input from "@/components/Input";
 import Button from "@/components/Button";
+import { getRoleHome } from "@/lib/role-home";
 
 interface LoginFormData {
   email: string;
@@ -17,19 +19,49 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginPage() {
   const router = useRouter();
+  const { data: session, status } = useSession();
   const [formData, setFormData] = useState<LoginFormData>({
     email: "",
     password: "",
   });
   const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (status === "authenticated" && session?.user) {
+      router.replace(getRoleHome(session.user));
+    }
+  }, [status, session, router]);
+
+  const loginMutation = useMutation({
+    mutationFn: async ({ email, password }: LoginFormData) => {
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+      });
+      if (!result || result.error) {
+        throw new Error("The provided credentials are incorrect.");
+      }
+      const freshSession = await getSession();
+      if (!freshSession?.user) {
+        throw new Error("The provided credentials are incorrect.");
+      }
+      return freshSession.user;
+    },
+    onSuccess: (user) => {
+      router.push(getRoleHome(user));
+    },
+    onError: (err: Error) => {
+      setError(err.message);
+    },
+  });
 
   function handleChange(e: ChangeEvent<HTMLInputElement>) {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   }
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
     if (!formData.email || !formData.password) {
@@ -42,26 +74,10 @@ export default function LoginPage() {
     }
 
     setError("");
-    setSubmitting(true);
-
-    const result = await signIn("credentials", {
-      email: formData.email,
-      password: formData.password,
-      redirect: false,
-    });
-
-    if (!result || result.error) {
-      setSubmitting(false);
-      setError("The provided credentials are incorrect.");
-      return;
-    }
-
-    const session = await getSession();
-    const user = session?.user;
-    if (user?.isSystemAdmin) router.push("/admin/dashboard");
-    else if (user?.isSupplier) router.push("/supplier");
-    else router.push("/user");
+    loginMutation.mutate(formData);
   }
+
+  if (status === "authenticated") return null;
 
   return (
     <div className="min-h-screen bg-background text-body-text font-sans flex items-center justify-center px-4 py-12">
@@ -106,8 +122,8 @@ export default function LoginPage() {
 
             {error && <p className="text-sm text-error-red">{error}</p>}
 
-            <Button type="submit" className="w-full mt-2" disabled={submitting}>
-              {submitting ? "Signing In..." : "Sign In"}
+            <Button type="submit" className="w-full mt-2" disabled={loginMutation.isPending}>
+              {loginMutation.isPending ? "Signing In..." : "Sign In"}
             </Button>
           </form>
 

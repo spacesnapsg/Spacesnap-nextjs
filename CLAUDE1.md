@@ -402,3 +402,70 @@ style translation layer) for every new route: `bookingType`, `startDate`,
 - The old `BookingController::pending/approve/reject` admin-side booking
   approval flow (separate from supplier confirm/decline) — not mentioned in
   this session's scope, so not built; flag if it turns out to be needed.
+
+## Session 5 — React Query infra + Login/Signup + client role-gating (2026-07-19)
+
+First installment of "Connect Sprint 1 Pages to Real Endpoints + React Query"
+(`SPRINT_PLAN_NEXTJS_REWRITE.md`, Sprint 3 checklist). Confirmed Sessions 1–4
+are merged to `main` and the API routes they built actually exist (`app/api/`
+has listings, credentials, bookings, certificates, admin/users,
+admin/certificates — matches the Session 3/4 notes above) before starting.
+Per this repo's own instruction to sub-session large work "one page/feature
+per session," this session covered shared infra + the first page in the
+suggested order (Login/Signup) and stopped there — Discover/Marketplace
+onward is still mock data, not done yet.
+
+### Shared infra (needed by every subsequent page, so built once here)
+
+- Installed `@tanstack/react-query`. `components/Providers.tsx` wraps the app
+  in `QueryClientProvider` + NextAuth's `SessionProvider` (neither existed
+  before — confirmed by grep, matches the Session 2 note that
+  `<SessionProvider>` was missing and `useSession()` would have been a trap).
+  Mounted in `app/layout.tsx`.
+- `components/RoleGuard.tsx` + `lib/role-home.ts`: client-side role gating for
+  the three route-group layouts, closing the specific gap
+  `CODEBASE_SUMMARY.md` flagged ("old frontend had no client role-gating on
+  User/Supplier routes") per this session's explicit brief. `(user)/layout.tsx`
+  requires any authenticated session, `(supplier)/layout.tsx` requires
+  `isSupplier`, `(admin)/layout.tsx` requires `isSystemAdmin`. Unauthenticated
+  → `/login`; authenticated but wrong role → their own role home
+  (`getRoleHome`), not a blank/error page. Verified live with real seeded
+  accounts (`ethan@example.com` plain user, `ben@acmecoworking.sg` supplier):
+  unauthenticated hitting `/supplier` → `/login`; `ethan` hitting `/supplier`
+  or `/admin/dashboard` → bounced to `/user`; `ben` hitting `/admin/dashboard`
+  → bounced to `/supplier`; each role's own route group renders normally.
+  **This is client-side only** — the Sprint 4 item (server-side
+  `middleware.ts`/`auth()`+`redirect()` gating, see Session 2 above) is still
+  open and still the real trust boundary; this just stops the UI from
+  rendering/flashing role-gated content it shouldn't.
+
+### Login/Signup
+
+These were already wired to real endpoints as of Sprint 3 Session 1 (real
+`signIn`/`/api/auth/register` calls, not mock data) — confirmed by reading the
+files before touching them, so there was no mock-data swap to do here. What
+this session actually added:
+- Wrapped both the credentials sign-in and the register call in React Query's
+  `useMutation` (replacing manual `useState` submitting/error bookkeeping) so
+  the loading/error pattern is consistent with what later data-fetching pages
+  will use.
+- Both pages now redirect an already-authenticated user away via `useSession`
+  + `getRoleHome` (previously hitting `/login` while logged in just re-showed
+  the form). Verified live for all three roles.
+- Login's post-sign-in redirect now goes through the shared `getRoleHome`
+  helper instead of its own inline if/else chain (same logic, deduplicated
+  since `RoleGuard` needed the same mapping).
+
+Confirmed no regressions: `npx tsc --noEmit` and `eslint` clean on every
+touched file; wrong-password path still shows "The provided credentials are
+incorrect." inline, not a thrown/unhandled error.
+
+### Not done this session
+
+Discover/Marketplace, Digital Passport, Credit Wallet, User Dashboard,
+Notifications, Supplier Inventory, Supplier Requests, Supplier Profile, Admin
+pages — all still read from the `lib/mock*.ts` files (`mockListings.ts`,
+`mockPassport.ts`, `mockWallet.ts`, `mockDashboard.ts`,
+`mockSupplierDashboard.ts`, `mockRequests.ts`, `mockAdmin*.ts`, etc.), not yet
+wired to the real API routes or React Query. Next session per the suggested
+order: Discover/Marketplace.
