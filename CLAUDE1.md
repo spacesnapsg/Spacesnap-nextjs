@@ -271,3 +271,134 @@ the old `supplier` middleware (`is_supplier` only, not company-admin) plus
 the `ListingPolicy::update` company-ownership check. Verified live:
 cross-tenant `PATCH` on another company's listing → 403; unauthenticated
 `GET /api/supplier/listings` and `GET /api/credentials` → 401.
+
+## Sprint 3, Session 4 — CRUD: Bookings + Certificates, Approval Flow, Admin Scope (2026-07-19)
+
+Built bookings CRUD (create/list/confirm/decline), certificate catalog +
+approval flow, and platform-wide admin user scope (list, suspend, reinstate).
+Manually exercised against the seeded dev DB via `curl` cookie-jar logins as
+each seeded role (system admin, two suppliers in different companies, three
+users), not just typechecked — including cleaning up every test artifact
+afterward so the DB is back to its seeded state.
+
+### Correction to this session's own brief
+
+The task brief for this session stated the four certificate approval routes
+(`POST /api/certificates`, `GET /api/admin/certificates/pending`, approve,
+reject) were "already built per recent updates" and asked this session to
+verify/confirm wiring. That wasn't the case: `git log`, `git status`, and a
+filesystem search all confirmed `app/api/` had no `certificates` directory
+at all before this session — nothing to verify, so all four (plus catalog
+list/create) were built from scratch here.
+
+Separately, `CODEBASE_SUMMARY.md` and `CODEBASEAPI_SUMMARY.md`, which the
+"Old codebase reference" section above says already exist and should be read
+first, do not exist anywhere in this repo. Went straight to the old
+`spacesnap-api` source instead (`CertificateController`, `UserController`,
+`BookingController`, `SupplierBookingController`, `BookingPolicy`,
+`routes/api.php`), per this file's own fallback instruction ("read the
+actual file from the old repo path... don't guess or invent structure").
+Worth regenerating those two summary docs at some point — every session so
+far has had to re-derive old-backend structure from source instead of
+having it available.
+
+### Certificates: catalog CRUD + approval flow
+
+Built, all mirroring the old `CertificateController` routes/behavior
+(reviewed source directly, see above):
+- `GET /api/certificates` + `POST /api/certificates` (public approved list;
+  supplier submit → status=pending)
+- `GET /api/supplier/certificates/submitted` (supplier's own submissions,
+  any status — old `mySubmissions`)
+- `GET /api/admin/certificates` + `POST /api/admin/certificates` (admin
+  catalog view with status/search filters + pagination; admin direct-create
+  → source=platform, status=approved immediately — old `adminIndex`/`adminStore`)
+- `GET /api/admin/certificates/pending`, `PATCH .../approve`, `PATCH .../reject`
+
+No update/delete endpoint was added for the catalog beyond approve/reject —
+the old backend never had one either (only `approve`/`reject` touch an
+existing row), so none was invented here per the "never invent
+routes/fields" ground rule.
+
+### Bookings: CRUD shape only, ledger explicitly stubbed
+
+Built `POST /api/bookings` (create), `GET /api/supplier/bookings` (list,
+company-scoped, optional status filter), `PATCH
+/api/supplier/bookings/{id}/confirm`, `PATCH .../decline` — mirroring old
+`BookingController::store` + `SupplierBookingController`. Kept: consumables
+rejection, cert-requirement existence check (not tier — tier logic is
+Sprint 4, a different sprint than this session), the `23P01` exclusion-
+constraint → clean 409 instead of a raw Postgres error.
+
+**Explicitly stubbed, per this session's scope, deferred to Sprint 3.5:**
+- No `credit_balance` check before creating a booking
+- No debit Transaction record on create (the `credits` field is still
+  computed and stored on the Booking row itself — it's a NOT NULL column —
+  just never moved into the ledger)
+- No Transaction record on confirm (matches the old build's behavior, which
+  also never wired this — Sprint 3.5's job is to add the audit-trail row
+  that never existed, not fix a regression introduced here)
+- No refund Transaction on decline (the old build did create one here; this
+  session's decline only flips status to `cancelled`)
+
+Verified live: booking on non-overlapping dates → 201 with `credits`
+correctly computed from the listing's per-type price; booking overlapping an
+existing active booking → 409; booking a listing requiring a certificate the
+user doesn't hold (or holds expired) → 422 with `missingCertificates`;
+booking a listing requiring a certificate the user holds unexpired → 201;
+booking a consumables listing directly → 422; supplier confirming a booking
+outside their own company's listings → 403; declining an already-cancelled
+booking → 422.
+
+### Admin scope: platform-wide list + suspend/reinstate
+
+Built `GET /api/admin/users` (role/search filters, pagination, derived role
+same precedence as old `UserController::deriveRole`), `PATCH
+/api/admin/users/{id}/suspend`, `PATCH .../reinstate`. Platform-wide by
+design — not scoped to the caller's own company, matching both the task
+brief and a comment already present in the (still-mock) frontend
+`SystemAdminUsersCompanies.jsx`: "System Admin can suspend/reinstate ANY
+user regardless of role... separate from Company Admin's supplier-suspend."
+
+**Enforcement decision (explicit, per this session's brief asking not to
+silently repeat the old no-enforcement gap):** partially already enforced,
+partially deferred.
+- **Already enforced, no new code needed:** `auth.ts`'s `jwt` callback
+  re-checks `status` from the DB on every session read and forces sign-out
+  when suspended (built in Sprint 3, Session 1). Every route in this
+  session calls `auth()` (directly or via `requireSupplier`/
+  `requireSystemAdmin`), so a suspended user's own actions — booking,
+  confirming, submitting a certificate, logging in — are rejected with 401
+  as soon as their current JWT is next read. **Verified live**: suspended
+  `gabriel@greenpack.sg` mid-session on his still-valid cookie →
+  `GET /api/auth/session` immediately returned `null`, and a follow-up
+  `POST /api/bookings` on that same cookie returned 401, not a silent pass.
+  This closes the old build's "suspend does nothing for login/actions" gap
+  for every actor-side path built so far.
+- **Still open, deferred (not silently — flagged here):** listing
+  visibility. A suspended supplier's listings stay visible to other users
+  browsing `GET /api/listings`, because `Listing` belongs to `Company`, not
+  `User` — there's no company-level suspension concept anywhere in this
+  schema. Mapping "this one user is suspended" to "hide these listings"
+  requires a real product decision this session didn't have the authority to
+  make unilaterally (does suspending one company-admin hide the whole
+  company's listings, or only listings that user personally created — the
+  schema doesn't even track listing-level ownership below the company).
+  Left as an open item for whoever owns that call next, rather than guessed
+  at here.
+
+### Field naming
+
+Followed Session 3's DB-column-camelCase-throughout decision (no Laravel-
+style translation layer) for every new route: `bookingType`, `startDate`,
+`missingCertificates`, `createdByCompanyId`, `reviewedBy`, etc.
+
+### Not done this session (explicitly out of scope per the brief)
+
+- Wiring any of Sprint 1's mock-data frontend pages (`SupplierRequests.jsx`,
+  `SystemAdminUsersCompanies.jsx`, `SystemAdminCertificatesTraining.jsx`,
+  `BookingModal.jsx`) to these new endpoints — the brief only asked for the
+  backend routes.
+- The old `BookingController::pending/approve/reject` admin-side booking
+  approval flow (separate from supplier confirm/decline) — not mentioned in
+  this session's scope, so not built; flag if it turns out to be needed.

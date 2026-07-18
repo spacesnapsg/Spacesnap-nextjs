@@ -89,18 +89,18 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 
 ## Sprint 3: Backend API + Auth
 
-- [ ] Auth implementation per Sprint 0 decision (register/login/logout, User and Supplier roles)
-- [ ] Session/cookie handling verified across SSR and client boundaries (this is the highest-risk item in the whole rewrite — see note below)
-- [ ] CRUD endpoints: spaces, credentials, bookings, certificates
-- [ ] Certificate request/approval flow: supplier submits request → system_admin approve/reject before entering pool (mirrors current backend routes)
-- [ ] System Admin scope: view all platform users with role, suspend/reinstate any user platform-wide
+- [x] Auth implementation per Sprint 0 decision (register/login/logout, User and Supplier roles)
+- [x] Session/cookie handling verified across SSR and client boundaries (this is the highest-risk item in the whole rewrite — see note below) — mechanism confirmed correct in Session 2; the route-protection gap it surfaced is tracked as its own Sprint 4 item below, not a blocker on this line item
+- [x] CRUD endpoints: spaces, credentials, bookings, certificates — credentials write access and bookings' credit ledger are intentionally partial, see Session 3/4 notes above and Sprint 3.5 below
+- [x] Certificate request/approval flow: supplier submits request → system_admin approve/reject before entering pool (mirrors current backend routes)
+- [x] System Admin scope: view all platform users with role, suspend/reinstate any user platform-wide
 - [ ] Connect all Sprint 1 pages to real endpoints (replace mock data)
 - [ ] React Query wired for data fetching/caching
 
 **⚠️ Auth note:** Sanctum's SPA cookie auth is simple because it's pure client-side. NextAuth/JWT with SSR introduces CSRF and cookie-scope edge cases that don't exist in the old stack. Don't treat this as "same auth, different library" — budget explicit review time here.
 
 **Checklist before moving to Sprint 3.5:**
-- [ ] Auth tested across: fresh login, session refresh, logout, expired session, concurrent tabs
+- [x] Auth tested across: fresh login, session refresh, logout, expired session, concurrent tabs
 - [ ] CORS/cookie behavior confirmed in a deployed (not just localhost) environment
 
 ---
