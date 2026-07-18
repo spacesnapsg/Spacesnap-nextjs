@@ -36,7 +36,7 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 - [ ] Login/Signup pages
 - [ ] Discover/Marketplace page + Book Now modal
 - [ ] Digital Passport page + cert detail modal + training tutorials
-- [ ] Credit Wallet page + Top Up modal
+- [x] Credit Wallet page + Top Up modal
 - [ ] User Dashboard
 - [ ] Notifications panel (reusable component, both navbars)
 - [ ] Supplier Inventory page + Add/Edit Listing modal
