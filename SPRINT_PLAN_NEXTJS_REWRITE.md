@@ -65,9 +65,9 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 
 
 **Checklist before moving to Sprint 2:**
-- [ ] Every page renders with mock/static data, no console errors
-- [ ] TypeScript strict mode on, no `any` left in shared components
-- [ ] Visual diff against old Vite build — confirm no unintentional design drift
+- [x] Every page renders with mock/static data, no console errors
+- [x] TypeScript strict mode on, no `any` left in shared components
+- [x] Visual diff against old Vite build — confirm no unintentional design drift
 
 ---
 
@@ -83,7 +83,7 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 
 **Checklist before moving to Sprint 3:**
 - [x] Constraint tests written and passing, not just "assumed to work like Laravel version"
-- [ ] Schema reviewed against old Laravel schema for parity — nothing silently dropped
+- [x] Schema reviewed against old Laravel schema for parity — nothing silently dropped
 
 ---
 
