@@ -1,3 +1,6 @@
+"use client";
+
+import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { Globe, IdCard, Wallet, LayoutDashboard, LogOut, Building2 } from "lucide-react";
 import Navbar from "./Navbar";
@@ -19,7 +22,11 @@ export default function UserNavbar() {
             <Building2 size={16} />
             Supplier Portal
           </Link>
-          <button className="border border-border rounded p-2 text-body-text" aria-label="Sign out">
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="border border-border rounded p-2 text-body-text"
+            aria-label="Sign out"
+          >
             <LogOut size={18} />
           </button>
         </>
@@ -33,7 +40,10 @@ export default function UserNavbar() {
             <Building2 size={16} />
             Supplier Portal
           </Link>
-          <button className="flex items-center gap-2 text-sm text-muted-text rounded-lg px-2 py-2 hover:bg-card transition-colors">
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="flex items-center gap-2 text-sm text-muted-text rounded-lg px-2 py-2 hover:bg-card transition-colors"
+          >
             <LogOut size={16} />
             Sign Out
           </button>
