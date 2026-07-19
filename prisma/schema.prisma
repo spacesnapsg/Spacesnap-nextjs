@@ -117,6 +117,7 @@ enum ActivityActionType {
   credential_issued
   signoff_requested
   signoff_reviewed
+  instant_purchase_completed
 
   @@map("activity_action_type")
 }
@@ -268,6 +269,7 @@ model User {
   videoCompletions        VideoCompletion[]
   bookings                Booking[]
   bulkOrderRequests       BulkOrderRequest[]
+  purchases               Purchase[]
   transactions            Transaction[]
   checkIns                CheckIn[]
   activityLogs            ActivityLog[]
@@ -337,6 +339,7 @@ model Listing {
   requiredCertificates ListingRequiredCertificate[]
   bookings             Booking[]
   bulkOrderRequests    BulkOrderRequest[]
+  purchases            Purchase[]
   checkIns             CheckIn[]
   activityLogs         ActivityLog[]
   ratings              Rating[]
@@ -575,16 +578,43 @@ model BulkOrderRequest {
   @@map("bulk_order_requests")
 }
 
+// "Buy Now" is deliberately NOT a BulkOrderRequest — a bulk order is a
+// request the supplier still has to act on (pending/confirmed/fulfilled/
+// cancelled); Buy Now is an immediate, already-completed sale: stock and
+// credits move atomically at creation, there's no supplier-side status to
+// transition. `stripePaymentIntentId` on Transaction is where the future
+// Stripe invoice/receipt (user gets an invoice, supplier gets a receipt of
+// funds — Sprint 6, not built here) will eventually hang; this model itself
+// stays payment-provider-agnostic, same as every other credit-affecting
+// model in this schema today.
+model Purchase {
+  id        BigInt   @id @default(autoincrement())
+  userId    String   @map("user_id")
+  listingId BigInt   @map("listing_id")
+  quantity  Int
+  credits   Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  transactions Transaction[]
+
+  @@map("purchases")
+}
+
 // The wallet ledger — balance is always SUM(amount) WHERE user_id = ?, never
-// stored denormalized. bookingId/bulkOrderRequestId nullable (topups aren't
-// tied to either). Supports one row per credit-affecting event (booking
-// create debit, booking confirm, decline/refund credit, bulk-order purchase,
-// topup) rather than the old app's single create-time-only row.
+// stored denormalized. bookingId/bulkOrderRequestId/purchaseId nullable
+// (topups aren't tied to any of them). Supports one row per credit-affecting
+// event (booking create debit, booking confirm, decline/refund credit,
+// bulk-order purchase, instant purchase, topup) rather than the old app's
+// single create-time-only row.
 model Transaction {
   id                    BigInt          @id @default(autoincrement())
   userId                String          @map("user_id")
   bookingId             BigInt?         @map("booking_id")
   bulkOrderRequestId    BigInt?         @map("bulk_order_request_id")
+  purchaseId            BigInt?         @map("purchase_id")
   type                  TransactionType
   amount                Decimal         @db.Decimal(10, 2)
   stripePaymentIntentId String?         @map("stripe_payment_intent_id")
@@ -595,6 +625,7 @@ model Transaction {
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   booking          Booking?          @relation(fields: [bookingId], references: [id], onDelete: SetNull)
   bulkOrderRequest BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: SetNull)
+  purchase         Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
 }

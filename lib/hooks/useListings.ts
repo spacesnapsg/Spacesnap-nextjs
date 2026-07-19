@@ -84,3 +84,23 @@ export function useCreateBulkOrder() {
     },
   });
 }
+
+interface CreatePurchaseInput {
+  listingId: string;
+  quantity: number;
+}
+
+// "Buy Now" — POST /api/purchases, an immediate completed sale (stock +
+// credits move at creation). Deliberately a separate endpoint/hook from
+// useCreateBulkOrder above, not the same mutation with a flag — bulk orders
+// stay pending for the supplier to act on, this doesn't.
+export function useCreatePurchase() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreatePurchaseInput) =>
+      apiFetch("/api/purchases", { method: "POST", body: JSON.stringify(input) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["listings"] });
+    },
+  });
+}

@@ -80,6 +80,72 @@ function getListingDetails(listing: Listing, credentials: Credential[] | undefin
   };
 }
 
+type RequestPurchaseHandler = (listing: Listing, mode: "quick" | "bulk") => void;
+
+function ListingActions({
+  listing,
+  details,
+  onBookNow,
+  onRequestPurchase,
+}: {
+  listing: Listing;
+  details: ListingDetails;
+  onBookNow: (listing: Listing) => void;
+  onRequestPurchase: RequestPurchaseHandler;
+}) {
+  const { isUnavailable, isConsumable, isOutOfStockItem, isCertMissing } = details;
+
+  if (isCertMissing) {
+    return (
+      <Button
+        disabled
+        className="w-full mt-1 !bg-none bg-card border border-amber/40 !text-amber cursor-not-allowed"
+      >
+        Cert Required
+      </Button>
+    );
+  }
+
+  if (isUnavailable) {
+    return (
+      <Button disabled className="w-full mt-1 opacity-50 cursor-not-allowed">
+        {!isConsumable ? "Book Now" : isOutOfStockItem ? "Request Purchase" : "Buy Now"}
+      </Button>
+    );
+  }
+
+  if (!isConsumable) {
+    return (
+      <Button className="w-full mt-1" onClick={() => onBookNow(listing)}>
+        Book Now
+      </Button>
+    );
+  }
+
+  if (isOutOfStockItem) {
+    return (
+      <Button className="w-full mt-1" onClick={() => onRequestPurchase(listing, "bulk")}>
+        Request Purchase
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 mt-1">
+      <Button className="w-full" onClick={() => onRequestPurchase(listing, "quick")}>
+        Buy Now
+      </Button>
+      <Button
+        variant="ghost"
+        className="w-full"
+        onClick={() => onRequestPurchase(listing, "bulk")}
+      >
+        Request Bulk Purchase
+      </Button>
+    </div>
+  );
+}
+
 function ListingBody({
   listing,
   details,
@@ -89,9 +155,9 @@ function ListingBody({
   listing: Listing;
   details: ListingDetails;
   onBookNow: (listing: Listing) => void;
-  onRequestPurchase: (listing: Listing) => void;
+  onRequestPurchase: RequestPurchaseHandler;
 }) {
-  const { isUnavailable, isConsumable, isOutOfStockItem, requiredCertStatuses, isCertMissing } = details;
+  const { requiredCertStatuses } = details;
   const router = useRouter();
 
   return (
@@ -191,25 +257,12 @@ function ListingBody({
 
       <div className="flex-1" />
 
-      <Button
-        disabled={isUnavailable || isCertMissing}
-        onClick={() => (isConsumable ? onRequestPurchase(listing) : onBookNow(listing))}
-        className={`w-full mt-1 ${
-          isUnavailable
-            ? "opacity-50 cursor-not-allowed"
-            : isCertMissing
-              ? "!bg-none bg-card border border-amber/40 !text-amber cursor-not-allowed"
-              : ""
-        }`}
-      >
-        {isCertMissing
-          ? "Cert Required"
-          : isOutOfStockItem
-            ? "Request Purchase"
-            : isConsumable
-              ? "Buy Now"
-              : "Book Now"}
-      </Button>
+      <ListingActions
+        listing={listing}
+        details={details}
+        onBookNow={onBookNow}
+        onRequestPurchase={onRequestPurchase}
+      />
     </div>
   );
 }
@@ -223,7 +276,7 @@ function ListingCard({
   listing: Listing;
   credentials: Credential[] | undefined;
   onBookNow: (listing: Listing) => void;
-  onRequestPurchase: (listing: Listing) => void;
+  onRequestPurchase: RequestPurchaseHandler;
 }) {
   const details = getListingDetails(listing, credentials);
 
@@ -280,7 +333,7 @@ function MapView({
   listings: Listing[];
   credentials: Credential[] | undefined;
   onBookNow: (listing: Listing) => void;
-  onRequestPurchase: (listing: Listing) => void;
+  onRequestPurchase: RequestPurchaseHandler;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const activeListing = listings.find((listing) => listing.id === activeId) ?? null;
@@ -377,25 +430,12 @@ function MapView({
                 </div>
               </div>
             )}
-            <Button
-              disabled={activeDetails.isUnavailable || activeDetails.isCertMissing}
-              onClick={() =>
-                activeDetails.isConsumable ? onRequestPurchase(activeListing) : onBookNow(activeListing)
-              }
-              className={`w-full mt-1 ${
-                activeDetails.isUnavailable || activeDetails.isCertMissing
-                  ? "opacity-50 cursor-not-allowed"
-                  : ""
-              }`}
-            >
-              {activeDetails.isCertMissing
-                ? "Cert Required"
-                : activeDetails.isOutOfStockItem
-                  ? "Request Purchase"
-                  : activeListing.type === "consumables"
-                    ? "Buy Now"
-                    : "Book Now"}
-            </Button>
+            <ListingActions
+              listing={activeListing}
+              details={activeDetails}
+              onBookNow={onBookNow}
+              onRequestPurchase={onRequestPurchase}
+            />
           </div>
         ) : (
           <div className="h-full flex flex-col items-center justify-center text-center gap-2 py-10">
@@ -415,6 +455,12 @@ export default function MarketplacePage() {
   const [search, setSearch] = useState("");
   const [bookingListing, setBookingListing] = useState<Listing | null>(null);
   const [requestListing, setRequestListing] = useState<Listing | null>(null);
+  const [requestMode, setRequestMode] = useState<"quick" | "bulk">("bulk");
+
+  function handleRequestPurchase(listing: Listing, mode: "quick" | "bulk") {
+    setRequestListing(listing);
+    setRequestMode(mode);
+  }
 
   const { data: listings, isLoading, isError } = useListings();
   const { data: credentials } = useCredentials();
@@ -533,7 +579,7 @@ export default function MarketplacePage() {
                 listing={listing}
                 credentials={credentials}
                 onBookNow={setBookingListing}
-                onRequestPurchase={setRequestListing}
+                onRequestPurchase={handleRequestPurchase}
               />
             ))}
           </div>
@@ -542,7 +588,7 @@ export default function MarketplacePage() {
             listings={filteredListings}
             credentials={credentials}
             onBookNow={setBookingListing}
-            onRequestPurchase={setRequestListing}
+            onRequestPurchase={handleRequestPurchase}
           />
         )}
       </div>
@@ -559,6 +605,7 @@ export default function MarketplacePage() {
         open={requestListing !== null}
         onClose={() => setRequestListing(null)}
         listing={requestListing}
+        mode={requestMode}
       />
     </>
   );

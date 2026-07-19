@@ -1560,3 +1560,214 @@ server/DB:
 - No frontend wiring for any of this (submission form, video-upload UI,
   reviewer queue/decision UI) — backend-only, consistent with the rest of
   this item.
+
+## Sprint 4, Route Protection — `proxy.ts` (2026-07-20)
+
+Closed the last open Sprint 4 item: no server-side route protection existed
+anywhere (see "Sprint 3, Session 2" above). Before writing anything, checked
+`node_modules/next/dist/docs` per `AGENTS.md`'s "this is not the Next.js you
+know, read the docs first" rule — good thing this was checked: **this
+Next.js version (16.2.10) renamed the `middleware.ts` file convention to
+`proxy.ts`** (`export function proxy` or default export, not `middleware`).
+Writing a `middleware.ts` file here would have silently done nothing — no
+error, no warning, just never invoked. `node_modules/next/dist/docs/01-app/
+03-api-reference/03-file-conventions/proxy.md` confirms Proxy still defaults
+to the Node.js runtime (not Edge), so `auth()`'s Prisma-backed `jwt` callback
+(the per-read suspension check from Sprint 3 Session 2) works the same as it
+does in a Server Component or Route Handler — no Edge-runtime compatibility
+issue to work around.
+
+**What was built:** `proxy.ts` at the repo root, wrapping `auth()` (the
+Auth.js v5 `NextAuthMiddleware` overload, confirmed via
+`node_modules/next-auth/lib/index.d.ts`) rather than reading the JWT cookie
+manually. Three path-prefix arrays (`USER_ROUTES`, `SUPPLIER_ROUTES`,
+`ADMIN_ROUTES`) mirror the three route groups' actual page directories
+(`app/(user)/{user,marketplace,passport,wallet}`, `app/(supplier)/supplier*`,
+`app/(admin)/admin*`) — matched directly against `req.nextUrl.pathname`
+rather than trying to infer the route group from the URL, since route groups
+themselves don't appear in the URL. Unauthenticated request to any matched
+path → redirect to `/login`. Authenticated but wrong role → redirect to
+`getRoleHome(session.user)` (reused as-is from `lib/role-home.ts`, the same
+helper `RoleGuard`/`components/RoleGuard.tsx` already used client-side — no
+new "what's this role's home page" logic invented). Right role → `next()`.
+`config.matcher` lists the same path prefixes explicitly (not a catch-all
+negative matcher) so `/login`, `/signup`, `/`, and all `/api/*` routes are
+untouched — API routes already do their own `auth()`/`requireSupplier()`/
+`requireSystemAdmin()` checks per-route (Sprint 3 Sessions 3/4), this closes
+the page-rendering gap specifically, not a defense-in-depth pass over API
+routes that didn't need one.
+
+**Verified live**, not just typechecked — `npx tsc --noEmit` and `npx eslint
+proxy.ts` both clean, then real HTTP checks against the dev server:
+- No session cookie → `curl -I` on every one of `/admin`, `/supplier`,
+  `/user`, `/marketplace`, `/wallet`, `/passport`, `/supplier-inventory`,
+  `/admin-users` → `307` to `/login`; `/login`, `/signup`, `/` unaffected
+  (`200`, no redirect).
+- Real cookie-jar login as `ben@acmecoworking.sg` (supplier, not system
+  admin) via `/api/auth/callback/credentials` → `GET /admin` → `307` to
+  `/supplier` (his own role home, not a blank/error page) — matches
+  `RoleGuard`'s existing client-side behavior, now backed by an actual trust
+  boundary. `GET /supplier` (his own route) → `200`. `GET /marketplace` (the
+  generic user-group route, no role restriction beyond "authenticated") →
+  `200`. `GET /admin-users` → `307` to `/supplier` again, confirming the
+  redirect isn't just a one-off on the bare `/admin` path.
+
+**Not touched:** API route auth (already covered per-route), the client-side
+`RoleGuard` (left as-is — it still stops role-gated UI from flashing before
+a redirect completes, now genuinely a UX nicety rather than the only line of
+defense).
+
+## Marketplace, Bulk Purchase Option for In-Stock Consumables (2026-07-20)
+
+Product owner request, not a mock-data/backend gap: give in-stock consumable
+listings on the marketplace a bulk-purchase option alongside "Buy Now."
+
+**What was actually already true, checked before building:** every consumable
+listing — in stock or not — already funneled into the same
+`RequestPurchaseModal` (quantity stepper, `POST /api/bulk-order-requests`,
+pending-approval-by-supplier semantics per Sprint 3.5 Known Gap #4). The only
+difference between an in-stock and out-of-stock consumable was the button's
+label text ("Buy Now" vs. "Request Purchase"); the underlying flow — and the
+ability to set quantity > 1 — was already identical either way. So the ask
+wasn't "add bulk-purchase capability" (it existed), it was "make it
+discoverable for in-stock items without requiring the user to notice a
+quantity stepper hidden inside what looks like a single-item 'Buy Now'
+button."
+
+**What was built:** `components/RequestPurchaseModal.tsx` gained a `mode:
+"quick" | "bulk"` prop (default `"bulk"`, preserving existing callers'
+behavior). `"quick"` locks quantity at 1, hides the stepper, shows a plain
+"1 unit" line instead, and labels the action "Confirm Purchase"; `"bulk"` is
+the pre-existing quantity-picker UI, unchanged. Both modes still call the
+same `useCreateBulkOrder()` mutation — no new endpoint, no new debit path,
+since creating a real second "instant, no-approval" purchase mechanism was
+never asked for and would have meant inventing a bypass around the existing
+pending-approval design.
+
+`app/(user)/marketplace/page.tsx`: factored the single "Book Now / Buy Now /
+Request Purchase / Cert Required" button (previously duplicated once in the
+grid card body and once in the map view's side panel) into one
+`ListingActions` component used by both. For an in-stock consumable
+(not cert-missing, not unavailable, not out-of-stock) it now renders two
+stacked buttons — "Buy Now" (`onRequestPurchase(listing, "quick")`) and
+"Request Bulk Purchase" (`onRequestPurchase(listing, "bulk")`) — instead of
+one. Out-of-stock consumables, non-consumables, cert-missing, and
+unavailable states are all unchanged (still a single button each). Parent
+page tracks a `requestMode` state alongside the existing `requestListing`
+state, set by a new `handleRequestPurchase(listing, mode)` passed down to
+both the grid and map views.
+
+**Verified live**, not just typechecked (`npx tsc --noEmit` / `npx eslint`
+both clean) — real cookie-jar login as `ethan@example.com` against the dev
+server/DB, listing 166 "Compostable Packaging Boxes" (in stock, 18.5 cr/unit):
+"Buy Now" → modal opens with quantity locked at "1 unit", "18.5 credits",
+button reads "Confirm Purchase" → submit → "Order Submitted... 18.5 credits
+have been reserved." Separately, "Request Bulk Purchase" → quantity stepper
+starts at 1, incremented to 3 → "55.5 credits" (18.5 × 3, confirmed exact) →
+"Submit Order" → "Order Submitted... 55.5 credits have been reserved."
+Direct query on `bulk_order_requests`/`transactions` confirmed exactly the
+two expected rows (`quantity: 1, credits: 18.50` and `quantity: 3, credits:
+55.50`, both `type: purchase`); `ethan`'s ledger balance read `6.00`
+(`80 - 18.5 - 55.5`) before cleanup. Both scratch rows and their transactions
+deleted afterward; balance re-confirmed back to `80.00`, zero leftover
+`bulk_order_requests` rows for the test user.
+
+**Not touched:** out-of-stock consumables' single "Request Purchase" button
+(unaffected — it already exposed the full quantity picker), and no new
+"instant, bypasses supplier approval" purchase mechanism was built — both
+buttons still create a `pending`-status `BulkOrderRequest`, per the existing
+design.
+
+## Marketplace, Bulk Purchase Option — Correction: "Buy Now" Is Not a BulkOrderRequest (2026-07-19)
+
+**The write-up above was wrong about what "Buy Now" should do.** It reused
+`BulkOrderRequest`/`POST /api/bulk-order-requests` for both buttons, on the
+reasoning that the quantity-request flow already existed and "Buy Now" just
+needed to be discoverable. The product owner corrected this directly: Buy Now
+must **deduct stock and credits** as an immediate, completed sale — it is not
+a request for the supplier to act on. For context only (not built here, ignore
+for now): the eventual Stripe integration should give the user an invoice and
+the supplier a receipt of funds for a Buy Now purchase — Sprint 6 scope,
+`Transaction.stripePaymentIntentId` already exists in the schema for exactly
+this, nothing added or changed on that front this session.
+
+**What changed, concretely:**
+- New model `Purchase` (migration `20260719190805_add_instant_purchases`):
+  `userId`, `listingId`, `quantity`, `credits`, `createdAt` only — deliberately
+  no `status` column, unlike `BulkOrderRequest` (`pending`/`confirmed`/
+  `fulfilled`/`cancelled`). A Purchase row is created only once it's already
+  complete; there's nothing left to transition. `Transaction` gained a
+  nullable `purchaseId` FK alongside the existing `bookingId`/
+  `bulkOrderRequestId`, and `ActivityActionType` gained
+  `instant_purchase_completed` (one enum value per event, per this app's
+  existing activity-log taxonomy convention — not reusing `bulk_order_created`
+  for a materially different event).
+- `lib/purchases.ts` — `createPurchaseWithDebit(params)`, same
+  "check-then-write inside one `$transaction`" shape as
+  `createBulkOrderWithDebit`/`createBookingWithDebit`, but with a second guard
+  bulk orders never needed: stock. The stock decrement uses
+  `tx.listing.updateMany({ where: { id, stockQuantity: { gte: quantity } },
+  data: { stockQuantity: { decrement: quantity } } })` rather than a
+  read-then-write — Postgres takes a row lock on the `UPDATE`, so a concurrent
+  purchase against the same near-empty stock re-evaluates the `gte` guard
+  against the post-commit value instead of a stale read, closing the
+  overselling race that the credit-balance check right after it still has
+  (that credit-balance race is the same pre-existing, explicitly accepted gap
+  as Sprint 3.5 Known Gap #1 — not reopened or fixed here, just not worth
+  re-solving for stock too since the `updateMany` guard was cheap to add
+  correctly from the start). Throws `InsufficientStockError` (mirroring
+  `InsufficientCreditBalanceError`'s shape, `lib/credits.ts`) if the guarded
+  update affects zero rows.
+- `app/api/purchases/route.ts` — `POST`, same consumables-only /
+  price-must-be-set validation as `POST /api/bulk-order-requests`
+  (`app/api/bulk-order-requests/route.ts`), catches both
+  `InsufficientCreditBalanceError` and `InsufficientStockError` into the same
+  clean `422` shape.
+- `lib/hooks/useListings.ts` — new `useCreatePurchase()` hook, `POST
+  /api/purchases`, separate from `useCreateBulkOrder()` (different endpoint,
+  not a flag on one mutation).
+- `components/RequestPurchaseModal.tsx` — picks `useCreatePurchase()` vs
+  `useCreateBulkOrder()` based on the existing `mode` prop (`"quick"` vs
+  `"bulk"`, unchanged from the prior session) rather than always hitting bulk
+  orders. Success copy now actually matches what happened: quick mode shows
+  "Purchase Complete... N credits were charged" instead of the bulk-mode
+  "pending approval... credits have been reserved" text, which was accurate
+  for a request but wrong for a completed sale.
+
+**Tests:** new `lib/purchases.test.ts` (added to `npm test`), 4 cases —
+insufficient stock rejected with nothing written and stock unchanged,
+insufficient credit balance rejected *and* the stock decrement rolled back
+with it (not just the credit side), a normal purchase decrementing stock and
+debiting credits exactly with one `Purchase` row and zero `BulkOrderRequest`
+rows, and an exact-stock-boundary purchase (quantity == remaining stock)
+succeeding and leaving stock at exactly zero. All 111 tests in `npm test`
+pass (4 new, 0 regressions). `npx tsc --noEmit`, `npx eslint`, and `next
+build` all clean. Dev server restarted after the migration + `prisma
+generate` (same "Prisma client doesn't hot-reload into an already-running
+`next dev` process" gotcha noted in Sprint 4 Item 4's write-up).
+
+**Verified live**, not just unit-tested — real cookie-jar login as
+`ethan@example.com` against the dev server/DB, listing 166 "Compostable
+Packaging Boxes" (stock 400, 18.50 cr/unit, seeded balance 80): clicked "Buy
+Now" in the actual browser UI → modal correctly showed "Confirm your
+purchase" / "1 unit" / "18.5 credits" / "Confirm Purchase" (no stepper) →
+submit → "Purchase Complete. You bought 1 unit... 18.5 credits were charged."
+Direct query confirmed exactly one `purchases` row (`quantity: 1, credits:
+18.50`), listing 166's `stock_quantity` at `399`, exactly one `transactions`
+row (`type: purchase`, `purchase_id` set, `amount: -18.50`), zero new
+`bulk_order_requests` rows, and balance at `61.50` (`80 - 18.50`). Separately,
+via `curl`: quantity `100000` against the same listing → clean `422
+{"errors":{"quantity":["Insufficient stock for this purchase."]}}`; a
+non-consumable listing (162, "Studio Space A") → clean `422` "Buy Now is only
+available for consumable listings."; unauthenticated → `401`; "Request Bulk
+Purchase" on the same listing (quantity 2) → still `201` on `POST
+/api/bulk-order-requests` with a real `bulkOrderRequest` response and a
+`type: purchase` Transaction tied to `bulk_order_request_id` (not
+`purchase_id`) — confirming the two paths stayed genuinely separate, not
+just cosmetically. All scratch rows (`purchases`, `bulk_order_requests`,
+`transactions`, `activity_log`) deleted afterward; `ethan`'s balance
+re-confirmed back to `80`, listing 166's stock back to `400`.
+
+**Not touched:** out-of-stock consumables' single "Request Purchase" button
+(still the bulk-order-request flow, unaffected), and no Stripe code of any
+kind — the product owner was explicit this is for-context-only future scope.

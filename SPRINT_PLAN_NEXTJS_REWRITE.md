@@ -153,7 +153,7 @@ This is the sprint that didn't exist as its own thing in the original build — 
 - [x] `certificates.earning_method` enum column added (`tier1_video_quiz` / `tier2a_operator_signoff` / `tier2b_operator_or_sme_signoff`), via a real migration (`prisma/migrations/20260719064218_add_certificate_earning_method`), kept distinct from the existing `certificates.category` column per the "don't conflate the two" note in CODEBASE_SUMMARY.md.
 - [x] Booking validation: double-booking prevention enforced end-to-end — app-layer pre-check (`hasOverlappingBooking`, `lib/bookings.ts`) added ahead of the insert, plus the existing DB-constraint 23P01 catch now shares the identical clean message for the race window. See CLAUDE1.md "Sprint 4, Item 3" session note.
 - [x] Training/credentialing flow: submit, review, pass/fail, issue credential — three earning paths, matching `CertificateEarningMethod`'s own labels (no unified "review" step exists across all three, by design): tier1_video_quiz is auto-graded (`lib/quiz-attempts.ts`, `POST /api/training-videos/[id]/quiz-attempts`, no reviewer); tier2b_operator_or_sme_signoff is a scheduled multi-participant session, reusing the existing `training_enrollments` status column (`completed` = pass, `cancelled` = fail — no new statuses added); tier2a_operator_signoff is an on-demand, per-user operator review (live demo request or uploaded recording evidence), a new `CertificateSignoffRequest` model (`lib/certificate-signoffs.ts`) — **corrected mid-sprint**: the first pass wrongly conflated tier2a with tier2b via `training_enrollments`, fixed after the product owner clarified they're different flows. All three paths issue credentials through a shared `lib/training-credentials.ts` helper. See CLAUDE1.md "Sprint 4, Item 4" and "Sprint 4, Item 4, Correction."
-- [ ] **Close the route-protection gap found in the Sprint 3 Session 2 session/cookie
+- [x] **Close the route-protection gap found in the Sprint 3 Session 2 session/cookie
       review (see `CLAUDE1.md`, "Sprint 3, Session 2" section, 2026-07-19):
       there is currently no server-side route protection anywhere** — no
       `middleware.ts`, no `auth()` call in any Server Component/layout, no
@@ -165,7 +165,12 @@ This is the sprint that didn't exist as its own thing in the original build — 
       `(admin)` route groups by the matching `isSupplier`/`isCompanyAdmin`/
       `isSystemAdmin` flag. This is the last item in Sprint 4 specifically so
       it closes right before Sprint 5's kiosk/middleware work builds on top
-      of a trust boundary that actually holds.
+      of a trust boundary that actually holds. **Closed 2026-07-20**: this
+      Next.js version renamed the `middleware.ts` convention to `proxy.ts`
+      (confirmed via `node_modules/next/dist/docs` per this repo's own
+      "read the docs first" rule in `AGENTS.md`) — added `proxy.ts` wrapping
+      `auth()`, gating the three route groups by path prefix. See
+      CLAUDE1.md "Sprint 4, Route Protection" for the full write-up.
 
 **Checklist before moving to Sprint 5:**
 - [x] Certificate-set gating unit-tested with edge cases (holds all, missing one of several, holds none, expired treated as missing, no certs required) — 7 tests, `lib/certificate-gating.test.ts`, run via `npm test`. Supersedes the earlier "tier comparison logic" line item — see scrapped-tier note above.
@@ -184,6 +189,7 @@ Found via a linkage audit (2026-07-19): every page still reads from `lib/mock*.t
 - [ ] Build UI for bulk-order-requests — `POST /api/bulk-order-requests` exists with zero callers
 - [ ] Add an `activity_log` read endpoint (GET) — currently write-only from server-side lib code (`lib/bookings.ts`, `lib/check-ins.ts`, `lib/bulk-orders.ts`, `lib/training-enrollments.ts`, `lib/wallet.ts`); no route exists at all, which is why Sprint 3.5's "no feed UI yet" note has stayed unresolved
 - [ ] Decide + build (or explicitly defer with a reason) an activity feed UI once the read endpoint exists
+- [x] Marketplace: give in-stock consumable listings a bulk-purchase option alongside "Buy Now" (product owner request, 2026-07-20, not a mock-data gap) — previously every consumable card/map-panel funneled into the same `RequestPurchaseModal` regardless of stock, just under different button text. **Corrected same day**: the product owner clarified "Buy Now" must not be a `BulkOrderRequest` at all — it's an immediate, completed sale (stock and credits move at creation, no supplier action pending), distinct from a bulk order request (which stays `pending` until the supplier fulfills it). Built a new `Purchase` model + `POST /api/purchases` (`lib/purchases.ts`, `createPurchaseWithDebit`) separate from the existing `BulkOrderRequest`/`POST /api/bulk-order-requests` path. "Buy Now" now calls the new endpoint (quantity locked at 1, atomic stock-decrement-and-debit); "Request Bulk Purchase" is unchanged, still the existing pending-approval quantity-picker flow. Stripe invoice/receipt (user invoice, supplier receipt of funds) is explicitly out of scope here — Sprint 6, not built, `stripePaymentIntentId` already exists on `Transaction` for when that lands. See CLAUDE1.md "Marketplace, Bulk Purchase Option for In-Stock Consumables" and its "Correction" follow-up.
 
 **Checklist before moving to Sprint 5:**
 - [ ] Zero remaining `lib/mock*.ts` imports in page components
