@@ -207,6 +207,7 @@ model User {
   bookings             Booking[]
   bulkOrderRequests    BulkOrderRequest[]
   transactions         Transaction[]
+  checkIns             CheckIn[]
 
   @@map("users")
 }
@@ -267,6 +268,7 @@ model Listing {
   requiredCertificates ListingRequiredCertificate[]
   bookings             Booking[]
   bulkOrderRequests    BulkOrderRequest[]
+  checkIns             CheckIn[]
 
   @@map("listings")
 }
@@ -409,6 +411,7 @@ model Booking {
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
   transactions Transaction[]
+  checkIns     CheckIn[]
 
   @@map("bookings")
 }
@@ -461,4 +464,29 @@ model Transaction {
   bulkOrderRequest BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
+}
+
+// Sprint 3.5 new schema item. bookingId nullable — not every check-in ties to
+// a booking (e.g. a supplier logging a walk-in visit), so the status side
+// effect below only applies when it's set. Per the sprint plan note ("the old
+// app never had a working controller for this... should decide whether
+// check-in updates booking status" — confirmed with the user before building,
+// see CLAUDE1.md): check-in flips a `confirmed` booking to `active`,
+// check-out flips `active` to `completed` — the two enum values with no other
+// writer anywhere in this codebase. Enforced in lib/check-ins.ts, not a DB
+// constraint (mirrors how Booking status guards on confirm/decline are
+// app-layer, not DB-layer).
+model CheckIn {
+  id           BigInt    @id @default(autoincrement())
+  userId       String    @map("user_id")
+  listingId    BigInt    @map("listing_id")
+  bookingId    BigInt?   @map("booking_id")
+  checkedInAt  DateTime  @default(now()) @map("checked_in_at")
+  checkedOutAt DateTime? @map("checked_out_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@map("check_ins")
 }

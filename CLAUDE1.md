@@ -950,3 +950,77 @@ seeded state.
 **Not touched:** the check-ins/activity-log/training-enrollments schema
 items and the frontend-wiring checklist item both remain separate, still-open
 lines in the sprint plan.
+
+## Sprint 3.5, New Schema Item — `check_ins` Table + Controller (2026-07-19)
+
+Task brief's own wording flagged this as an open product decision, not
+something to guess: "the old app never had a working controller for this...
+This sprint should decide whether check-in updates booking status." Stated a
+read and got it confirmed before writing any code, per the brief's explicit
+instruction.
+
+**The read, confirmed:** `BookingStatus` already has `active` and `completed`
+enum values (`schema.prisma`) that no code path anywhere had ever written —
+grepped the whole app before proposing this, confirmed only
+`pending`/`confirmed`/`cancelled` were ever set by real code. The mock
+dashboard (`lib/mockDashboard.ts`'s `CheckIn` type, `app/(user)/user/page.tsx`'s
+"active check-ins" widget) already assumes a real check-in concept with
+exactly this table shape. So: check-in flips a `confirmed` booking to
+`active`; check-out flips `active` to `completed`; check-in with no
+`bookingId` (a bare presence log, e.g. a supplier logging a walk-in) never
+touches booking status at all, since `booking_id` is nullable on `check_ins`
+for exactly that reason.
+
+**What was built:**
+- `prisma/schema.prisma` — `CheckIn` model (`check_ins` table): `userId`,
+  `listingId`, `bookingId` nullable, `checkedInAt` (default now), `checkedOutAt`
+  nullable. Relations added to `User`, `Listing`, `Booking`. Migration
+  `20260719103825_add_check_ins`, applied to both the dev and test DBs.
+- `lib/check-ins.ts` — `parseCheckInFields`, `serializeCheckIn`,
+  `createCheckIn` (atomic: re-checks booking status inside the `$transaction`
+  before flipping it, same shape as `confirmBookingWithAudit`/
+  `declineBookingWithRefund`), `checkOutCheckIn` (same pattern, flips
+  `active`→`completed`). Three typed errors mirroring the existing
+  `BookingNotConfirmableError`/`BookingNotDeclinableError` style:
+  `BookingNotCheckInableError`, `BookingNotCheckOutableError`,
+  `CheckInAlreadyCheckedOutError`.
+- `app/api/check-ins/route.ts` (`POST`) and
+  `app/api/check-ins/[id]/check-out/route.ts` (`PATCH`) — both auth-gated via
+  `auth()`, same as the bookings routes (no supplier/kiosk auth here — that's
+  explicitly Sprint 5's scope per the brief, not built). Ownership is checked
+  in the route before calling into `lib/check-ins.ts`: a `bookingId` must
+  belong to the requesting user and match the given `listingId`, else `403`/
+  `422`; a check-out targeting someone else's check-in is `403`.
+- No Transaction rows — check-in/out isn't a credit-affecting event, unlike
+  confirm/decline.
+
+**Tests:** new `lib/check-ins.test.ts` (added to `npm test`), 8 cases against
+the real test DB — bare check-in writes no booking side effect; check-in on a
+`confirmed` booking flips it to `active`; check-in on `pending` or already-
+`active` bookings rejects cleanly with no orphan row; check-out on a bare
+check-in just stamps `checkedOutAt`; check-out on an `active`-linked booking
+flips it to `completed`; double check-out rejects; check-out when the linked
+booking was moved out of `active` out-of-band (e.g. supplier cancels
+mid-stay) rejects via `BookingNotCheckOutableError`. All 53 tests in `npm
+test` pass (no regression to the 45 from before). `npx tsc --noEmit` and
+`npx eslint` both clean.
+
+**Verified live**, not just unit-tested — real cookie-jar logins against the
+dev server/DB, `ethan@example.com` and `farah@example.com`, a scratch
+`confirmed` booking (id 133, listing 110 "Studio Space A", no cert
+requirement so nothing else could interfere):
+`POST /api/check-ins {"listingId":"110","bookingId":"133"}` as ethan → `201`;
+direct query confirmed booking 133 flipped to `active`. Repeating the same
+call → clean `422 {"message":"Booking is active and cannot be checked in."}`.
+`PATCH /api/check-ins/1/check-out` as ethan → `200`, `checkedOutAt` set;
+direct query confirmed booking 133 flipped to `completed`. Repeating the
+check-out → clean `422 {"message":"This check-in has already been checked
+out."}`. Farah (a different user) attempting `PATCH
+/api/check-ins/1/check-out` or `POST /api/check-ins` against ethan's booking
+133 → both `403 {"message":"You do not have access to..."}`. No session
+cookie → `401`. Test check-in and booking rows deleted afterward, DB back to
+seeded state.
+
+**Not touched, per the brief's explicit scope:** kiosk/middleware auth
+(Sprint 5), and the `activity_log`/`training_enrollments` schema items remain
+separate, still-open lines in the sprint plan.
