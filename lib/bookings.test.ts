@@ -1,0 +1,173 @@
+// Coverage for the app-layer overlap pre-check (Sprint 4, Item 3), the
+// counterpart to the DB-level bookings_no_overlap exclusion constraint
+// covered in prisma/tests/db-constraints.test.ts. Hits the real dev Postgres
+// DB through Prisma (no mocking) since this function's whole job is to mirror
+// that constraint's date-range/status semantics ahead of the insert.
+import "dotenv/config";
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient, ListingType, BookingType } from "../app/generated/prisma/client";
+import { hasOverlappingBooking } from "./bookings";
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const prisma = new PrismaClient({ adapter });
+
+let companyCounter = 0;
+async function createCompany() {
+  companyCounter += 1;
+  return prisma.company.create({
+    data: { name: `Overlap Test Co ${Date.now()}-${companyCounter}` },
+  });
+}
+
+let userCounter = 0;
+async function createUser() {
+  userCounter += 1;
+  return prisma.user.create({
+    data: {
+      name: "Overlap Test User",
+      email: `overlap-test-${Date.now()}-${userCounter}@example.com`,
+      password: "x",
+    },
+  });
+}
+
+function createSpaceListing(companyId: bigint) {
+  return prisma.listing.create({
+    data: {
+      companyId,
+      type: ListingType.space,
+      name: "Overlap Test Listing",
+      priceDay: "10.00",
+      priceWeek: "60.00",
+      priceMonth: "200.00",
+    },
+  });
+}
+
+async function cleanupCompanyAndUsers(companyId: bigint, userIds: string[]) {
+  await prisma.company.delete({ where: { id: companyId } });
+  for (const userId of userIds) {
+    await prisma.user.delete({ where: { id: userId } });
+  }
+}
+
+describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () => {
+  test("detects an overlap against an existing active booking on the same listing", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-03-01"),
+          endDate: new Date("2027-03-05"),
+          credits: "10.00",
+        },
+      });
+
+      const result = await hasOverlappingBooking(listing.id, "2027-03-03", "2027-03-07");
+      assert.equal(result, true);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("inclusive date bounds: a booking sharing only the boundary day still overlaps", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-04-01"),
+          endDate: new Date("2027-04-05"),
+          credits: "10.00",
+        },
+      });
+
+      const result = await hasOverlappingBooking(listing.id, "2027-04-05", "2027-04-10");
+      assert.equal(result, true);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("returns false for genuinely non-overlapping dates on the same listing", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-05-01"),
+          endDate: new Date("2027-05-05"),
+          credits: "10.00",
+        },
+      });
+
+      const result = await hasOverlappingBooking(listing.id, "2027-05-06", "2027-05-10");
+      assert.equal(result, false);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a cancelled booking does not block the slot", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-06-01"),
+          endDate: new Date("2027-06-05"),
+          credits: "10.00",
+          status: "cancelled",
+        },
+      });
+
+      const result = await hasOverlappingBooking(listing.id, "2027-06-02", "2027-06-04");
+      assert.equal(result, false);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("overlap on one listing does not block a different listing", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listingA = await createSpaceListing(company.id);
+      const listingB = await createSpaceListing(company.id);
+      await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listingA.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-07-01"),
+          endDate: new Date("2027-07-05"),
+          credits: "10.00",
+        },
+      });
+
+      const result = await hasOverlappingBooking(listingB.id, "2027-07-02", "2027-07-04");
+      assert.equal(result, false);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});

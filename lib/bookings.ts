@@ -5,6 +5,11 @@ import { getMissingCertificates } from "@/lib/certificate-gating";
 
 const BOOKING_TYPES = new Set<string>(Object.values(BookingType));
 
+// Shared with the 23P01 catch in app/api/bookings/route.ts so both the
+// app-layer pre-check and the DB-constraint race-condition fallback surface
+// the identical user-facing message.
+export const BOOKING_OVERLAP_MESSAGE = "This listing is not available for the selected dates.";
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const bookingWithRelationsArgs = {
   include: { listing: { include: { requiredCertificates: { include: { certificate: true } } } }, user: true },
@@ -107,4 +112,23 @@ export async function missingCertificateIds(listingId: bigint, userId: string): 
     )
   );
   return required.map((r) => r.certificateId).filter((id) => missingIds.has(id.toString()));
+}
+
+// App-layer mirror of the bookings_no_overlap exclusion constraint
+// (prisma/migrations/20260718171742_bookings_no_overlap_exclude): same rule,
+// same inclusive date bounds, same "any non-cancelled status still holds the
+// slot." Lets the common case return a clean error without ever reaching
+// Postgres's 23P01 — the DB constraint stays as the last line of defense for
+// the race between this check and the insert (see route.ts).
+export async function hasOverlappingBooking(listingId: bigint, startDate: string, endDate: string): Promise<boolean> {
+  const overlapping = await prisma.booking.findFirst({
+    where: {
+      listingId,
+      status: { not: "cancelled" },
+      startDate: { lte: new Date(endDate) },
+      endDate: { gte: new Date(startDate) },
+    },
+    select: { id: true },
+  });
+  return overlapping !== null;
 }

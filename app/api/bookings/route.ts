@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError, unauthorizedResponse, validationErrorResponse } from "@/lib/api-errors";
-import { missingCertificateIds, parseBookingCreateFields, serializeBooking } from "@/lib/bookings";
+import {
+  BOOKING_OVERLAP_MESSAGE,
+  hasOverlappingBooking,
+  missingCertificateIds,
+  parseBookingCreateFields,
+  serializeBooking,
+} from "@/lib/bookings";
 
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
 
@@ -63,6 +69,11 @@ export async function POST(request: NextRequest) {
     return validationErrorResponse(new ApiValidationError({ listingId: ["This listing has no price set for that booking type."] }));
   }
 
+  const overlapping = await hasOverlappingBooking(fields.listingId, fields.startDate, fields.endDate);
+  if (overlapping) {
+    return NextResponse.json({ message: BOOKING_OVERLAP_MESSAGE }, { status: 409 });
+  }
+
   try {
     const booking = await prisma.booking.create({
       data: {
@@ -77,9 +88,12 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ booking: serializeBooking(booking) }, { status: 201 });
   } catch (error) {
+    // Race window between the app-layer check above and this insert: the DB
+    // constraint (bookings_no_overlap) is the actual source of truth and
+    // still fires here if another request's booking landed in between.
     const code = (error as { cause?: { code?: string } })?.cause?.code;
     if (code === "23P01") {
-      return NextResponse.json({ message: "This listing is not available for the selected dates." }, { status: 409 });
+      return NextResponse.json({ message: BOOKING_OVERLAP_MESSAGE }, { status: 409 });
     }
     throw error;
   }

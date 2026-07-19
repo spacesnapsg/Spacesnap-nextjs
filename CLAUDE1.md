@@ -637,3 +637,67 @@ correctly (that's item 1 territory, already closed); no submit/review/
 sign-off flow for *earning* a certificate via any of the three methods was
 built (that's item 4, training/credentialing flow, still open in the sprint
 plan).
+
+## Sprint 4, Item 3 — Double-Booking Prevention, End-to-End (2026-07-19)
+
+Task brief: the Sprint 2 exclusion constraint (`bookings_no_overlap`, 23P01)
+already rejects overlapping bookings at the DB level, but that's not
+sufficient alone — needed an app-layer check before insert that returns a
+clean error, plus explicit handling of the race where the app-layer check
+passes but the DB constraint still fires.
+
+**Finding before writing anything:** the 23P01 → clean 409 catch already
+existed in `app/api/bookings/route.ts` (built in Sprint 3 Session 4, per that
+section above: "kept... the `23P01` exclusion-constraint → clean 409 instead
+of a raw Postgres error"). What was actually missing was the *proactive*
+app-layer check — the common case still relied on a DB exception it happened
+to already handle cleanly, not the "before insert" check the item asked for.
+
+**What was built:**
+- `hasOverlappingBooking(listingId, startDate, endDate)` in `lib/bookings.ts`
+  — a plain Prisma query mirroring the exclusion constraint's exact
+  semantics (read from the migration SQL directly, not assumed): same
+  listing, status other than `cancelled` still holds the slot, inclusive
+  date bounds on both ends (`startDate <= endDate AND endDate >= startDate`
+  against the existing row, matching `daterange(..., '[]') &&`).
+- `BOOKING_OVERLAP_MESSAGE` constant, also in `lib/bookings.ts`, shared
+  between the new app-layer check and the existing 23P01 catch so both paths
+  return byte-identical text — the race case shouldn't read differently from
+  the common case.
+- `app/api/bookings/route.ts`: calls `hasOverlappingBooking` right before
+  `prisma.booking.create`, returns `409` immediately if it finds a conflict.
+  The existing try/catch around the insert is unchanged in structure, just
+  now references the shared message constant.
+
+**Tests:** `lib/bookings.test.ts` (new, real dev DB via Prisma, same
+integration-test convention as `prisma/tests/db-constraints.test.ts`) — 5
+cases: detects overlap, inclusive boundary-day overlap, genuinely
+non-overlapping dates, cancelled bookings don't block, overlap on one listing
+doesn't block a different listing. Added to the `npm test` script. `npx tsc
+--noEmit` and `npx eslint` both clean.
+
+**Verified live, not just unit-tested** — real cookie-jar login as
+`ethan@example.com` against the dev server and listing 113 (Power Drill Set,
+no cert requirement, so nothing else could interfere):
+- Booking `2028-01-10`–`2028-01-12` → `201`.
+- Overlapping `2028-01-11`–`2028-01-14` on the same listing → clean `409
+  {"message":"This listing is not available for the selected dates."}`, not
+  a raw Postgres error — this is the app-layer check firing, confirmed by
+  timing (no DB round-trip exception involved).
+- Non-overlapping `2028-02-01`–`2028-02-03` on the same listing → `201`
+  (confirms no false-positive blocking).
+- **Race condition specifically exercised**, not just asserted to work: fired
+  5 concurrent `POST` requests at the identical new slot
+  (`2028-03-05`–`2028-03-07`) via backgrounded `curl` + `wait`, so all 5 hit
+  the app-layer `SELECT` before any of their inserts landed. Result: exactly
+  one `201`, the other four all `409` with the identical shared message —
+  meaning those four *did* pass the app-layer check (by design, since they
+  raced) and were caught by the DB constraint's 23P01 on insert, translated
+  through the same clean-message path. This is the actual race scenario the
+  task brief asked to prove, not a hypothetical.
+- All 6 test bookings deleted afterward (raw SQL `DELETE ... WHERE id IN
+  (...)`, confirmed 0 remaining); DB back to seeded state.
+
+**Not touched:** no other booking-creation path exists in this codebase
+(supplier confirm/decline only transition status on existing rows, they
+don't insert), so this was the only place the check was needed.
