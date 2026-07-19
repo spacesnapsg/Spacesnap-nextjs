@@ -38,6 +38,19 @@ enum CertificateStatus {
   @@map("certificate_status")
 }
 
+// How a certificate is earned — distinct from `Certificate.category`, which
+// is a different, existing classification (safety/equipment/house-rules per
+// CODEBASE_SUMMARY.md). Do not conflate the two. There is no numeric
+// progression between these three: each is just a different earning path,
+// all producing the same kind of `user_certificates` row.
+enum CertificateEarningMethod {
+  tier1_video_quiz
+  tier2a_operator_signoff
+  tier2b_operator_or_sme_signoff
+
+  @@map("certificate_earning_method")
+}
+
 enum ListingType {
   space
   equipment
@@ -191,18 +204,19 @@ model User {
 // App-layer rule (not DB-enforced yet): only status=approved certs may be
 // referenced by listing_required_certificates or user_certificates.
 model Certificate {
-  id                 BigInt             @id @default(autoincrement())
+  id                 BigInt                   @id @default(autoincrement())
   name               String
   icon               String?
   category           String?
-  submissionNotes    String?            @map("submission_notes")
-  source             CertificateSource  @default(platform)
-  status             CertificateStatus  @default(approved)
-  createdByCompanyId BigInt?            @map("created_by_company_id")
-  reviewedBy         String?            @map("reviewed_by")
-  reviewedAt         DateTime?          @map("reviewed_at")
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
+  earningMethod      CertificateEarningMethod @default(tier1_video_quiz) @map("earning_method")
+  submissionNotes    String?                  @map("submission_notes")
+  source             CertificateSource        @default(platform)
+  status             CertificateStatus        @default(approved)
+  createdByCompanyId BigInt?                  @map("created_by_company_id")
+  reviewedBy         String?                  @map("reviewed_by")
+  reviewedAt         DateTime?                @map("reviewed_at")
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
 
   createdByCompany Company? @relation(fields: [createdByCompanyId], references: [id], onDelete: SetNull)
   reviewer         User?    @relation("CertificateReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)

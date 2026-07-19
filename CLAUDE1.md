@@ -504,3 +504,136 @@ server (`localhost:3000`) and the seeded DB, real cookie-jar logins via
 
 No code changes were needed. Updated the Sprint 4 checklist item in
 `SPRINT_PLAN_NEXTJS_REWRITE.md` to checked, with a note on why.
+
+## Sprint 4, Item 2 — Tier Comparison Logic (2026-07-19)
+
+Task brief asked for the tier comparison rule (achieved tier per equipment
+class only increases; higher tier satisfies lower requirement; Passport
+stores the highest tier achieved per class; booking flow surfaces only the
+delta), as a standalone testable module — explicitly not inlined into the
+booking route, and explicitly not wiring double-booking or credential-gating
+(separate items).
+
+**Confirmed before building:** no `tier` or `equipmentClass` concept exists
+anywhere — re-checked `prisma/schema.prisma` directly (grep for "tier" and
+"equipmentClass", zero hits beyond this), and re-confirmed the Sprint 4 Item 1
+finding that the old Laravel/React repos never had this concept either (grep
+across both old repos turned up nothing but Carbon locale-file noise
+containing the substring "tier"). This is genuinely new domain logic for this
+sprint, not something to port, and not something to invent new schema/columns
+for unilaterally.
+
+**What was built:** `lib/tiers.ts` — pure functions, no Prisma/DB dependency,
+operating on plain `{ equipmentClass, tier }` values so the eventual decision
+of *which* schema field carries equipmentClass/tier (likely `Certificate`,
+since it already has a `category` string that could double as equipment
+class, but that's a real product decision, not guessed here) stays a separate
+wiring step:
+- `computePassportTiers(records, asOf)` — aggregates raw achievement records
+  into the Passport's per-equipment-class highest *currently valid* tier;
+  expired records contribute nothing but never remove a still-valid tier
+  earned elsewhere.
+- `recordTierAchievement(passport, equipmentClass, tier)` — returns a new
+  Passport with the tier raised to `max(current, new)`, immutably; a lower or
+  equal new achievement never decreases what's already recorded.
+- `meetsTierRequirement(achieved, required)` — `achieved >= required`; higher
+  always satisfies lower, never the reverse.
+- `compareTiers(passport, requirements)` — returns `{ satisfied, gaps }`
+  where `gaps` contains only the unmet equipment classes (required tier +
+  achieved tier, defaulting to 0 for "no credential"), so a caller only ever
+  sees the delta, not a full re-explanation of requirements already met.
+
+**Tests:** `lib/tiers.test.ts`, 22 cases via `node:test`/`tsx --test` (no DB
+needed — pure functions), covering the Sprint 4 checklist's named edge cases
+(equal tier, higher tier, no credential, expired credential) plus immutability,
+multi-class independence, and the "surfaces only the delta" behavior
+specifically (a satisfied requirement is absent from `gaps`, not present-and-
+marked-ok). Added `lib/tiers.test.ts` to the `npm test` script alongside the
+existing `prisma/tests/db-constraints.test.ts`. Verified: `npm run lint` (via
+`npx eslint lib/tiers.ts lib/tiers.test.ts`) and `npx tsc --noEmit` both clean;
+`npx tsx --test lib/tiers.test.ts` → 22/22 pass.
+
+**Not done, per the brief's explicit scope:** not wired into
+`app/api/bookings/route.ts` or `missingCertificateIds` in `lib/bookings.ts` —
+that requires the schema decision above (what actually carries
+equipmentClass/tier) and touches double-booking/credential-gating territory
+this item was told to leave alone. Flagging as the natural next step once
+that schema call is made.
+
+## Sprint 4, Item 2 (revised) — Tier Comparison Scrapped, Replaced With Certificate-Set Gating (2026-07-19)
+
+**The numeric-tier model above was wrong.** It was built on an unconfirmed
+assumption — "achieved tier per equipment class only increases" — invented
+because nothing in the schema said otherwise and the task brief used the word
+"tier" without defining it. Confirmed with the product owner this session:
+**there is no numeric tier progression anywhere in this product.** "Tier" is
+just a label for *how* a given certificate was earned, not a level of
+achievement one certificate can outrank another on. The three earning paths
+are:
+- Tier 1: self-serve video + quiz
+- Tier 2A: some validation requiring operator sign-off
+- Tier 2B: training requiring operator OR external SME sign-off
+
+Every path produces exactly the same kind of result — a row in
+`user_certificates`. There is no "Tier 2 forklift cert satisfies a Tier 1
+forklift requirement" relationship, because there's no such thing as two
+different forklift certs at two different tiers in the first place. Each
+certificate just *has* an earning method.
+
+**If you're reading this in a future session:** do not re-derive the tier-
+comparison model from the task brief's language again. The word "tier" in
+this codebase refers to `certificates.earning_method`, a label, not a level.
+Booking-gating logic is a plain set difference (required certificates minus
+held-and-not-expired ones), nothing more — see `lib/certificate-gating.ts`.
+
+**What changed, concretely:**
+- Deleted `lib/tiers.ts` and `lib/tiers.test.ts` entirely (clean redo, not a
+  patch — confirmed via grep afterward that nothing else imported them).
+- Added `certificates.earning_method` (new enum `CertificateEarningMethod`:
+  `tier1_video_quiz` / `tier2a_operator_signoff` /
+  `tier2b_operator_or_sme_signoff`), via a real migration
+  (`prisma/migrations/20260719064218_add_certificate_earning_method`), not
+  just a schema.prisma edit. Deliberately **not** reusing/overloading
+  `certificates.category` — that's a different, existing classification
+  (safety/equipment/house-rules per CODEBASE_SUMMARY.md), and conflating the
+  two was a mistake already flagged in that doc. Column is `NOT NULL DEFAULT
+  'tier1_video_quiz'` since the table already had 5 seeded rows; seed script
+  updated to set an explicit, plausible `earningMethod` per seeded
+  certificate rather than leaving all five on the default.
+- New pure module `lib/certificate-gating.ts` (not `lib/certificates.ts` —
+  that name is already taken by the existing certificate-catalog CRUD module
+  from Sprint 3 Session 4, which is Prisma-backed; this module deliberately
+  stays DB-free, same "pure, unit-testable without a DB" pattern the scrapped
+  `lib/tiers.ts` used). One function: `getMissingCertificates(requiredCertificateIds,
+  userHeldCertificates, asOf?)` — plain set difference, required minus
+  (held AND not expired). No scoring, no achieved-vs-required comparison.
+- `missingCertificateIds` in `lib/bookings.ts` now fetches required/held ids
+  from Prisma and delegates the actual diff decision to
+  `getMissingCertificates`, instead of inlining the `Set` logic itself. The
+  booking route (`app/api/bookings/route.ts`) needed no changes — it already
+  surfaced `missing` as `missingCertificates: [names]` on a 422, which is
+  exactly "surface only the delta," just backed by a set difference instead
+  of a tier comparison now.
+- `lib/certificate-gating.test.ts`: 7 cases via `node:test`, covering holds-
+  all (pass), missing-one-of-several, holds-none, expired-treated-as-missing,
+  and no-certs-required (trivially passes) — the exact matrix asked for.
+  `npm test` script updated to point at this file instead of the deleted
+  `lib/tiers.test.ts`.
+
+**Verified live**, not just unit-tested: re-ran `prisma/seed.ts` after the
+migration (5 certs, ids renumbered — 34–38 this run), then via real
+cookie-jar logins against the dev server: `ethan@example.com` (holds cert 36,
+Fire Safety Marshal, expired 2026-01-10) → `POST /api/bookings` on listing
+111 (Meeting Room B, requires cert 36) → `422
+{"missingCertificates":["Fire Safety Marshal"]}`, confirming the expired-
+counts-as-missing rule still holds after the refactor. `farah@example.com`
+(holds a valid Forklift cert) → `POST /api/bookings` on listing 112 (Forklift
+Rental, requires that cert) → `201`, booking created, then deleted afterward
+to leave the DB back at its seeded state.
+
+**Explicitly out of scope this session** (per the brief): the actual booking
+route wasn't touched beyond confirming `missingCertificateIds` still gates
+correctly (that's item 1 territory, already closed); no submit/review/
+sign-off flow for *earning* a certificate via any of the three methods was
+built (that's item 4, training/credentialing flow, still open in the sprint
+plan).

@@ -130,7 +130,8 @@ This is the sprint that didn't exist as its own thing in the original build — 
 ## Sprint 4: Core Logic
 
 - [x] Credential-gating: booking blocked without valid, non-expired credential — existence+expiry check was already built in Sprint 3 Session 4 (`missingCertificateIds`, `lib/bookings.ts`); this item re-verified it live against seeded data, no code changes needed. Schema has no `tier` concept at all (confirmed by grep) — out of scope here per item 2, not silently dropped
-- [ ] Tier logic: achieved tier per equipment class only increases; higher tier satisfies lower requirement; booking flow compares achieved vs. required and surfaces only the delta
+- [ ] Tier logic — **SCRAPPED, redesigned as certificate-set gating.** The original item 2 design (achieved tier per equipment class only increases; higher tier satisfies lower requirement) was built (`lib/tiers.ts`) on a wrong assumption. Confirmed with the product owner: there is no numeric tier progression — "tier" is just a label for *how* a certificate was earned (self-serve video/quiz vs. operator sign-off vs. operator-or-SME sign-off), not a level of achievement. Every path produces the same `user_certificates` row. `lib/tiers.ts`/`lib/tiers.test.ts` deleted; replaced by a plain set-difference module, `lib/certificate-gating.ts` (`getMissingCertificates`), wired into `missingCertificateIds` in `lib/bookings.ts`. See CLAUDE1.md "Sprint 4, Item 2 (revised)" session note for the full pivot writeup. Leaving this line unchecked because the *product-facing* tier concept (whatever UI/flow eventually surfaces `earning_method` to users) is still undefined — the gating mechanism itself is done and tested.
+- [x] `certificates.earning_method` enum column added (`tier1_video_quiz` / `tier2a_operator_signoff` / `tier2b_operator_or_sme_signoff`), via a real migration (`prisma/migrations/20260719064218_add_certificate_earning_method`), kept distinct from the existing `certificates.category` column per the "don't conflate the two" note in CODEBASE_SUMMARY.md.
 - [ ] Booking validation: double-booking prevention enforced end-to-end (not just at DB constraint level — surface a clean error in the UI too)
 - [ ] Training/credentialing flow: submit, review, pass/fail, issue credential
 - [ ] **Close the route-protection gap found in the Sprint 3 Session 2 session/cookie
@@ -148,7 +149,7 @@ This is the sprint that didn't exist as its own thing in the original build — 
       of a trust boundary that actually holds.
 
 **Checklist before moving to Sprint 5:**
-- [ ] Tier comparison logic unit-tested with edge cases (equal tier, higher tier, no credential, expired credential)
+- [x] Certificate-set gating unit-tested with edge cases (holds all, missing one of several, holds none, expired treated as missing, no certs required) — 7 tests, `lib/certificate-gating.test.ts`, run via `npm test`. Supersedes the earlier "tier comparison logic" line item — see scrapped-tier note above.
 - [ ] Double-booking attempt produces a clean user-facing error, not a raw DB constraint error
 
 ---

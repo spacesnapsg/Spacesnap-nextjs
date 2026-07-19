@@ -1,6 +1,7 @@
 import { BookingType, type Booking, type Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import { getMissingCertificates } from "@/lib/certificate-gating";
 
 const BOOKING_TYPES = new Set<string>(Object.values(BookingType));
 
@@ -86,22 +87,24 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
   };
 }
 
-// Basic existence check only (held vs. required certificate ids, ignoring
-// tier) — tier-comparison logic is explicitly out of scope for this session,
-// see AGENTS.md/sprint plan Sprint 4. Mirrors BookingController::store and
-// SupplierBookingController's shared missing-certificate check.
+// Fetches the required/held certificate ids and delegates the actual gating
+// decision (required minus held-and-not-expired) to the pure set-difference
+// module — see lib/certificate-gating.ts. Mirrors BookingController::store
+// and SupplierBookingController's shared missing-certificate check.
 export async function missingCertificateIds(listingId: bigint, userId: string): Promise<bigint[]> {
   const [required, held] = await Promise.all([
     prisma.listingRequiredCertificate.findMany({ where: { listingId }, select: { certificateId: true } }),
     prisma.userCertificate.findMany({
-      where: {
-        userId,
-        OR: [{ expiryDate: null }, { expiryDate: { gte: new Date(new Date().toISOString().slice(0, 10)) } }],
-      },
-      select: { certificateId: true },
+      where: { userId },
+      select: { certificateId: true, expiryDate: true },
     }),
   ]);
 
-  const heldIds = new Set(held.map((h) => h.certificateId.toString()));
-  return required.map((r) => r.certificateId).filter((id) => !heldIds.has(id.toString()));
+  const missingIds = new Set(
+    getMissingCertificates(
+      required.map((r) => r.certificateId.toString()),
+      held.map((h) => ({ certificateId: h.certificateId.toString(), expiryDate: h.expiryDate }))
+    )
+  );
+  return required.map((r) => r.certificateId).filter((id) => missingIds.has(id.toString()));
 }
