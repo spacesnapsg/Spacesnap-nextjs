@@ -4,7 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { ApiValidationError, unauthorizedResponse, validationErrorResponse } from "@/lib/api-errors";
 import {
   BOOKING_OVERLAP_MESSAGE,
+  createBookingWithDebit,
   hasOverlappingBooking,
+  InsufficientCreditBalanceError,
   missingCertificateIds,
   parseBookingCreateFields,
   serializeBooking,
@@ -13,11 +15,10 @@ import {
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
 
 // POST: create a booking. Mirrors old BookingController::store's shape
-// (consumables rejection, cert-existence check, overlap-constraint 409) —
-// per Sprint 3 Session 4 scope, this is CRUD shape only. Deliberately NOT
-// wired here (Sprint 3.5's job): credit_balance check, credit deduction, and
-// the debit Transaction record. `credits` is still computed and stored on
-// the Booking row (it's a NOT NULL column), just not moved anywhere yet.
+// (consumables rejection, cert-existence check, overlap-constraint 409), plus
+// the Sprint 3.5 ledger gap closed here: the credit_balance check, Booking
+// insert, and debit Transaction row all happen inside a single DB transaction
+// via createBookingWithDebit (lib/bookings.ts) — not two separate operations.
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return unauthorizedResponse();
@@ -75,19 +76,20 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const booking = await prisma.booking.create({
-      data: {
-        userId: session.user.id,
-        listingId: fields.listingId,
-        bookingType: fields.bookingType,
-        startDate: new Date(fields.startDate),
-        endDate: new Date(fields.endDate),
-        credits: cost,
-      },
+    const booking = await createBookingWithDebit({
+      userId: session.user.id,
+      listingId: fields.listingId,
+      bookingType: fields.bookingType,
+      startDate: fields.startDate,
+      endDate: fields.endDate,
+      cost,
     });
 
     return NextResponse.json({ booking: serializeBooking(booking) }, { status: 201 });
   } catch (error) {
+    if (error instanceof InsufficientCreditBalanceError) {
+      return validationErrorResponse(new ApiValidationError({ credits: [error.message] }));
+    }
     // Race window between the app-layer check above and this insert: the DB
     // constraint (bookings_no_overlap) is the actual source of truth and
     // still fires here if another request's booking landed in between.

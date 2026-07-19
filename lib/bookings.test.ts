@@ -7,8 +7,8 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, ListingType, BookingType } from "../app/generated/prisma/client";
-import { hasOverlappingBooking } from "./bookings";
+import { PrismaClient, ListingType, BookingType, TransactionType } from "../app/generated/prisma/client";
+import { hasOverlappingBooking, createBookingWithDebit, getCreditBalance, InsufficientCreditBalanceError } from "./bookings";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -166,6 +166,138 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
 
       const result = await hasOverlappingBooking(listingB.id, "2027-07-02", "2027-07-04");
       assert.equal(result, false);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// Coverage for the Sprint 3.5 ledger gap: balance check, Booking insert, and
+// debit Transaction row all inside one DB transaction (createBookingWithDebit).
+// Balance is never a stored column — always SUM(Transaction.amount) for the
+// user, per the Transaction model's comment in schema.prisma — so these tests
+// assert against the ledger, not a credit_balance field that doesn't exist.
+describe("createBookingWithDebit (Sprint 3.5, ledger-atomic booking creation)", () => {
+  test("rejects with InsufficientCreditBalanceError when the user has no credits, and writes nothing", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+
+      await assert.rejects(
+        () =>
+          createBookingWithDebit({
+            userId: user.id,
+            listingId: listing.id,
+            bookingType: BookingType.daily,
+            startDate: "2027-09-01",
+            endDate: "2027-09-01",
+            cost: listing.priceDay!,
+          }),
+        InsufficientCreditBalanceError
+      );
+
+      const bookings = await prisma.booking.findMany({ where: { userId: user.id } });
+      assert.equal(bookings.length, 0);
+      const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
+      assert.equal(transactions.length, 0);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("rejects when the balance is short by any amount, even just below the cost", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.topup, amount: "9.99" },
+      });
+
+      await assert.rejects(
+        () =>
+          createBookingWithDebit({
+            userId: user.id,
+            listingId: listing.id,
+            bookingType: BookingType.daily,
+            startDate: "2027-09-02",
+            endDate: "2027-09-02",
+            cost: listing.priceDay!,
+          }),
+        InsufficientCreditBalanceError
+      );
+
+      const bookings = await prisma.booking.findMany({ where: { userId: user.id } });
+      assert.equal(bookings.length, 0);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("succeeds when balance exactly matches cost: balance decremented to zero, one debit Transaction row", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.topup, amount: "10.00" },
+      });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-03",
+        endDate: "2027-09-03",
+        cost: listing.priceDay!,
+      });
+
+      const balanceAfter = await getCreditBalance(user.id);
+      assert.equal(balanceAfter.toString(), "0");
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].type, TransactionType.booking);
+      assert.equal(transactions[0].amount.toString(), "-10");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("succeeds with balance to spare: balance decremented by exactly the cost, exactly one Transaction row created", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.topup, amount: "50.00" },
+      });
+      const balanceBefore = await getCreditBalance(user.id);
+      assert.equal(balanceBefore.toString(), "50");
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-04",
+        endDate: "2027-09-04",
+        cost: listing.priceDay!,
+      });
+
+      const balanceAfter = await getCreditBalance(user.id);
+      assert.equal(balanceAfter.toString(), "40");
+
+      const bookingRow = await prisma.booking.findUnique({ where: { id: booking.id } });
+      assert.ok(bookingRow);
+      assert.equal(bookingRow!.credits.toString(), "10");
+
+      const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
+      assert.equal(transactions.length, 2); // the topup + the debit
+      const debit = transactions.find((t) => t.type === TransactionType.booking);
+      assert.ok(debit);
+      assert.equal(debit!.bookingId?.toString(), booking.id.toString());
+      assert.equal(debit!.amount.toString(), "-10");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

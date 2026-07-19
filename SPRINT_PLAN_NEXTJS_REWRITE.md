@@ -110,7 +110,7 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 This is the sprint that didn't exist as its own thing in the original build — it was a bug-fix pass discovered late, via a dedicated data integrity audit. This time, build it right the first time as part of core CRUD, not as an afterthought.
 
 **Known gaps to close (do not recreate these):**
-- [ ] Booking creation: check `credit_balance`, deduct credits, create a debit Transaction record, all wrapped in a single DB transaction with the Booking create — not two separate operations
+- [x] Booking creation: check `credit_balance`, deduct credits, create a debit Transaction record, all wrapped in a single DB transaction with the Booking create — not two separate operations
 - [ ] Booking confirm: creates a Transaction record (the original build never wired this — booking confirm silently deducted credits with no audit trail)
 - [ ] Booking decline: refund path creates a credit Transaction record correctly
 - [ ] Bulk order: pricing field on bulk_order_requests (cost = credits_per_unit × quantity), same balance-check + Transaction pattern as booking

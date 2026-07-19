@@ -709,3 +709,91 @@ no cert requirement, so nothing else could interfere):
 **Not touched:** no other booking-creation path exists in this codebase
 (supplier confirm/decline only transition status on existing rows, they
 don't insert), so this was the only place the check was needed.
+
+## Sprint 3.5, Known Gap #1 — Booking-Creation Ledger, Atomic (2026-07-19)
+
+Task brief: wrap booking creation in a single DB transaction that checks
+`credit_balance >= cost`, rejects with a clean 4xx if insufficient (not a
+raw DB error), creates the Booking, decrements `credit_balance`, and creates
+a debit Transaction row — closing the gap Sprint 3 Session 4 explicitly
+stubbed (see that section above).
+
+**Correction to the brief's own wording, confirmed against schema before
+building:** there is no `credit_balance` column anywhere — grepped
+`prisma/schema.prisma` directly. The `Transaction` model's own comment
+states the design intentionally: *"balance is always SUM(amount) WHERE
+user_id = ?, never stored denormalized."* `prisma/seed.ts` already follows
+this (signed `amount`, `type: booking` for debits, negative for spend,
+positive for topup/refund). So "decrement credit_balance" here means
+*create a negative-amount Transaction row* — there's no column to
+decrement. Not a deviation from the brief's intent, just its literal
+wording not matching the schema (same category of correction as the Sprint
+4 Item 2 tier-model rewrite above — check schema before trusting a brief's
+noun for a thing).
+
+**What was built**, both in `lib/bookings.ts`:
+- `getCreditBalance(userId, client?)` — `SUM(Transaction.amount)` for the
+  user, live, never cached/stored. Accepts either the top-level `prisma`
+  client or a `$transaction` callback's `tx` client, so it can be read
+  inside the same transaction as the write below without a stale value.
+- `createBookingWithDebit(params)` — opens one `prisma.$transaction`:
+  reads balance via `getCreditBalance(userId, tx)`, throws
+  `InsufficientCreditBalanceError` if `balance < cost` (rolls back
+  automatically, nothing written), otherwise creates the `Booking` row and
+  a `Transaction` row (`type: booking`, `amount: cost.negated()`,
+  `bookingId` set) in the same transaction.
+
+`app/api/bookings/route.ts` now calls `createBookingWithDebit` instead of
+`prisma.booking.create` directly, and catches `InsufficientCreditBalanceError`
+→ `422 { errors: { credits: [...] } }`, same `ApiValidationError` shape as
+every other validation rejection in this route — not a raw constraint
+error, matching the brief. Cert-gating, overlap check (`hasOverlappingBooking`,
+Sprint 4 Item 3), and consumables rejection are all unchanged and still run
+*before* this transaction opens, per the brief's explicit scope boundary —
+the existing 23P01 → 409 catch (race between the overlap pre-check and the
+insert) still wraps the whole call and still works, since the constraint
+fires on the same `tx.booking.create` either way.
+
+**Known, explicitly out-of-scope gap, not silently missed:** this is not
+serializable-isolation — two concurrent requests from the same
+near-empty-balance user could both read a sufficient balance before either
+commits (the credit-balance analog of the double-booking race Sprint 4 Item
+3 closed with a real DB exclusion constraint). There is no equivalent
+DB-level non-negative-balance constraint in this schema yet. The brief
+asked specifically for one-transaction atomicity between the three writes,
+not concurrency hardening across requests — flagging the gap rather than
+either silently leaving it or silently expanding scope to fix it.
+
+**Tests:** `lib/bookings.test.ts`, 4 new cases (real dev-Postgres via
+Prisma, same convention as the existing overlap tests in this file) —
+zero-balance rejected with nothing written, short-by-a-cent rejected,
+exact-balance-match succeeds (balance to `0`, one Transaction row), and
+balance-with-room-to-spare succeeds (balance decremented by exactly the
+cost, exactly one debit Transaction row alongside the unrelated topup row
+already in the ledger). All 27 tests in `npm test` pass (5 overlap + 4 new
+ledger + 7 cert-gating + 4 overlap-constraint + 5 pricing-check + 2
+company-admin-check), confirming no regression to the untouched
+cert-gating/overlap logic.
+
+**Verified live**, not just unit-tested — real cookie-jar logins against
+the dev server and dev DB (`ethan@example.com`, `farah@example.com`),
+listing 113 (Power Drill Set, no cert requirement, so nothing else could
+interfere), balances read directly from the DB before/after via a scratch
+script (deleted afterward, not committed):
+- `ethan` (ledger balance 80) → `POST /api/bookings` on listing 113,
+  `2029-01-10`, daily (cost 25) → `201`; balance confirmed `55` afterward;
+  exactly one `Transaction` row (`type: booking`, `amount: -25`,
+  `bookingId` matching the new booking) confirmed via direct query.
+- `farah` (ledger balance already `-520` from seeded data, pre-existing —
+  not something this session induced) → `POST /api/bookings` on listing
+  113, `2029-02-10`, daily → clean `422
+  {"errors":{"credits":["Insufficient credit balance for this booking."]}}`,
+  not a raw DB error; confirmed zero `Booking`/`Transaction` rows written
+  for the attempt and balance unchanged at `-520`.
+- Test booking (`ethan`, id 130) and its Transaction row deleted afterward;
+  re-queried balance back to `80`, confirming DB is back to seeded state.
+
+**Not touched, per the brief's explicit scope:** booking confirm's
+Transaction record and booking decline's refund Transaction (Sprint 3.5's
+own checklist lists these as separate, still-open items) and bulk-order
+pricing/balance — none of these were asked for here and none were built.
