@@ -20,6 +20,7 @@ export function useSubmitCertificate() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["supplier-certificates-submitted"] });
+      queryClient.invalidateQueries({ queryKey: ["certificates"] });
     },
   });
 }

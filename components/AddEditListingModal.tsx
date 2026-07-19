@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { Plus, Trash2, Image as ImageIcon, Check, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Plus, Trash2, Image as ImageIcon, Check, X, Search } from "lucide-react";
 import Modal from "./Modal";
 import Button from "./Button";
 import Input from "./Input";
 import type { Listing, ListingType } from "@/lib/hooks/useListings";
 import { useCreateListing, useUpdateListing, type ListingFormFields } from "@/lib/hooks/useSupplierListings";
-import { useCertificateCatalog } from "@/lib/hooks/useCertificates";
+import { useCertificateCatalog, type Certificate } from "@/lib/hooks/useCertificates";
+import { useSubmitCertificate } from "@/lib/hooks/useSupplierCertificates";
+import { CERTIFICATE_CATEGORIES } from "@/lib/certificate-categories";
 import { ApiRequestError } from "@/lib/api-client";
 
 interface ListingFormState {
@@ -95,11 +97,31 @@ interface AddEditListingModalProps {
 export default function AddEditListingModal({ open, onClose, mode, listing }: AddEditListingModalProps) {
   const [form, setForm] = useState<ListingFormState>(() => buildInitialForm(listing));
   const [certDropdownOpen, setCertDropdownOpen] = useState(false);
+  const [certSearch, setCertSearch] = useState("");
+  const [certCategoryFilter, setCertCategoryFilter] = useState<string | null>(null);
+  const [showAddCertForm, setShowAddCertForm] = useState(false);
+  const [newCertName, setNewCertName] = useState("");
+  const [newCertCategory, setNewCertCategory] = useState("");
+  const [pendingNewCerts, setPendingNewCerts] = useState<Certificate[]>([]);
   const { data: catalog } = useCertificateCatalog();
   const createListing = useCreateListing();
   const updateListing = useUpdateListing();
+  const submitCertificate = useSubmitCertificate();
 
-  const certificateOptions = catalog ?? [];
+  // Newly-requested certs are pending admin review, so they won't show up in
+  // the approved catalog yet — merge them in locally so they stay visible
+  // and selected on this listing while it's being drafted.
+  const certificateOptions = useMemo(() => {
+    const catalogIds = new Set((catalog ?? []).map((c) => c.id));
+    return [...(catalog ?? []), ...pendingNewCerts.filter((c) => !catalogIds.has(c.id))];
+  }, [catalog, pendingNewCerts]);
+
+  const filteredCertOptions = certificateOptions.filter((cert) => {
+    const matchesCategory = !certCategoryFilter || cert.category === certCategoryFilter;
+    const matchesSearch = cert.name.toLowerCase().includes(certSearch.trim().toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
+
   const mutation = mode === "edit" ? updateListing : createListing;
   const errorMessage =
     mutation.error instanceof ApiRequestError ? mutation.error.message : mutation.error ? "Something went wrong." : null;
@@ -115,6 +137,22 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
         ? f.requiredCertificateIds.filter((id) => id !== certId)
         : [...f.requiredCertificateIds, certId],
     }));
+  }
+
+  function handleSubmitNewCert() {
+    if (!newCertName.trim() || !newCertCategory) return;
+    submitCertificate.mutate(
+      { name: newCertName.trim(), category: newCertCategory },
+      {
+        onSuccess: (data) => {
+          setPendingNewCerts((prev) => [...prev, data.certificate]);
+          setForm((f) => ({ ...f, requiredCertificateIds: [...f.requiredCertificateIds, data.certificate.id] }));
+          setNewCertName("");
+          setNewCertCategory("");
+          setShowAddCertForm(false);
+        },
+      }
+    );
   }
 
   function updateAmenity(index: number, value: string) {
@@ -223,25 +261,129 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
           </button>
 
           {certDropdownOpen && (
-            <div className="absolute z-10 mt-1.5 w-full bg-card border border-border rounded p-2 flex flex-col gap-1 max-h-48 overflow-y-auto shadow-lg">
-              {certificateOptions.map((cert) => {
-                const isSelected = form.requiredCertificateIds.includes(cert.id);
-                return (
+            <div className="absolute z-10 mt-1.5 w-full bg-card border border-border rounded p-2 flex flex-col gap-2 shadow-lg">
+              <div className="relative">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-text" />
+                <input
+                  value={certSearch}
+                  onChange={(e) => setCertSearch(e.target.value)}
+                  placeholder="Search certificates..."
+                  className="w-full bg-background border border-border/40 text-body-text placeholder:text-muted-text rounded pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:border-supplier-purple-start transition-colors"
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setCertCategoryFilter(null)}
+                  className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
+                    certCategoryFilter === null
+                      ? "bg-supplier-purple-start/20 text-supplier-purple-end"
+                      : "bg-background text-muted-text hover:text-body-text"
+                  }`}
+                >
+                  All
+                </button>
+                {CERTIFICATE_CATEGORIES.map((cat) => (
                   <button
-                    key={cert.id}
+                    key={cat}
                     type="button"
-                    onClick={() => toggleCert(cert.id)}
-                    className={`flex items-center justify-between text-left text-sm rounded-lg px-3 py-2 transition-colors ${
-                      isSelected
-                        ? "bg-supplier-purple-start/15 text-supplier-purple-end"
-                        : "text-body-text hover:bg-background"
+                    onClick={() => setCertCategoryFilter(cat)}
+                    className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
+                      certCategoryFilter === cat
+                        ? "bg-supplier-purple-start/20 text-supplier-purple-end"
+                        : "bg-background text-muted-text hover:text-body-text"
                     }`}
                   >
-                    {cert.name}
-                    {isSelected && <Check size={14} />}
+                    {cat}
                   </button>
-                );
-              })}
+                ))}
+              </div>
+
+              <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
+                {filteredCertOptions.length === 0 ? (
+                  <p className="text-xs text-muted-text px-3 py-2">No certificates match.</p>
+                ) : (
+                  filteredCertOptions.map((cert) => {
+                    const isSelected = form.requiredCertificateIds.includes(cert.id);
+                    const isPending = cert.status === "pending";
+                    return (
+                      <button
+                        key={cert.id}
+                        type="button"
+                        onClick={() => toggleCert(cert.id)}
+                        className={`flex items-center justify-between text-left text-sm rounded-lg px-3 py-2 transition-colors ${
+                          isSelected
+                            ? "bg-supplier-purple-start/15 text-supplier-purple-end"
+                            : "text-body-text hover:bg-background"
+                        }`}
+                      >
+                        <span>
+                          {cert.name}
+                          {isPending && <span className="text-muted-text text-xs italic"> (pending approval)</span>}
+                        </span>
+                        {isSelected && <Check size={14} />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="border-t border-border/40 pt-2">
+                {showAddCertForm ? (
+                  <div className="flex flex-col gap-2">
+                    <Input
+                      value={newCertName}
+                      onChange={(e) => setNewCertName(e.target.value)}
+                      placeholder="New certificate name"
+                      className="w-full text-sm focus:!border-supplier-purple-start"
+                    />
+                    <select
+                      value={newCertCategory}
+                      onChange={(e) => setNewCertCategory(e.target.value)}
+                      className="w-full bg-background border border-border/40 text-body-text rounded h-9 px-3 text-sm focus:outline-none focus:border-supplier-purple-start transition-colors"
+                    >
+                      <option value="" disabled>
+                        Required for...
+                      </option>
+                      {CERTIFICATE_CATEGORIES.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                    {submitCertificate.error instanceof ApiRequestError && (
+                      <p className="text-xs text-error-red">{submitCertificate.error.message}</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        onClick={handleSubmitNewCert}
+                        disabled={!newCertName.trim() || !newCertCategory || submitCertificate.isPending}
+                        className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end flex-1 !h-9 !text-sm disabled:opacity-60"
+                      >
+                        {submitCertificate.isPending ? "Submitting..." : "Submit for approval"}
+                      </Button>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddCertForm(false)}
+                        className="text-sm text-muted-text hover:text-body-text px-2 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowAddCertForm(true)}
+                    className="flex items-center gap-1.5 text-sm text-supplier-purple-start hover:opacity-80 transition-opacity w-fit px-1"
+                  >
+                    <Plus size={14} />
+                    Can&apos;t find it? Add a new certificate
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

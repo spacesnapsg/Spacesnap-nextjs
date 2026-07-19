@@ -1,9 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Building2,
+  Check,
   CheckCircle2,
   Image as ImageIcon,
   LayoutGrid,
@@ -42,31 +44,39 @@ function isOutOfStock(listing: Listing) {
   return listing.type === "consumables" && (listing.stockQuantity ?? 0) <= 0;
 }
 
-function getMissingCertNames(listing: Listing, credentials: Credential[] | undefined) {
-  return (listing.requiredCertificates ?? [])
-    .filter((cert) => !isCredentialHeld(credentials, cert.id))
-    .map((cert) => cert.name);
+interface RequiredCertStatus {
+  id: string;
+  name: string;
+  held: boolean;
+}
+
+function getRequiredCertStatuses(listing: Listing, credentials: Credential[] | undefined): RequiredCertStatus[] {
+  return (listing.requiredCertificates ?? []).map((cert) => ({
+    id: cert.id,
+    name: cert.name,
+    held: isCredentialHeld(credentials, cert.id),
+  }));
 }
 
 interface ListingDetails {
   isUnavailable: boolean;
   isConsumable: boolean;
   isOutOfStockItem: boolean;
-  missingCertNames: string[];
+  requiredCertStatuses: RequiredCertStatus[];
   isCertMissing: boolean;
 }
 
 function getListingDetails(listing: Listing, credentials: Credential[] | undefined): ListingDetails {
   const isConsumable = listing.type === "consumables";
   const isOutOfStockItem = isOutOfStock(listing);
-  const missingCertNames = getMissingCertNames(listing, credentials);
+  const requiredCertStatuses = getRequiredCertStatuses(listing, credentials);
 
   return {
     isUnavailable: !listing.isAvailable,
     isConsumable,
     isOutOfStockItem,
-    missingCertNames,
-    isCertMissing: missingCertNames.length > 0,
+    requiredCertStatuses,
+    isCertMissing: requiredCertStatuses.some((cert) => !cert.held),
   };
 }
 
@@ -81,7 +91,8 @@ function ListingBody({
   onBookNow: (listing: Listing) => void;
   onRequestPurchase: (listing: Listing) => void;
 }) {
-  const { isUnavailable, isConsumable, isOutOfStockItem, missingCertNames, isCertMissing } = details;
+  const { isUnavailable, isConsumable, isOutOfStockItem, requiredCertStatuses, isCertMissing } = details;
+  const router = useRouter();
 
   return (
     <div className="p-5 flex flex-col gap-3 flex-1">
@@ -122,11 +133,31 @@ function ListingBody({
         ))}
       </div>
 
-      {missingCertNames.length > 0 ? (
-        <span className="inline-flex items-center gap-1.5 w-fit bg-amber/10 text-amber border border-amber/30 rounded-full px-2.5 py-1 text-xs font-medium">
-          <Lock size={12} />
-          Requires: {missingCertNames.join(", ")}
-        </span>
+      {requiredCertStatuses.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {requiredCertStatuses.map((cert) =>
+            cert.held ? (
+              <span
+                key={cert.id}
+                className="inline-flex items-center gap-1.5 w-fit bg-success-green/10 text-success-green border border-success-green/30 rounded-full px-2.5 py-1 text-xs font-medium"
+              >
+                <Check size={12} />
+                {cert.name}
+              </span>
+            ) : (
+              <button
+                key={cert.id}
+                type="button"
+                onClick={() => router.push(`/passport?certId=${cert.id}`)}
+                className="inline-flex items-center gap-1.5 w-fit bg-amber/10 text-amber border border-amber/30 rounded-full px-2.5 py-1 text-xs font-medium hover:bg-amber/20 transition-colors"
+                title="View required training in your Digital Passport"
+              >
+                <Lock size={12} />
+                {cert.name}
+              </button>
+            )
+          )}
+        </div>
       ) : (
         listing.type === "consumables" && (
           <span className="inline-flex items-center gap-1.5 w-fit bg-background text-muted-text border border-border/60 rounded-full px-2.5 py-1 text-xs font-medium">

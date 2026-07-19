@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import { Award, Building2, Calendar, Camera, Check, Lock, Mail, Trophy, User } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
@@ -8,33 +9,43 @@ import Input from "@/components/Input";
 import CertificateDetailModal from "@/components/CertificateDetailModal";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 import { useCertificateCatalog, type Certificate } from "@/lib/hooks/useCertificates";
-import { useCredentials } from "@/lib/hooks/useCredentials";
+import { useCredentials, isCredentialHeld } from "@/lib/hooks/useCredentials";
 
 function CertBadge({
   certificate,
   earned,
+  highlighted,
   onSelect,
 }: {
   certificate: Certificate;
   earned: boolean;
+  highlighted: boolean;
   onSelect: (certificate: Certificate) => void;
 }) {
+  const highlightClass = highlighted ? "ring-2 ring-user-teal-start" : "";
+
   if (!earned) {
     return (
-      <div className="bg-background border border-border/60 rounded p-3 flex flex-col items-center justify-center gap-1.5 text-center opacity-60">
+      <button
+        type="button"
+        id={`cert-badge-${certificate.id}`}
+        onClick={() => onSelect(certificate)}
+        className={`bg-background border border-border/60 rounded p-3 flex flex-col items-center justify-center gap-1.5 text-center opacity-60 hover:opacity-80 transition-opacity ${highlightClass}`}
+      >
         <span className="h-7 w-7 rounded-full bg-card flex items-center justify-center">
           <Lock size={10} className="text-muted-text" />
         </span>
         <p className="text-xs font-medium text-muted-text leading-snug">{certificate.name}</p>
-      </div>
+      </button>
     );
   }
 
   return (
     <button
       type="button"
+      id={`cert-badge-${certificate.id}`}
       onClick={() => onSelect(certificate)}
-      className="relative text-left bg-background border border-border/60 rounded p-3 flex flex-col items-center justify-center gap-1.5 text-center hover:border-user-teal-start/50 transition-colors"
+      className={`relative text-left bg-background border border-border/60 rounded p-3 flex flex-col items-center justify-center gap-1.5 text-center hover:border-user-teal-start/50 transition-colors ${highlightClass}`}
     >
       <span className="absolute top-1.5 right-1.5 h-3 w-3 rounded-full bg-user-teal-start flex items-center justify-center">
         <Check size={7} className="text-white" />
@@ -46,12 +57,26 @@ function CertBadge({
 }
 
 export default function DigitalPassportPage() {
+  const searchParams = useSearchParams();
+  const filterCertId = searchParams.get("certId");
+
   const [selectedCertId, setSelectedCertId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
   const { data: user, isLoading: userLoading } = useCurrentUser();
   const { data: catalog, isLoading: catalogLoading } = useCertificateCatalog();
   const { data: credentials } = useCredentials();
+
+  const hasHandledFilterRef = useRef(false);
+  useEffect(() => {
+    if (hasHandledFilterRef.current) return;
+    if (!filterCertId || !catalog) return;
+    if (!catalog.some((cert) => cert.id === filterCertId)) return;
+
+    hasHandledFilterRef.current = true;
+    setSelectedCertId(filterCertId);
+    document.getElementById(`cert-badge-${filterCertId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [filterCertId, catalog]);
 
   const [profileEdits, setProfileEdits] = useState<{ name: string; title: string; companyName: string; avatarUrl: string | null } | null>(
     null
@@ -85,7 +110,13 @@ export default function DigitalPassportPage() {
     setEditing((e) => !e);
   }
 
-  const earnedCertIds = useMemo(() => new Set((credentials ?? []).map((c) => c.certificateId)), [credentials]);
+  const earnedCertIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const cert of catalog ?? []) {
+      if (isCredentialHeld(credentials, cert.id)) ids.add(cert.id);
+    }
+    return ids;
+  }, [catalog, credentials]);
   const selectedCertificate = catalog?.find((cert) => cert.id === selectedCertId) ?? null;
   const selectedCredential = credentials?.find((c) => c.certificateId === selectedCertId) ?? null;
 
@@ -223,6 +254,7 @@ export default function DigitalPassportPage() {
                   key={certificate.id}
                   certificate={certificate}
                   earned={earnedCertIds.has(certificate.id)}
+                  highlighted={filterCertId === certificate.id}
                   onSelect={(cert) => setSelectedCertId(cert.id)}
                 />
               ))}

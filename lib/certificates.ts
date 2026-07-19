@@ -1,6 +1,7 @@
 import type { Certificate, CertificateStatus, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import { CERTIFICATE_CATEGORIES, normalizeCertificateCategory } from "@/lib/certificate-categories";
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const certificateWithCompanyArgs = {
@@ -64,8 +65,15 @@ export function parseSubmissionFields(body: unknown): ParsedSubmissionFields {
   if (Object.prototype.hasOwnProperty.call(b, "category")) {
     if (!isNullableString(b.category)) {
       errors.category = ["category must be a string."];
+    } else if (b.category === null || b.category === undefined) {
+      result.category = null;
     } else {
-      result.category = b.category ?? null;
+      const normalized = normalizeCertificateCategory(b.category);
+      if (!normalized) {
+        errors.category = [`category must be one of: ${CERTIFICATE_CATEGORIES.join(", ")}.`];
+      } else {
+        result.category = normalized;
+      }
     }
   }
 
@@ -98,8 +106,15 @@ export function parseAdminCreateFields(body: unknown): ParsedAdminCreateFields {
   if (Object.prototype.hasOwnProperty.call(b, "category")) {
     if (!isNullableString(b.category)) {
       errors.category = ["category must be a string."];
+    } else if (b.category === null || b.category === undefined) {
+      result.category = null;
     } else {
-      result.category = b.category ?? null;
+      const normalized = normalizeCertificateCategory(b.category);
+      if (!normalized) {
+        errors.category = [`category must be one of: ${CERTIFICATE_CATEGORIES.join(", ")}.`];
+      } else {
+        result.category = normalized;
+      }
     }
   }
 

@@ -6,6 +6,7 @@ import Button from "@/components/Button";
 import Input from "@/components/Input";
 import { useSubmitCertificate } from "@/lib/hooks/useSupplierCertificates";
 import { ApiRequestError } from "@/lib/api-client";
+import { CERTIFICATE_CATEGORIES } from "@/lib/certificate-categories";
 
 interface CertificateRequestModalProps {
   open: boolean;
@@ -33,9 +34,9 @@ export default function CertificateRequestModal({ open, onClose }: CertificateRe
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !category) return;
     submitCertificate.mutate(
-      { name: name.trim(), category: category.trim() || null },
+      { name: name.trim(), category },
       {
         onSuccess: () => {
           setTimeout(handleClose, 1000);
@@ -68,15 +69,24 @@ export default function CertificateRequestModal({ open, onClose }: CertificateRe
 
         <div>
           <label className="block text-sm font-medium text-body-text mb-1.5" htmlFor="cert-category">
-            Category (optional)
+            Required for
           </label>
-          <Input
+          <select
             id="cert-category"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
-            placeholder="e.g. Safety"
-            className="w-full focus:!border-supplier-purple-start"
-          />
+            required
+            className="w-full bg-background border border-border/40 text-body-text rounded h-11 px-4 focus:outline-none focus:border-supplier-purple-start transition-colors"
+          >
+            <option value="" disabled>
+              Select a category...
+            </option>
+            {CERTIFICATE_CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
         </div>
 
         {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
