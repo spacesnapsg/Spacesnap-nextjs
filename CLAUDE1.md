@@ -33,8 +33,16 @@ starting work.
 - DB (prod): Railway Postgres — dev stays local until the Sprint 2 migration step
 - File storage: Cloudflare R2 (S3-compatible)
 - Hosting: Railway
-- `.env.testing` / isolated test DB: intentionally deferred to Sprint 3.5. Do not
-  create this early unless the current sprint task explicitly says otherwise.
+- DB (test): local Postgres, database name `spacesnap_nextjs_test`, isolated from
+  `spacesnap_dev`. Config lives in `.env.testing` (gitignored, `DATABASE_URL` only).
+  One-time setup: `createdb spacesnap_nextjs_test`, then `npm run test:db:setup`
+  (runs `prisma migrate deploy` + `prisma db seed` against the test DB via
+  `DOTENV_CONFIG_PATH=.env.testing`). `npm test` targets the test DB by default
+  (same mechanism) — it never touches `spacesnap_dev`. Re-run `npm run
+  test:db:setup` after adding new migrations. `seed.ts`'s `reset()` wipes
+  whatever DB it's pointed at — never run `prisma migrate`/`prisma db seed`
+  without `DOTENV_CONFIG_PATH=.env.testing` unless you explicitly intend to
+  touch `spacesnap_dev`.
 
 ## Old codebase reference (read before porting anything)
 
