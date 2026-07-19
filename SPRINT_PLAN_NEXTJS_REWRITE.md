@@ -155,6 +155,24 @@ This is the sprint that didn't exist as its own thing in the original build — 
 
 ---
 
+## Sprint 4.5: Wire the Backend to the Frontend — Close the Mock-Data Gap
+
+Found via a linkage audit (2026-07-19): every page still reads from `lib/mock*.ts`, and the gap is wider than the still-unchecked Sprint 3 item accounts for. That item assumes reconnecting pages that already exist; it doesn't cover Sprint 3.5 features that never had a page scoped for them in the first place, or the one new table with no route at all. Closing both together here instead of leaving them split across "Sprint 3 leftover" and "new scope no one wrote down."
+
+- [ ] Connect all Sprint 1 pages to their real endpoints (completes the still-unchecked Sprint 3 item) — replace `lib/mock*.ts` usage in marketplace, passport, wallet, user dashboard, supplier inventory/requests/tutorials/profile, and all admin pages with live fetches against: `listings`, `bookings`, `supplier/bookings`, `supplier/listings`, `credentials`, `certificates`, `admin/certificates`, `admin/users`
+- [ ] React Query actually adopted for these fetches (installed app-wide, currently only used for the login/signup mutations)
+- [ ] Build UI for check-ins (check-in/check-out action) — no page was ever scoped for this; `POST /api/check-ins` and `PATCH /api/check-ins/[id]/check-out` exist with zero callers
+- [ ] Build UI for training-enrollments (enroll button + supplier-side status update) — `POST /api/training-enrollments` and `PATCH /api/training-enrollments/[id]` exist with zero callers
+- [ ] Build UI for bulk-order-requests — `POST /api/bulk-order-requests` exists with zero callers
+- [ ] Add an `activity_log` read endpoint (GET) — currently write-only from server-side lib code (`lib/bookings.ts`, `lib/check-ins.ts`, `lib/bulk-orders.ts`, `lib/training-enrollments.ts`, `lib/wallet.ts`); no route exists at all, which is why Sprint 3.5's "no feed UI yet" note has stayed unresolved
+- [ ] Decide + build (or explicitly defer with a reason) an activity feed UI once the read endpoint exists
+
+**Checklist before moving to Sprint 5:**
+- [ ] Zero remaining `lib/mock*.ts` imports in page components
+- [ ] Every Sprint 3.5 endpoint (check-ins, training-enrollments, bulk-order-requests, wallet top-up, certificates + admin/supplier certificate routes) has at least one real frontend caller, or is explicitly marked deferred with a reason
+
+---
+
 ## Sprint 5: Kiosk/Middleware API
 
 - [ ] Separate API surface for kiosk hardware auth
