@@ -259,3 +259,48 @@ export async function confirmBookingWithAudit(bookingId: bigint): Promise<Bookin
     return updated;
   });
 }
+
+// Thrown inside declineBookingWithRefund when the booking isn't `pending` or
+// `confirmed` (i.e. it's already cancelled/active/completed). Caught in the
+// route and turned into the same clean 422 the route already returned before
+// this refund logic existed — see Sprint 4 Item 3 notes on the decline route.
+export class BookingNotDeclinableError extends Error {
+  constructor(public readonly status: BookingStatus) {
+    super(`Booking is already ${status} and cannot be declined.`);
+  }
+}
+
+// Sprint 3.5 known-gap #3: decline needs to refund the credits debited at
+// booking creation — a real gap, not a design decision like confirm's above.
+// Per CLAUDE1.md's read of the old build (SupplierBookingController::decline),
+// the old code summed the booking's existing debit Transactions and refunded
+// that. This design instead reads the amount straight off the Booking row's
+// stored `credits` field (set once, at creation, in createBookingWithDebit)
+// rather than recomputing from the listing's current price — pricing can
+// change after a booking exists, but the amount actually debited can't.
+export async function declineBookingWithRefund(bookingId: bigint): Promise<BookingWithRelations> {
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
+    if (booking.status !== BookingStatus.pending && booking.status !== BookingStatus.confirmed) {
+      throw new BookingNotDeclinableError(booking.status);
+    }
+
+    const updated = await tx.booking.update({
+      where: { id: bookingId },
+      data: { status: "cancelled" },
+      include: bookingWithRelationsArgs.include,
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId: updated.userId,
+        bookingId: updated.id,
+        type: TransactionType.refund,
+        amount: updated.credits,
+        description: `Booking #${updated.id} declined — refund of the ${updated.credits} debited at creation.`,
+      },
+    });
+
+    return updated;
+  });
+}

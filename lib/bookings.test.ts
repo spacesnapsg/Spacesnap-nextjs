@@ -15,6 +15,8 @@ import {
   InsufficientCreditBalanceError,
   confirmBookingWithAudit,
   BookingNotConfirmableError,
+  declineBookingWithRefund,
+  BookingNotDeclinableError,
 } from "./bookings";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -397,6 +399,141 @@ describe("confirmBookingWithAudit (Sprint 3.5, known gap #2)", () => {
 
       const bookingRow = await prisma.booking.findUnique({ where: { id: booking.id } });
       assert.equal(bookingRow!.status, "cancelled");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// Coverage for the Sprint 3.5 ledger gap #3: decline needs to refund the
+// credits debited at creation. Per CLAUDE1.md's read of the old build, the
+// old code summed the booking's debit Transactions and refunded that; this
+// design instead reads the refund amount straight off the Booking row's
+// stored `credits` field, so a price change on the listing after booking
+// creation can't skew the refund.
+describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
+  test("declines a pending booking, refunds exactly the amount debited at creation, and writes exactly one refund Transaction row", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.topup, amount: "50.00" },
+      });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-01",
+        endDate: "2027-11-01",
+        cost: listing.priceDay!,
+      });
+
+      const balanceAfterBooking = await getCreditBalance(user.id);
+      assert.equal(balanceAfterBooking.toString(), "40");
+
+      const updated = await declineBookingWithRefund(booking.id);
+      assert.equal(updated.status, "cancelled");
+
+      const balanceAfterDecline = await getCreditBalance(user.id);
+      assert.equal(balanceAfterDecline.toString(), "50");
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 2); // the create-time debit + the decline refund
+      const refunds = transactions.filter((t) => t.type === TransactionType.refund);
+      assert.equal(refunds.length, 1);
+      assert.equal(refunds[0].amount.toString(), "10");
+      assert.equal(refunds[0].userId, user.id);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a confirmed booking can still be declined and refunded", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.topup, amount: "10.00" },
+      });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-02",
+        endDate: "2027-11-02",
+        cost: listing.priceDay!,
+      });
+      await confirmBookingWithAudit(booking.id);
+
+      const updated = await declineBookingWithRefund(booking.id);
+      assert.equal(updated.status, "cancelled");
+
+      const balanceAfterDecline = await getCreditBalance(user.id);
+      assert.equal(balanceAfterDecline.toString(), "10");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("declining an already-cancelled booking rejects cleanly and does not touch the ledger", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-11-03"),
+          endDate: new Date("2027-11-03"),
+          credits: "10.00",
+          status: "cancelled",
+        },
+      });
+
+      await assert.rejects(() => declineBookingWithRefund(booking.id), BookingNotDeclinableError);
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 0);
+
+      const bookingRow = await prisma.booking.findUnique({ where: { id: booking.id } });
+      assert.equal(bookingRow!.status, "cancelled");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("declining a booking twice rejects the second call cleanly, with no second refund", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.topup, amount: "10.00" },
+      });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-04",
+        endDate: "2027-11-04",
+        cost: listing.priceDay!,
+      });
+
+      await declineBookingWithRefund(booking.id);
+      await assert.rejects(() => declineBookingWithRefund(booking.id), BookingNotDeclinableError);
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 2); // the create-time debit + exactly one refund
+
+      const balanceAfter = await getCreditBalance(user.id);
+      assert.equal(balanceAfter.toString(), "10");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
