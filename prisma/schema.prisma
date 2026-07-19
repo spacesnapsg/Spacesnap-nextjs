@@ -113,6 +113,10 @@ enum ActivityActionType {
   check_in
   check_out
   training_enrolled
+  quiz_attempt_submitted
+  credential_issued
+  signoff_requested
+  signoff_reviewed
 
   @@map("activity_action_type")
 }
@@ -124,6 +128,35 @@ enum TrainingEnrollmentStatus {
   cancelled
 
   @@map("training_enrollment_status")
+}
+
+// Sprint 4, Item 4 — the tier2a_operator_signoff earning path. Distinct from
+// TrainingEnrollmentStatus/TrainingSession: tier2a is an on-demand, per-user
+// request handled directly by an operator, not a scheduled multi-participant
+// session (that's tier2b, which stays on training_enrollments). Confirmed
+// with the product owner after an initial build wrongly conflated the two —
+// see CLAUDE1.md "Sprint 4, Item 4, Correction."
+enum SignoffSubmissionType {
+  recording
+  live_demo_request
+
+  @@map("signoff_submission_type")
+}
+
+// pending -> passed | live_demo_requested (recording review can only pass or
+//   escalate — an operator can never hard-fail someone off a recording
+//   alone, confirmed with the product owner)
+// pending -> passed | failed (live_demo_request: the demo already happened,
+//   so a direct pass/fail call is possible)
+// live_demo_requested -> passed | failed (after the follow-up live demo)
+// See lib/certificate-signoffs.ts for the enforced transition table.
+enum SignoffRequestStatus {
+  pending
+  live_demo_requested
+  passed
+  failed
+
+  @@map("signoff_request_status")
 }
 
 // ---------------------------------------------------------------------------
@@ -228,16 +261,19 @@ model User {
   accounts Account[]
   sessions Session[]
 
-  reviewedCertificates Certificate[]      @relation("CertificateReviewer")
-  userCertificates     UserCertificate[]
-  videoCompletions     VideoCompletion[]
-  bookings             Booking[]
-  bulkOrderRequests    BulkOrderRequest[]
-  transactions         Transaction[]
-  checkIns             CheckIn[]
-  activityLogs         ActivityLog[]
-  trainingEnrollments  TrainingEnrollment[]
-  ratings              Rating[]
+  reviewedCertificates    Certificate[]               @relation("CertificateReviewer")
+  userCertificates        UserCertificate[]
+  signoffRequests         CertificateSignoffRequest[]
+  reviewedSignoffRequests CertificateSignoffRequest[] @relation("SignoffReviewer")
+  videoCompletions        VideoCompletion[]
+  bookings                Booking[]
+  bulkOrderRequests       BulkOrderRequest[]
+  transactions            Transaction[]
+  checkIns                CheckIn[]
+  activityLogs            ActivityLog[]
+  trainingEnrollments     TrainingEnrollment[]
+  ratings                 Rating[]
+  quizAttempts            QuizAttempt[]
 
   @@map("users")
 }
@@ -264,6 +300,9 @@ model Certificate {
 
   requiredForListings ListingRequiredCertificate[]
   userCertificates    UserCertificate[]
+  trainingVideos      TrainingVideo[]
+  trainingSessions    TrainingSession[]
+  signoffRequests     CertificateSignoffRequest[]
 
   @@map("certificates")
 }
@@ -337,10 +376,16 @@ model UserCertificate {
   @@map("user_certificates")
 }
 
-// companyId nullable = platform-authored.
+// companyId nullable = platform-authored. certificateId nullable — most
+// videos are informational only; only videos backing a tier1_video_quiz
+// certificate's self-serve earning path (Sprint 4, Item 4) have one set. Not
+// enforced against Certificate.earningMethod at the DB level (same "app-layer
+// rule, not a constraint" idiom as Certificate's own approved-only-if-
+// referenced rule) — see lib/quiz-attempts.ts.
 model TrainingVideo {
   id              BigInt   @id @default(autoincrement())
   companyId       BigInt?  @map("company_id")
+  certificateId   BigInt?  @map("certificate_id")
   title           String
   category        String?
   description     String?
@@ -350,10 +395,12 @@ model TrainingVideo {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  certificate Certificate? @relation(fields: [certificateId], references: [id], onDelete: SetNull)
 
   quizQuestions    QuizQuestion[]
   videoCompletions VideoCompletion[]
+  quizAttempts     QuizAttempt[]
 
   @@map("training_videos")
 }
@@ -403,10 +450,16 @@ model QuizAnswer {
 }
 
 // companyId nullable, sme_name = subject-matter expert, endorsementName =
-// granted on completion.
+// display label carried over from the old schema (ported as-is). certificateId
+// is new (Sprint 4, Item 4): the actual FK an enrollment's sign-off issues a
+// credential against — endorsementName was never wired to real issuance logic
+// in the old app (confirmed unbuilt, see CODEBASEAPI_SUMMARY.md §6), so a
+// robust FK is used instead of runtime name-matching against
+// Certificate.name (not unique). Nullable — not every session grants a cert.
 model TrainingSession {
   id              BigInt   @id @default(autoincrement())
   companyId       BigInt?  @map("company_id")
+  certificateId   BigInt?  @map("certificate_id")
   title           String
   smeName         String   @map("sme_name")
   description     String?
@@ -417,7 +470,8 @@ model TrainingSession {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  certificate Certificate? @relation(fields: [certificateId], references: [id], onDelete: SetNull)
 
   enrollments TrainingEnrollment[]
 
@@ -527,16 +581,16 @@ model BulkOrderRequest {
 // create debit, booking confirm, decline/refund credit, bulk-order purchase,
 // topup) rather than the old app's single create-time-only row.
 model Transaction {
-  id                    BigInt            @id @default(autoincrement())
-  userId                String            @map("user_id")
-  bookingId             BigInt?           @map("booking_id")
-  bulkOrderRequestId    BigInt?           @map("bulk_order_request_id")
+  id                    BigInt          @id @default(autoincrement())
+  userId                String          @map("user_id")
+  bookingId             BigInt?         @map("booking_id")
+  bulkOrderRequestId    BigInt?         @map("bulk_order_request_id")
   type                  TransactionType
-  amount                Decimal           @db.Decimal(10, 2)
-  stripePaymentIntentId String?           @map("stripe_payment_intent_id")
+  amount                Decimal         @db.Decimal(10, 2)
+  stripePaymentIntentId String?         @map("stripe_payment_intent_id")
   description           String?
-  createdAt             DateTime          @default(now()) @map("created_at")
-  updatedAt             DateTime          @updatedAt @map("updated_at")
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
 
   user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   booking          Booking?          @relation(fields: [bookingId], references: [id], onDelete: SetNull)
@@ -591,4 +645,58 @@ model TrainingEnrollment {
 
   @@unique([userId, trainingSessionId])
   @@map("training_enrollments")
+}
+
+// Sprint 4, Item 4 — the tier1_video_quiz earning path: a user's graded
+// submission against a TrainingVideo's quiz. Auto-graded at submission time
+// (no reviewer — that's what distinguishes tier1 from the tier2a/2b
+// operator/SME sign-off path, which reuses training_enrollments' existing
+// status column instead of this table, per the "don't invent new statuses"
+// instruction for this item). Append-only like ActivityLog/VideoCompletion —
+// retries create a new row rather than overwriting, so the user's full
+// attempt history is visible, not just the latest result. No unique
+// constraint on (userId, trainingVideoId): retakes after a fail are allowed.
+// score/totalQuestions are a snapshot of that attempt's grading, independent
+// of any later edits to the quiz's question set. See lib/quiz-attempts.ts.
+model QuizAttempt {
+  id              BigInt   @id @default(autoincrement())
+  userId          String   @map("user_id")
+  trainingVideoId BigInt   @map("training_video_id")
+  score           Int
+  totalQuestions  Int      @map("total_questions")
+  passed          Boolean
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trainingVideo TrainingVideo @relation(fields: [trainingVideoId], references: [id], onDelete: Cascade)
+
+  @@map("quiz_attempts")
+}
+
+// Sprint 4, Item 4 — the tier2a_operator_signoff earning path (see
+// SignoffSubmissionType/SignoffRequestStatus comments above). One row per
+// (userId, certificateId), not append-only like QuizAttempt: a fresh
+// submission after a terminal outcome (passed/failed) updates this same row
+// rather than creating a new one, per the product owner's "one record per
+// user certificate" instruction. recordingKey is an R2 object key
+// (lib/storage.ts), not a public URL — evidence is reviewed, not displayed —
+// and is only set when submissionType is `recording`.
+model CertificateSignoffRequest {
+  id             BigInt                @id @default(autoincrement())
+  userId         String                @map("user_id")
+  certificateId  BigInt                @map("certificate_id")
+  submissionType SignoffSubmissionType @map("submission_type")
+  recordingKey   String?               @map("recording_key")
+  status         SignoffRequestStatus  @default(pending)
+  reviewedBy     String?               @map("reviewed_by")
+  reviewedAt     DateTime?             @map("reviewed_at")
+  createdAt      DateTime              @default(now()) @map("created_at")
+  updatedAt      DateTime              @updatedAt @map("updated_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  certificate Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+  reviewer    User?       @relation("SignoffReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+
+  @@unique([userId, certificateId])
+  @@map("certificate_signoff_requests")
 }

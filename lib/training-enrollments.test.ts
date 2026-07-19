@@ -39,16 +39,21 @@ async function createUser() {
   });
 }
 
-function createTrainingSession(companyId: bigint) {
+function createTrainingSession(companyId: bigint, certificateId?: bigint) {
   return prisma.trainingSession.create({
     data: {
       companyId,
+      certificateId,
       title: "Test Training Session",
       smeName: "Test SME",
       sessionDatetime: new Date("2027-12-01T09:00:00Z"),
       capacity: 10,
     },
   });
+}
+
+function createCertificate() {
+  return prisma.certificate.create({ data: { name: "Test Enrollment Certificate" } });
 }
 
 async function cleanupCompanyAndUsers(companyId: bigint, userIds: string[]) {
@@ -181,6 +186,103 @@ describe("updateEnrollmentStatus (Sprint 3.5, training_enrollments new schema it
       const row = await prisma.trainingEnrollment.findUnique({ where: { id: enrollment.id } });
       assert.equal(row!.status, TrainingEnrollmentStatus.awaiting_signoff);
     } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// Sprint 4, Item 4 — the tier2a/2b operator-or-SME-sign-off earning path.
+// completed = pass (issues a credential), cancelled = fail (issues nothing)
+// — reusing the existing status enum, no new values added.
+describe("updateEnrollmentStatus credential issuance (Sprint 4, Item 4)", () => {
+  test("completing an enrollment for a certificate-linked session issues a credential", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const certificate = await createCertificate();
+    try {
+      const trainingSession = await createTrainingSession(company.id, certificate.id);
+      const enrollment = await enrollUser({ userId: user.id, trainingSessionId: trainingSession.id });
+
+      await updateEnrollmentStatus(enrollment.id, TrainingEnrollmentStatus.completed);
+
+      const credential = await prisma.userCertificate.findUnique({
+        where: { userId_certificateId: { userId: user.id, certificateId: certificate.id } },
+      });
+      assert.ok(credential, "expected a UserCertificate row to be created");
+
+      const log = await prisma.activityLog.findMany({ where: { userId: user.id, actionType: "credential_issued" } });
+      assert.equal(log.length, 1);
+    } finally {
+      await prisma.activityLog.deleteMany({ where: { userId: user.id } });
+      await prisma.userCertificate.deleteMany({ where: { userId: user.id } });
+      await prisma.trainingSession.deleteMany({ where: { companyId: company.id } });
+      await prisma.certificate.delete({ where: { id: certificate.id } });
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("cancelling an enrollment issues no credential", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const certificate = await createCertificate();
+    try {
+      const trainingSession = await createTrainingSession(company.id, certificate.id);
+      const enrollment = await enrollUser({ userId: user.id, trainingSessionId: trainingSession.id });
+
+      await updateEnrollmentStatus(enrollment.id, TrainingEnrollmentStatus.cancelled);
+
+      const credential = await prisma.userCertificate.findUnique({
+        where: { userId_certificateId: { userId: user.id, certificateId: certificate.id } },
+      });
+      assert.equal(credential, null);
+    } finally {
+      await prisma.trainingSession.deleteMany({ where: { companyId: company.id } });
+      await prisma.certificate.delete({ where: { id: certificate.id } });
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("completing an enrollment for a session with no linked certificate issues nothing", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const trainingSession = await createTrainingSession(company.id);
+      const enrollment = await enrollUser({ userId: user.id, trainingSessionId: trainingSession.id });
+
+      const updated = await updateEnrollmentStatus(enrollment.id, TrainingEnrollmentStatus.completed);
+      assert.equal(updated.status, TrainingEnrollmentStatus.completed);
+
+      const credentials = await prisma.userCertificate.findMany({ where: { userId: user.id } });
+      assert.equal(credentials.length, 0);
+    } finally {
+      await prisma.trainingSession.deleteMany({ where: { companyId: company.id } });
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("re-PATCHing an already-completed enrollment to completed does not re-issue a duplicate credential", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const certificate = await createCertificate();
+    try {
+      const trainingSession = await createTrainingSession(company.id, certificate.id);
+      const enrollment = await enrollUser({ userId: user.id, trainingSessionId: trainingSession.id });
+
+      await updateEnrollmentStatus(enrollment.id, TrainingEnrollmentStatus.completed);
+      await updateEnrollmentStatus(enrollment.id, TrainingEnrollmentStatus.completed);
+
+      const credentials = await prisma.userCertificate.findMany({
+        where: { userId: user.id, certificateId: certificate.id },
+      });
+      assert.equal(credentials.length, 1);
+
+      const log = await prisma.activityLog.findMany({ where: { userId: user.id, actionType: "credential_issued" } });
+      assert.equal(log.length, 1, "credential_issued should only log once, not on every completed PATCH");
+    } finally {
+      await prisma.activityLog.deleteMany({ where: { userId: user.id } });
+      await prisma.userCertificate.deleteMany({ where: { userId: user.id } });
+      await prisma.trainingSession.deleteMany({ where: { companyId: company.id } });
+      await prisma.certificate.delete({ where: { id: certificate.id } });
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });

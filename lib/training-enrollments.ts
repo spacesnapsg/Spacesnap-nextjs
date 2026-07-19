@@ -1,6 +1,7 @@
 import { TrainingEnrollmentStatus, ActivityActionType, Prisma, type TrainingEnrollment } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import { issueCredential } from "@/lib/training-credentials";
 
 export function serializeTrainingEnrollment(enrollment: TrainingEnrollment) {
   return {
@@ -112,6 +113,18 @@ export class InvalidEnrollmentStatusTransitionError extends Error {
   }
 }
 
+// Sprint 4, Item 4 — the tier2a/2b operator-or-SME-sign-off earning path.
+// Reuses training_enrollments' existing status column rather than a new
+// pass/fail concept, per this item's explicit "don't invent new statuses"
+// instruction: `completed` is the pass outcome (issues a credential),
+// `cancelled` is the fail/no-credential outcome. There's no separate
+// "failed" status — `cancelled` already meant "this enrollment didn't result
+// in a credential" before this item, whether from a supplier rejecting the
+// sign-off or the enrollee withdrawing; both cases correctly issue nothing.
+// Credential issuance only fires on a genuine enrolled/awaiting_signoff ->
+// completed transition, not on every call that happens to pass `completed`
+// (see below), so re-PATCHing an already-completed enrollment can't
+// re-fire the activity log entry.
 export async function updateEnrollmentStatus(
   enrollmentId: bigint,
   status: TrainingEnrollmentStatus
@@ -120,8 +133,26 @@ export async function updateEnrollmentStatus(
     throw new InvalidEnrollmentStatusTransitionError(status);
   }
 
-  return prisma.trainingEnrollment.update({
-    where: { id: enrollmentId },
-    data: { status },
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.trainingEnrollment.findUniqueOrThrow({
+      where: { id: enrollmentId },
+      include: { trainingSession: true },
+    });
+
+    const updated = await tx.trainingEnrollment.update({
+      where: { id: enrollmentId },
+      data: { status },
+    });
+
+    const isNewlyCompleted = status === TrainingEnrollmentStatus.completed && existing.status !== status;
+    if (isNewlyCompleted && existing.trainingSession.certificateId !== null) {
+      await issueCredential(tx, {
+        userId: existing.userId,
+        certificateId: existing.trainingSession.certificateId,
+        description: `Earned via completing "${existing.trainingSession.title}" (sign-off).`,
+      });
+    }
+
+    return updated;
   });
 }

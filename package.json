@@ -7,13 +7,15 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "DOTENV_CONFIG_PATH=.env.testing tsx --test prisma/tests/db-constraints.test.ts lib/certificate-gating.test.ts lib/bookings.test.ts lib/bulk-orders.test.ts lib/wallet.test.ts lib/check-ins.test.ts lib/training-enrollments.test.ts lib/ratings.test.ts",
+    "test": "DOTENV_CONFIG_PATH=.env.testing tsx --test prisma/tests/db-constraints.test.ts lib/certificate-gating.test.ts lib/bookings.test.ts lib/bulk-orders.test.ts lib/wallet.test.ts lib/check-ins.test.ts lib/training-enrollments.test.ts lib/ratings.test.ts lib/training-credentials.test.ts lib/quiz-attempts.test.ts lib/certificate-signoffs.test.ts",
     "test:db:migrate": "DOTENV_CONFIG_PATH=.env.testing prisma migrate deploy",
     "test:db:seed": "DOTENV_CONFIG_PATH=.env.testing prisma db seed",
     "test:db:setup": "npm run test:db:migrate && npm run test:db:seed"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
+    "@aws-sdk/client-s3": "^3.1090.0",
+    "@aws-sdk/s3-request-presigner": "^3.1090.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@tanstack/react-query": "^5.101.2",

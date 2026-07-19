@@ -357,6 +357,9 @@ async function main() {
   const safetyVideo = await prisma.trainingVideo.create({
     data: {
       companyId: null,
+      // tier1_video_quiz earning path (Sprint 4, Item 4): passing this
+      // video's quiz below auto-issues safetyInduction.
+      certificateId: safetyInduction.id,
       title: "Workplace Safety 101",
       category: "safety",
       description: "Platform-wide induction covering general workplace safety basics.",
@@ -512,6 +515,13 @@ async function main() {
   await prisma.trainingSession.create({
     data: {
       companyId: acme.id,
+      // tier2b_operator_or_sme_signoff earning path (Sprint 4, Item 4): a
+      // supplier completing this enrollment's sign-off auto-issues
+      // fireMarshalCert. Matches endorsementName below — that field is
+      // display text carried over from the old schema and was never wired to
+      // real issuance (see CODEBASEAPI_SUMMARY.md §6), so certificateId is
+      // the actual link, kept consistent with it here.
+      certificateId: fireMarshalCert.id,
       title: "Fire Marshal Certification Workshop",
       smeName: "SCDF Officer Rahman",
       description: "Half-day workshop covering fire marshal duties and evacuation drills.",
@@ -525,6 +535,14 @@ async function main() {
   await prisma.trainingSession.create({
     data: {
       companyId: toolshare.id,
+      // No certificateId here (unlike the Fire Marshal session above):
+      // forkliftCert's earning method is tier2a_operator_signoff, which is
+      // NOT a scheduled-session/enrollment flow — confirmed with the product
+      // owner (see CLAUDE1.md "Sprint 4, Item 4, Correction"). tier2a is an
+      // on-demand per-user request (live demo or uploaded recording),
+      // handled by lib/certificate-signoffs.ts instead. This session stays
+      // as plain informational/demo content with no auto-issuance wired to
+      // it — TrainingSession.certificateId is tier2b-only.
       title: "Forklift Practical Assessment",
       smeName: "Certified Trainer Lim",
       description: "Hands-on practical assessment on the yard forklift fleet.",

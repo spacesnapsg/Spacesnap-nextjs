@@ -1250,3 +1250,313 @@ yet wired, and the Sprint 4 route-protection gap (no `middleware.ts` or
 per-layout `auth()` guard — still open, blocking Sprint 4 completion, not a
 Sprint 3.5 concern but confirmed still true by inspection this session). No
 additional silent descopes surfaced by this pass.
+
+## Sprint 4, Item 4 — Training/Credentialing Flow: Submit, Review, Pass/Fail, Issue Credential (2026-07-19)
+
+Task brief asked to check how the old app handled quiz grading and
+`training_enrollments` status before building, and explicitly not to invent
+new statuses. Both checks were done before writing any code:
+
+- **Quiz grading**: grepped `spacesnap-api` directly — `QuizQuestionController`
+  only ever builds a quiz (supplier/admin authoring), and
+  `TrainingVideoController::complete` just upserts a `VideoCompletion` row
+  (watched, not graded). There is no submission/grading endpoint anywhere in
+  the old backend, confirmed via `CODEBASEAPI_SUMMARY.md` §3/§6 and a direct
+  grep. So "check old codebase before assuming manual review" surfaced the
+  real answer: there's nothing to port for grading, because it was never
+  built — this is genuinely new logic, not a port.
+- **Which review model applies where**: `CertificateEarningMethod`'s own three
+  labels (Sprint 4, Item 2 revised, see above) already answer this — `tier1_video_quiz`
+  is explicitly self-serve, `tier2a_operator_signoff`/`tier2b_operator_or_sme_signoff`
+  are explicitly sign-off-gated. So tier1 is auto-graded (no reviewer), tier2a/2b
+  stays on the existing `training_enrollments` status flow (`enrolled` ->
+  `awaiting_signoff` -> `completed`/`cancelled`, already built in Sprint 3.5) with
+  a supplier as the reviewer. No single unified "review" mechanism was built
+  across both paths — building one would have meant inventing a status/reviewer
+  concept tier1 explicitly doesn't have.
+- **`training_enrollments` status — confirmed no new values needed**: `completed`
+  is the pass outcome, `cancelled` is the fail/no-credential outcome. `cancelled`
+  already meant "this enrollment didn't produce a credential" before this item
+  (voluntary withdrawal or a rejected sign-off) — reusing it for "failed
+  sign-off" doesn't change its existing meaning, just gives it a second real
+  trigger. No `failed` status was added, per the brief's explicit instruction.
+
+**The missing link, found before building anything:** neither `TrainingVideo`
+nor `TrainingSession` had any FK to the `Certificate` they actually grant —
+confirmed by re-reading `prisma/schema.prisma` directly, not assumed.
+`TrainingSession.endorsementName` (ported as-is from the old schema, "granted
+on completion") looked at first like it might already carry this, and the
+seed data's `endorsementName` values do match certificate names exactly
+(`"Fire Safety Marshal"`, `"Equipment Handling - Forklift"`) — but per
+`CODEBASEAPI_SUMMARY.md` §6, that field was never wired to real issuance
+logic in the old app, and `Certificate.name` has no uniqueness constraint, so
+resolving it by string match at issuance time would be fragile. Added a real
+`certificateId` FK on both `TrainingVideo` and `TrainingSession` instead
+(nullable — not every video/session grants a cert), migration
+`20260719152218_add_quiz_attempts_and_credential_issuance`. `endorsementName`
+is untouched, kept as display text.
+
+**What was built:**
+- Schema: `TrainingVideo.certificateId`, `TrainingSession.certificateId` (both
+  nullable FKs to `Certificate`), new `QuizAttempt` model (`quiz_attempts`
+  table: `userId`, `trainingVideoId`, `score`, `totalQuestions`, `passed`,
+  `createdAt` only — append-only like `ActivityLog`, no unique constraint on
+  `(userId, trainingVideoId)` so retakes after a fail create a new row rather
+  than overwriting). Two new `ActivityActionType` values: `quiz_attempt_submitted`,
+  `credential_issued`.
+- `lib/training-credentials.ts` — `issueCredential(tx, {userId, certificateId,
+  description})`, shared by both earning paths so the actual "create a
+  `user_certificates` row" trigger exists in exactly one place. Confirmed
+  before building that no such trigger existed anywhere yet (`CODEBASEAPI_SUMMARY.md`
+  §6: "no confirmed trigger exists in the traced code... may be manual admin
+  action, automatic on some condition, or genuinely unbuilt" — genuinely
+  unbuilt, on both the old and new codebases). Upserts on the existing
+  `@@unique([userId, certificateId])` constraint rather than always-creating,
+  so re-earning an already-held (e.g. expired) certificate renews
+  `earnedDate`/clears `expiryDate` instead of throwing — new mechanism, no old
+  renewal behavior to diverge from (see the schema's own "renewal-by-video
+  flow deferred, column ready" comment on `expiryDate`).
+- `lib/quiz-attempts.ts` — `parseQuizSubmission`, `gradeAndSubmitQuizAttempt`.
+  Grades a `{ answers: [{questionId, answerId}] }` submission against
+  `QuizAnswer.isCorrect`, rejects (422) if the submission doesn't cover
+  exactly the video's current question set (not silently marked wrong).
+  Passing requires every question correct — this app has no partial-credit/
+  percentage-threshold concept anywhere to base a lower bar on and the old
+  app never built grading at all, so "all correct" is the simplest defensible
+  default; flagging as revisitable if a percentage threshold is wanted later.
+  On a pass, issues a credential via `lib/training-credentials.ts` only if the
+  video has a `certificateId` set — a video's quiz can exist as a pure
+  knowledge check with no auto-issuance (e.g. `forkliftVideo` in the seed has
+  a quiz but its cert, `forkliftCert`, is `tier2a_operator_signoff`, not
+  `tier1_video_quiz`, so it deliberately has no `certificateId` link).
+- `lib/training-enrollments.ts`'s `updateEnrollmentStatus` now runs inside a
+  `$transaction` and issues a credential when a status update is a genuine
+  new transition into `completed` (guarded against the *previous* status also
+  being `completed`, so re-PATCHing an already-completed enrollment can't
+  re-fire issuance/logging) and the session has a `certificateId`.
+- `app/api/training-videos/[id]/quiz-attempts/route.ts` — `POST` (submit +
+  grade, any authenticated user, no supplier/reviewer gate since tier1 has no
+  reviewer) and `GET` (the caller's own attempt history on that video, so a
+  failed result's score stays visible after a page refresh — same "no GET to
+  list a user's own X" gap-closing idiom as `GET /api/bookings`).
+- `prisma/seed.ts`: `safetyVideo.certificateId` -> `safetyInduction` (the only
+  `tier1_video_quiz` cert). The two sign-off sessions'
+  `certificateId` set to match their existing `endorsementName` text: "Fire
+  Marshal Certification Workshop" -> `fireMarshalCert`, "Forklift Practical
+  Assessment" -> `forkliftCert`.
+
+**Tests:** `lib/quiz-attempts.test.ts` (grading logic — all-correct pass +
+credential issued, one-wrong fail + nothing issued, no-linked-certificate
+passes but issues nothing, retake-after-fail creates a second row not an
+update, resubmit-when-already-held renews via upsert not a duplicate,
+incomplete submission rejected, no-quiz-configured rejected, video-not-found
+rejected) and `lib/training-credentials.test.ts` (first issuance creates row +
+activity log, re-issuance of an expired credential renews via upsert). Four
+new cases added to `lib/training-enrollments.test.ts` (completing a
+certificate-linked enrollment issues a credential, cancelling issues nothing,
+completing a session with no certificate just completes, re-completing an
+already-completed enrollment doesn't re-issue/re-log). Both new files
+registered in `package.json`'s `test` script. All 88 tests pass (35 new, 0
+regressions). `npx tsc --noEmit`, `npx eslint`, and `next build` all clean.
+
+**Verified live**, not just unit-tested — real cookie-jar logins against the
+dev server/DB (`ethan@example.com`, `farah@example.com`, `ben@acmecoworking.sg`
+as the Fire Marshal session's supplier). Had to restart the dev server mid-session:
+its in-memory Prisma client predated the migration/regenerate and threw
+`Cannot read properties of undefined (reading 'create')` on `tx.quizAttempt`
+until restarted — worth remembering for future schema-change sessions, a
+`prisma migrate dev` + `generate` doesn't hot-reload into an already-running
+`next dev` process's Prisma client.
+- Tier1: `ethan` (already holds `Basic Safety Induction`, earned 2026-01-15)
+  submitted one wrong answer on video 28's quiz -> `201`, `passed: false`,
+  `credentialIssued: false`, no ledger/credential change. Same video, all
+  four correct -> `201`, `passed: true`, `credentialIssued: true`; `GET
+  /api/credentials` confirmed the existing credential's `earnedDate` renewed
+  to `2026-07-19` (today), not duplicated. `GET .../quiz-attempts` showed both
+  attempts, newest first.
+- Tier2: `farah` enrolled in training session 28 ("Fire Marshal Certification
+  Workshop", linked to `fireMarshalCert`) -> `201`. `ben` (that session's
+  company's supplier) `PATCH .../training-enrollments/3 {"status":"completed"}`
+  -> `200`; `GET /api/credentials` as `farah` confirmed a brand-new `Fire
+  Safety Marshal` credential appeared, `earnedDate: 2026-07-19`. Separately,
+  `ethan` enrolled in the same session, `ben` set that enrollment straight to
+  `cancelled` -> `200`; `ethan`'s existing (already-expired) Fire Safety
+  Marshal credential was confirmed unchanged (`earnedDate` still `2025-01-10`,
+  not renewed) — cancelling correctly issues nothing.
+- Unauthenticated `POST .../quiz-attempts` -> `401`. Incomplete submission
+  (one of four questions answered) -> clean `422`.
+- All scratch rows deleted afterward via a one-off script (both quiz attempts,
+  both enrollments, farah's newly-issued credential row, the activity_log rows
+  from this session) and `ethan`'s renewed `earnedDate` reverted to its seeded
+  value — confirmed DB back to exactly the seeded state (`ethan`: cert 56
+  earnedDate back to `2026-01-15`; `farah`: only her original 2 credentials
+  remain; 0 `quiz_attempts`/`training_enrollments` rows in the DB).
+
+**Not built, per the brief's scope:** no frontend wiring (the quiz-taking UI,
+`ViewNamelistModal`'s pass/fail display, and `TrainingVideoModal`'s authoring
+flow all stay on mock data per the standing "don't delete unbackended UI"
+rule — this item was backend-only, matching the pattern of every other Sprint
+3.5/4 schema item so far). No `GET /api/training-videos` or `GET
+/api/training-sessions` listing endpoints — still-open, separately-tracked
+gaps (`SPRINT_PLAN_NEXTJS_REWRITE.md` Sprint 3 Session 4 notes), out of this
+item's scope to avoid expanding into a full training-video/session CRUD pass.
+No prerequisite check that the video was actually watched
+(`VideoCompletion`) before allowing a quiz submission — that endpoint
+(`POST /training-videos/{id}/complete`) doesn't exist in this stack yet
+either; flagging as a related-but-separate port gap, not silently assumed
+away.
+
+## Sprint 4, Item 4, Correction — tier2a Is Not `training_enrollments` (2026-07-19)
+
+**The write-up above wrongly conflated tier2a and tier2b.** Both were routed
+through `TrainingSession`/`TrainingEnrollment`, differing only in who signs
+off. The product owner corrected this directly: tier2a_operator_signoff is
+**not** a scheduled-session/enrollment concept at all. It's an on-demand,
+per-user flow with two entry points — the user requests a live demo session
+with the operator, or uploads a recorded demo for the operator to review
+async. Reviewing a recording, the operator can pass it or ask for a live
+demo instead (never fail it outright off a recording alone — confirmed
+explicitly); a live demo (either path) gets a direct pass/fail. tier2b
+(training requiring operator OR external SME sign-off) is genuinely the
+scheduled-session concept and was correctly modeled the first time — the
+Fire Marshal Certification Workshop / `TrainingEnrollment` linkage stands
+unchanged.
+
+**Concretely wrong and fixed:** `forkliftCert` (tier2a_operator_signoff) had
+been linked via `TrainingSession.certificateId` to "Forklift Practical
+Assessment," implying completing that scheduled session would issue the
+cert. Reverted — that session now carries no `certificateId` and issues
+nothing; `TrainingSession.certificateId` is tier2b-only going forward (the
+field itself wasn't removed, since it's still correct for tier2b, just no
+longer misused for tier2a).
+
+**What was built instead**, matching the two-question clarification the
+product owner answered before this was rebuilt (recording review can only
+pass or escalate, never fail outright; one record per user+certificate, with
+a real uploaded file kept as evidence, not a URL field):
+- Two new enums: `SignoffSubmissionType` (`recording`/`live_demo_request`),
+  `SignoffRequestStatus` (`pending`/`live_demo_requested`/`passed`/`failed`).
+- New model `CertificateSignoffRequest` (migration
+  `20260719172551_add_certificate_signoff_requests`): one row per
+  `(userId, certificateId)` (`@@unique`), not append-only like `QuizAttempt`
+  — a fresh submission after a terminal outcome resets the same row rather
+  than creating a new one, per the product owner's explicit instruction.
+  `recordingKey` is an R2 object key, not a URL — evidence is reviewed, not
+  publicly displayed.
+- **First real file-storage integration in this codebase.** Every other
+  "file" in this app (training video/thumbnail, listing images) is a bare
+  URL string the caller supplies directly — no actual upload/storage path
+  exists anywhere yet (matches the old app's own unbuilt gap,
+  `CODEBASEAPI_SUMMARY.md` §6). Per the stack decision
+  (`AGENTS.md`/`CLAUDE1.md`: "File storage: Cloudflare R2"), added
+  `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` and
+  `lib/storage.ts`: presigned PUT (client uploads the video directly to R2 —
+  this app's Route Handlers never proxy the file bytes), a `HeadObjectCommand`
+  existence check before a submission is accepted (so a client can't claim a
+  `recordingKey` it never actually uploaded to), and presigned, short-lived
+  GET URLs for review (15 min — evidence is access-controlled, not a
+  permanent public link like `training_videos.video_url`). New env vars
+  `R2_ACCOUNT_ID`/`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY`/`R2_BUCKET_NAME`
+  added to `.env.example`; **no real R2 credentials exist in this dev
+  environment**, so the actual upload/storage calls are wired per the stack
+  decision but not live-tested against real R2 — same category of gap as
+  this app's Stripe integration (wired, test-mode/unconfigured, never
+  live-verified). Confirmed live that the code path is reached and fails
+  with a clean, specific "R2 storage is not configured" error (not a crash
+  or a silent no-op) when credentials are absent.
+- `lib/certificate-signoffs.ts` — `submitSignoffRequest` (validates the
+  certificate's `earningMethod` is actually `tier2a_operator_signoff`,
+  upserts the one-row-per-pair record, rejects a second submission while one
+  is already in flight) and `reviewSignoffRequest`, which enforces the exact
+  transition table confirmed with the product owner: `pending`+`recording`
+  → `passed` or `live_demo_requested` only (never `failed` directly);
+  `pending`+`live_demo_request` → `passed` or `failed` (never
+  `live_demo_requested` — it's already a live demo); `live_demo_requested` →
+  `passed` or `failed`. Deliberately takes `recordingKey` as a plain string
+  rather than depending on `lib/storage.ts` directly, so this module stays
+  DB-only and unit-testable without real R2 credentials, same as every other
+  `lib/*.ts` file in this app. On `pass`, issues a credential via the same
+  `lib/training-credentials.ts` helper tier1/tier2b use.
+- Routes: `POST /api/certificates/[id]/signoff-requests/upload-url`
+  (presigned PUT), `POST`/`GET /api/certificates/[id]/signoff-requests`
+  (submit/view own), `GET /api/supplier/certificate-signoff-requests` +
+  `GET /api/admin/certificate-signoff-requests` (reviewer queues), `PATCH
+  /api/certificate-signoff-requests/[id]` (review decision).
+- **Review authority — a judgment call, not specified by the product owner,
+  flagging explicitly:** `Certificate.createdByCompanyId` has no company for
+  platform-authored certs (`forkliftCert` included — `source: platform`,
+  confirmed via the seed), so there's no supplier to scope a review queue to.
+  Resolved as: a supplier at `createdByCompanyId` reviews when it's set,
+  system admin reviews when it's null. This mirrors how ownership scoping
+  works everywhere else in this app (`requireSupplier()`/company-match), but
+  wasn't explicitly confirmed with the product owner the way the two
+  clarifying questions above were — worth a second look if it turns out
+  wrong, same as the admin-scope judgment calls flagged in Sprint 3 Session 4.
+
+**Tests:** new `lib/certificate-signoffs.test.ts`, 19 cases covering the full
+transition table (every allowed and disallowed decision at every status ×
+submissionType combination), the in-progress-conflict rejection, the
+reset-not-duplicate resubmission behavior, wrong-earning-method rejection,
+and credential issuance on pass. Registered in `package.json`'s `test`
+script. All 107 tests in `npm test` pass (19 new, 0 regressions). `npx tsc
+--noEmit`, `npx eslint`, and `next build` all clean.
+
+**Verified live**, not just unit-tested, for everything not gated on real R2
+credentials — real cookie-jar logins (`ethan@example.com`,
+`alice.admin@spacesnap.sg` the system admin, `ben@acmecoworking.sg` a
+supplier at a company that doesn't own `forkliftCert`) against the dev
+server/DB:
+- Wrong earning method (cert 61, tier1) → clean `422`. Unauthenticated
+  submit → `401`.
+- `ethan` submits `live_demo_request` for `forkliftCert` (62) → `201`,
+  `pending`. Resubmitting while pending → `409`.
+- `ben` (Acme supplier, doesn't own this cert) → `PATCH` review → `403`;
+  his supplier queue correctly returns empty (Acme created 0 tier2a certs).
+- `alice` (system admin) → her admin queue correctly lists the pending
+  request; attempting `request_live_demo` on it → clean `422` ("already a
+  live demo"); `fail` → `200`, `ethan`'s credentials confirmed unchanged
+  (no forklift cert).
+- `ethan` resubmits (same request row, id unchanged) with a `recording`
+  submission and a `recordingKey` that was never actually uploaded → clean
+  `422 {"recordingKey":["No uploaded recording was found for this key."]}` —
+  confirms the R2 existence-check gate correctly rejects a fabricated key
+  even without real credentials configured (the "not configured" case and
+  the "genuinely doesn't exist" case both currently return `false` from
+  `evidenceRecordingExists`'s catch-all — noted below as a known
+  debuggability gap, not a correctness bug: either way the submission is
+  correctly rejected).
+- `ethan` resubmits again with `live_demo_request` → same row (id `1`)
+  reset to `pending`, not a new row. `alice` passes it → `200`; `ethan`'s
+  `GET /api/credentials` confirmed a brand-new `Equipment Handling -
+  Forklift` credential appeared, `earnedDate` today.
+- Re-reviewing the now-`passed` request → clean `422` (terminal, no further
+  transitions).
+- `POST .../upload-url` with no real R2 credentials configured → clean `500`
+  with the exact `"R2 storage is not configured..."` message (confirmed via
+  server logs), not a generic crash — the code path works, it's specifically
+  missing external credentials, matching the flagged gap above.
+- All scratch rows deleted afterward (`certificate_signoff_requests`,
+  `ethan`'s newly-issued forklift `user_certificates` row, the
+  `signoff_requested`/`signoff_reviewed` activity_log rows); DB confirmed
+  back to exactly the seeded state.
+
+**Known gaps, flagged not silently dropped:**
+- `evidenceRecordingExists` returns `false` both when R2 is unconfigured and
+  when a key genuinely doesn't exist — fine for correctness (both cases
+  correctly reject the submission) but not ideal for debugging a real
+  misconfigured-credentials incident in production, where the error message
+  would misleadingly say "no recording found" instead of "storage
+  misconfigured." Worth distinguishing if this becomes a real support
+  burden.
+- No real R2 credentials exist in this dev environment, so the actual
+  presigned-upload → R2 → HeadObject round trip has never been exercised
+  against real storage, only against the "not configured" error path.
+  Needs a real Cloudflare R2 bucket + API token before this can be
+  considered fully live-verified — same posture as this app's Stripe
+  integration.
+- Review-authority scoping (supplier-at-createdByCompanyId, else
+  system-admin) is a judgment call, not confirmed with the product owner the
+  way the transition-table/data-model questions were.
+- No frontend wiring for any of this (submission form, video-upload UI,
+  reviewer queue/decision UI) — backend-only, consistent with the rest of
+  this item.
