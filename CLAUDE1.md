@@ -1082,3 +1082,171 @@ booking), one per real write, correct `action_type`, `related_listing_id`,
 and description on every row. Scratch rows (`activity_log`, `check_ins`,
 `bulk_order_requests`, `transactions`, `bookings`) deleted afterward, DB back
 to seeded state.
+
+## Sprint 3.5, Known Gap #3 — Booking-Decline Refund Transaction (2026-07-19)
+
+No session write-up was committed alongside the code for this gap (commit
+`1ebcc5e`) — backfilling it now during the Sprint 3.5 end-to-end re-verify
+pass, since the sprint plan checklist still showed it unchecked despite the
+code and tests existing.
+
+**What was built:** `declineBookingWithRefund(bookingId)` in `lib/bookings.ts`
+— one `prisma.$transaction`: re-reads the booking, throws
+`BookingNotDeclinableError` unless status is `pending` or `confirmed` (mirrors
+the old `SupplierBookingController::decline`'s allowed-status set), updates
+status to `cancelled`, and creates a `type: refund` Transaction row for
+exactly `booking.credits` — the amount actually debited at creation
+(`createBookingWithDebit`), not a re-derived price, so a listing price change
+after booking can't skew the refund. `app/api/supplier/bookings/[id]/decline/route.ts`
+calls this instead of a bare status update and catches
+`BookingNotDeclinableError` → clean `422`.
+
+**Tests:** `lib/bookings.test.ts`, 4 cases — declining a `pending` booking
+refunds exactly the create-time debit with one refund row; a `confirmed`
+booking can still be declined and refunded; declining an already-`cancelled`
+booking rejects cleanly with no ledger touch; declining twice rejects the
+second call with no second refund. All pass in `npm test`.
+
+**Verified live** (2026-07-19, this session) — real cookie-jar login as
+`ethan@example.com`, booking created on listing 149 "Power Drill Set" (no
+cert requirement), confirmed by `divya@toolshare.sg` (listing 149's
+supplier), then declined by the same supplier. Direct query on `transactions`
+for that booking showed exactly three rows: `-25.00` create debit, `0.00`
+confirm-audit, `25.00` refund — and `ethan`'s live ledger balance
+(`SUM(amount)`) was back to exactly `80`, matching pre-test state. Booking and
+all three Transaction rows deleted afterward.
+
+## Sprint 3.5, Known Gap #4 — Bulk Order Pricing + Atomic Debit (2026-07-19)
+
+No session write-up was committed alongside the code for this gap (commit
+`659bf75`) either — backfilling it now for the same reason as Known Gap #3
+above.
+
+**What was built:** `createBulkOrderWithDebit(params)` in `lib/bulk-orders.ts`
+— same "check balance inside the transaction, insert, debit" shape as
+`createBookingWithDebit`, reusing `assertSufficientBalance` (`lib/credits.ts`)
+rather than reimplementing the check. Cost is computed in the route
+(`app/api/bulk-order-requests/route.ts`) as `listing.pricePerUnit *
+quantity`, rejecting up front if the listing isn't `consumables` or has no
+per-unit price set (mirrors old `BulkOrderRequestController::store`). Unlike
+the old build, which only deducted credits on transition to `fulfilled`, this
+debits at request-creation time — same point bookings debit at — inside one
+`$transaction` with the `BulkOrderRequest` insert and a `type: purchase`
+Transaction row.
+
+**Tests:** `lib/bulk-orders.test.ts`, 4 cases mirroring the booking-debit
+suite — zero balance rejected with nothing written, short-by-any-amount
+rejected, exact-balance-match succeeds (one `type: purchase` debit row),
+balance-with-room-to-spare succeeds. All pass in `npm test`.
+
+**Verified live** (2026-07-19, this session) — `ethan@example.com`, listing
+150 "Compostable Packaging Boxes" (`price_per_unit` = 18.50, company 115).
+First attempt at quantity 3 (cost 55.50) against a balance of 55 → clean `422
+{"errors":{"credits":["Insufficient credit balance for this request."]}}`,
+confirmed zero `bulk_order_requests`/`transactions` rows written for the
+attempt. Topped up 50 (balance → 130), retried quantity 3 → `201`, `credits:
+55.5`; direct query confirmed one `transactions` row (`type: purchase`,
+`amount: -55.50`, `bulk_order_request_id` matching) and `55.50 = 18.50 × 3`
+exactly. Scratch rows deleted afterward.
+
+## Sprint 3.5, New Schema Item — `training_enrollments` Table + Enroll/Status-Update Endpoints (2026-07-19)
+
+No session write-up was committed alongside the code for this item (commit
+`a004f80`) — backfilling it now for the same reason as Known Gaps #3/#4
+above.
+
+**What was built:**
+- `prisma/schema.prisma` — `TrainingEnrollment` model (`training_enrollments`
+  table): `userId`, `trainingSessionId`, `status`
+  (`TrainingEnrollmentStatus` enum: `enrolled`/`awaiting_signoff`/`completed`/
+  `cancelled`, `@default(enrolled)`), unique on `(userId, trainingSessionId)`.
+  Migrations `20260719111214_add_training_enrollments` and
+  `20260719111243_activity_action_type_add_training_enrolled` (the latter adds
+  the `training_enrolled` `ActivityActionType` value used below). Not a
+  credit-affecting event — no Transaction row, only an `activity_log` row.
+- `lib/training-enrollments.ts` — `parseEnrollFields`, `hasExistingEnrollment`
+  (app-layer pre-check mirroring the `bookings_no_overlap`/overlap-check
+  idiom), `enrollUser` (creates the row + an `activity_log` row in one
+  `$transaction`; catches the DB's own P2002 unique-constraint violation for
+  the race window and re-surfaces it as the same clean `AlreadyEnrolledError`
+  the pre-check throws), `updateEnrollmentStatus` (rejects setting status back
+  to `enrolled` — that value is only ever set by the model default at
+  creation, there's no supported path back to it).
+- `app/api/training-enrollments/route.ts` (`POST`, enroll — auth-gated, `409`
+  on duplicate) and `app/api/training-enrollments/[id]/route.ts` (`PATCH`,
+  status update — supplier-only via `requireSupplier()`, ownership checked
+  against the training session's `companyId`, `422` on an invalid/unreachable
+  target status).
+
+**Tests:** `lib/training-enrollments.test.ts` — enrolling creates a row with
+status `enrolled`; enrolling the same user in the same session twice rejects
+cleanly (unique constraint, not a raw DB exception surfacing); the same user
+can enroll in two different sessions; `hasExistingEnrollment` returns
+false→true correctly; status moves `enrolled`→`awaiting_signoff`→`completed`;
+`cancelled` reachable directly; setting status back to `enrolled` rejects. All
+pass in `npm test`.
+
+**Verified live** (2026-07-19, this session) — `ethan@example.com` enrolled in
+training session 25 "Fire Marshal Certification Workshop" (company 113) →
+`201`, `status: enrolled`; direct query confirmed the row and a matching
+`activity_log` row (`action_type: training_enrolled`). `ben@acmecoworking.sg`
+(session 25's supplier) moved it `awaiting_signoff` → `completed`, both `200`;
+attempting to set it back to `enrolled` → clean `422`. A second enroll attempt
+by `ethan` on the same session → clean `409
+{"message":"You are already enrolled in this training session."}`. Scratch
+enrollment and activity_log row deleted afterward.
+
+## Sprint 3.5, End-to-End Re-Verification (2026-07-19)
+
+Per an explicit re-verification request: re-ran the full Sprint 3.5 checklist
+end to end before moving to Sprint 4, rather than trusting prior sessions'
+"Verified live" notes at face value. Found and fixed two gaps in the process:
+
+1. **The sprint plan's checkboxes didn't match git history.** Known Gap #3
+   (decline), Known Gap #4 (bulk order), and the `training_enrollments` item
+   were all already committed and covered by passing tests, but the sprint
+   plan still showed them unchecked and CLAUDE1.md had no session write-up for
+   any of the three — backfilled above, checkboxes corrected in
+   `SPRINT_PLAN_NEXTJS_REWRITE.md`.
+2. **`npm test` isolation was configured but not re-confirmed since the setup
+   commit.** Re-verified by snapshotting `spacesnap_dev`'s `transactions` and
+   `bookings` row counts, running the full `npm test` (60 tests, real
+   inserts/deletes against whatever `DATABASE_URL` resolves to), and
+   confirming the dev DB counts were byte-identical after — the suite only
+   ever touched `spacesnap_nextjs_test`.
+
+**Live verification performed this session** (dev server + dev DB, real
+cookie-jar logins, direct `psql` queries against `transactions` after each
+action, all scratch rows deleted and balances confirmed restored afterward):
+booking creation debit (re-confirmed, see Known Gap #1), booking confirm
+audit row (re-confirmed, see Known Gap #2), booking decline refund (Known Gap
+#3 above), bulk order purchase debit with correct `price_per_unit × quantity`
+math (Known Gap #4 above), wallet top-up (re-confirmed, see Known Gap #5),
+and training enrollment create/status-update/duplicate-rejection (new schema
+item above). One booking (id 146) was round-tripped through create →
+confirm → decline in a single sequence specifically to prove the three-row
+Transaction chain (`-25.00` / `0.00` / `25.00`) nets to a restored balance,
+not just that each action works in isolation.
+
+**Housekeeping note:** an early cleanup query used
+`WHERE description LIKE '%#146%' OR action_type IN (...) AND user_id = ... AND created_at > ...`
+without parenthesizing the `OR` branch — Postgres's `AND`-binds-tighter-than-`OR`
+left 3 scratch `activity_log` rows (`wallet_topup`, `bulk_order_created`,
+`training_enrolled`) undeleted on the first pass. Caught by re-querying
+`activity_log` for the test user afterward instead of trusting the `DELETE n`
+row count, and cleaned up with an explicit `id IN (...)` on the second pass.
+Worth remembering for any future manual test-data cleanup in this project:
+always re-query after a multi-clause `DELETE`, don't just trust the reported
+count matches intent.
+
+**Sections 1–9 descope/stub audit:** nothing new found beyond what's already
+flagged inline in `SPRINT_PLAN_NEXTJS_REWRITE.md` — the `is_verified`
+admin-review flag (Sprint 2, deliberately not added, trigger/effect still
+undefined), the Verifications tab (Sprint 1, same reason), sign-out still
+unwired in both navbars (Sprint 1), the no-show/no-check-in grace-window
+question (Sprint 3.5, still an open product decision), Sprint 1 pages still on
+mock data pending Sprint 3's "connect real endpoints" item, React Query not
+yet wired, and the Sprint 4 route-protection gap (no `middleware.ts` or
+per-layout `auth()` guard — still open, blocking Sprint 4 completion, not a
+Sprint 3.5 concern but confirmed still true by inspection this session). No
+additional silent descopes surfaced by this pass.
