@@ -31,7 +31,7 @@ type CertificateStatus = (typeof CERTIFICATE_STATUS_FILTERS)[number];
 const BOOKING_STATUS_STYLES: Record<BookingStatus, string> = {
   pending: "bg-amber/15 text-amber border-amber/30",
   confirmed: "bg-success-green/15 text-success-green border-success-green/30",
-  active: "bg-supplier-purple-start/15 text-supplier-purple-end border-supplier-purple-start/30",
+  active: "bg-sky-500/15 text-sky-400 border-sky-500/30",
   completed: "bg-white/10 text-body-text border-white/20",
   cancelled: "bg-error-red/15 text-error-red border-error-red/30",
 };
