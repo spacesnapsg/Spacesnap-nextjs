@@ -872,3 +872,81 @@ balance re-confirmed back to `80`, DB back to seeded state.
 **Not touched, per Sprint 3.5's own checklist:** booking decline's refund
 Transaction (Known Gap #3) and bulk-order pricing/balance — separate,
 still-open items.
+
+## Sprint 3.5, Known Gap #5 — Wallet Top-Up, `type: topup` Transaction (2026-07-19)
+
+**Correction to the brief's own framing, confirmed before building anything:**
+the brief (and the sprint plan checklist item it quotes verbatim) says
+`type: purchase` transactions are "only ever seeded for demos," and guesses
+the fix lives in the Credit Wallet top-up flow. Both halves needed checking
+before writing code:
+
+- `type: purchase` is **not** actually an open gap — `createBulkOrderWithDebit`
+  (`lib/bulk-orders.ts`, Known Gap #4, already committed) creates a real
+  `type: purchase` row on every bulk order request, and `lib/bulk-orders.test.ts`
+  already asserts on it. Grepping confirmed no other `TransactionType.purchase`
+  writer is missing.
+- The `Transaction` model's own schema comment is explicit that
+  `topup`/`refund` are credit-direction and `booking`/`purchase` are
+  debit-direction. A wallet top-up is money coming in, so it belongs on
+  `type: topup`, not `purchase` — using `purchase` for a top-up would
+  contradict the schema's own documented semantics.
+- Grepping `TransactionType.topup` across the app found it used only in
+  `prisma/seed.ts` and test fixtures (`lib/bookings.test.ts`,
+  `lib/bulk-orders.test.ts`) — never by a real request path. That's the
+  actual, still-open version of this gap, and it matches the Sprint 3.5
+  "Checklist before moving to Sprint 4" line verbatim: "every credit-affecting
+  action (book, confirm, decline, bulk order, **top-up**) has a corresponding
+  Transaction record."
+- Confirmed the Top Up modal (`components/TopUpCreditsModal.tsx`) is exactly
+  as mock as flagged: package buttons just set local state, the custom-amount
+  `Input` has no `onChange`, and "Confirm Purchase" has no `onClick` at all —
+  no endpoint to wire it to existed before this session.
+- Stripe question: grepped for Stripe SDK usage — none exists outside seed
+  data (`stripeConnectAccountId`/`stripeCustomerId`/`stripePaymentIntentId`
+  are schema columns only, Sprint 6 still unbuilt per the sprint plan). So
+  this is **credits-only for now**, same as every other credit-affecting
+  path in this rewrite so far — no real charge happens, `stripePaymentIntentId`
+  stays `null` until Sprint 6 wires an actual payment intent ahead of this call.
+
+**What was built:**
+- `lib/wallet.ts` — `parseTopUpFields(body)` (positive-number validation,
+  same `ApiValidationError` shape as every other parse-fields helper) and
+  `createTopUp(userId, amount)`, which creates a `type: topup` Transaction
+  (`amount` positive, no balance check needed since credit-direction writes
+  can't go negative) inside a `prisma.$transaction` and returns the freshly
+  computed live balance (`getCreditBalance`, `lib/credits.ts` — reused as-is,
+  no changes to that file).
+- `app/api/wallet/topup/route.ts` — `POST`, auth-gated like every other
+  mutating route in this app, `422` on invalid/non-positive amount, `201`
+  with `{ transaction, balance }` on success.
+- Frontend **not** wired in this session — every Sprint-1 mock page
+  (`app/(user)/wallet/page.tsx` included) is still on `MOCK_*` data pending
+  the separate, still-unchecked Sprint 3 checklist item "Connect all Sprint 1
+  pages to real endpoints (replace mock data)." Wiring one page's modal here
+  would be inconsistent with every other still-mock page and out of this
+  gap's scope (the gap is "purchase/topup not created by app code," not
+  "frontend not wired").
+
+**Tests:** new `lib/wallet.test.ts` (added to `npm test`), 7 cases — 4 for
+`parseTopUpFields` validation (missing/zero/negative/non-numeric amount
+rejected, valid positive amount accepted) and 3 for `createTopUp` against the
+real test DB (first top-up from a zero balance, a second top-up adding to
+rather than overwriting the existing balance, and a decimal amount like
+`49.99` preserved exactly). All 45 tests in `npm test` pass (no regression to
+the 38 from before).
+
+**Verified live**, not just unit-tested — real cookie-jar login against the
+dev server/DB as `ethan@example.com` (seeded ledger balance `80`):
+`POST /api/wallet/topup {"amount": 49.99}` → `201
+{"transaction":{"type":"topup","amount":49.99,...},"balance":129.99}`; direct
+query confirmed exactly one new `transactions` row (`type: topup`, amount
+`49.99`) and the ledger `SUM` at `129.99`. Same request with no session
+cookie → clean `401`. `{"amount": -5}` and `{}` → clean `422
+{"errors":{"amount":["amount must be a positive number."]}}`. Test row
+deleted afterward; ethan's balance re-confirmed back to `80`, DB back to
+seeded state.
+
+**Not touched:** the check-ins/activity-log/training-enrollments schema
+items and the frontend-wiring checklist item both remain separate, still-open
+lines in the sprint plan.
