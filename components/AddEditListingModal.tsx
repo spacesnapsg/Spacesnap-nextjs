@@ -5,22 +5,22 @@ import { Plus, Trash2, Image as ImageIcon, Check, X } from "lucide-react";
 import Modal from "./Modal";
 import Button from "./Button";
 import Input from "./Input";
-import type { Listing, ListingType } from "@/lib/mockListings";
-import { MOCK_CERTIFICATES } from "@/lib/mockPassport";
-
-const CERTIFICATE_OPTIONS = MOCK_CERTIFICATES.filter((cert) => cert.status === "approved");
+import type { Listing, ListingType } from "@/lib/hooks/useListings";
+import { useCreateListing, useUpdateListing, type ListingFormFields } from "@/lib/hooks/useSupplierListings";
+import { useCertificateCatalog } from "@/lib/hooks/useCertificates";
+import { ApiRequestError } from "@/lib/api-client";
 
 interface ListingFormState {
   name: string;
   type: ListingType;
   location: string;
   description: string;
-  requiredCertificateIds: number[];
+  requiredCertificateIds: string[];
   priceDay: string;
   priceWeek: string;
   priceMonth: string;
   pricePerUnit: string;
-  unitLabel: string;
+  packSize: string;
   stockQuantity: string;
   amenities: string[];
   isAvailable: boolean;
@@ -37,7 +37,7 @@ const EMPTY_FORM: ListingFormState = {
   priceWeek: "",
   priceMonth: "",
   pricePerUnit: "",
-  unitLabel: "",
+  packSize: "",
   stockQuantity: "",
   amenities: [""],
   isAvailable: true,
@@ -50,18 +50,38 @@ function buildInitialForm(listing?: Listing): ListingFormState {
   return {
     name: listing.name,
     type: listing.type,
-    location: listing.location,
-    description: listing.description,
-    requiredCertificateIds: listing.required_certificate_ids,
-    priceDay: listing.type === "consumable" ? "" : String(listing.price_day),
-    priceWeek: listing.type === "consumable" ? "" : String(listing.price_week),
-    priceMonth: listing.type === "consumable" ? "" : String(listing.price_month),
-    pricePerUnit: listing.type === "consumable" ? String(listing.price_per_unit) : "",
-    unitLabel: listing.type === "consumable" ? listing.unit_label : "",
-    stockQuantity: listing.type === "consumable" ? String(listing.stock_quantity) : "",
+    location: listing.location ?? "",
+    description: listing.description ?? "",
+    requiredCertificateIds: listing.requiredCertificateIds ?? [],
+    priceDay: listing.type === "consumables" ? "" : String(listing.priceDay ?? ""),
+    priceWeek: listing.type === "consumables" ? "" : String(listing.priceWeek ?? ""),
+    priceMonth: listing.type === "consumables" ? "" : String(listing.priceMonth ?? ""),
+    pricePerUnit: listing.type === "consumables" ? String(listing.pricePerUnit ?? "") : "",
+    packSize: listing.type === "consumables" ? (listing.packSize ?? "") : "",
+    stockQuantity: listing.type === "consumables" ? String(listing.stockQuantity ?? "") : "",
     amenities: listing.amenities.length ? listing.amenities : [""],
-    isAvailable: listing.is_available,
-    requireApproval: listing.require_approval,
+    isAvailable: listing.isAvailable,
+    requireApproval: listing.requireApproval,
+  };
+}
+
+function toFields(form: ListingFormState): ListingFormFields {
+  const isConsumable = form.type === "consumables";
+  return {
+    name: form.name,
+    type: form.type,
+    location: form.location || null,
+    description: form.description || null,
+    amenities: form.amenities.filter((a) => a.trim() !== ""),
+    isAvailable: form.isAvailable,
+    requireApproval: form.requireApproval,
+    priceDay: isConsumable ? null : form.priceDay ? Number(form.priceDay) : null,
+    priceWeek: isConsumable ? null : form.priceWeek ? Number(form.priceWeek) : null,
+    priceMonth: isConsumable ? null : form.priceMonth ? Number(form.priceMonth) : null,
+    pricePerUnit: isConsumable ? (form.pricePerUnit ? Number(form.pricePerUnit) : null) : null,
+    stockQuantity: isConsumable ? (form.stockQuantity ? Number(form.stockQuantity) : null) : null,
+    packSize: isConsumable ? form.packSize || null : null,
+    requiredCertificateIds: form.requiredCertificateIds,
   };
 }
 
@@ -75,12 +95,20 @@ interface AddEditListingModalProps {
 export default function AddEditListingModal({ open, onClose, mode, listing }: AddEditListingModalProps) {
   const [form, setForm] = useState<ListingFormState>(() => buildInitialForm(listing));
   const [certDropdownOpen, setCertDropdownOpen] = useState(false);
+  const { data: catalog } = useCertificateCatalog();
+  const createListing = useCreateListing();
+  const updateListing = useUpdateListing();
+
+  const certificateOptions = catalog ?? [];
+  const mutation = mode === "edit" ? updateListing : createListing;
+  const errorMessage =
+    mutation.error instanceof ApiRequestError ? mutation.error.message : mutation.error ? "Something went wrong." : null;
 
   function updateField<K extends keyof ListingFormState>(field: K, value: ListingFormState[K]) {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
-  function toggleCert(certId: number) {
+  function toggleCert(certId: string) {
     setForm((f) => ({
       ...f,
       requiredCertificateIds: f.requiredCertificateIds.includes(certId)
@@ -109,10 +137,15 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    onClose();
+    const fields = toFields(form);
+    if (mode === "edit" && listing) {
+      updateListing.mutate({ id: listing.id, fields }, { onSuccess: onClose });
+    } else {
+      createListing.mutate(fields, { onSuccess: onClose });
+    }
   }
 
-  const isConsumable = form.type === "consumable";
+  const isConsumable = form.type === "consumables";
 
   return (
     <Modal open={open} onClose={onClose} className="max-w-[560px]">
@@ -141,7 +174,7 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
             >
               <option value="space">Space</option>
               <option value="equipment">Equipment</option>
-              <option value="consumable">Consumable</option>
+              <option value="consumables">Consumable</option>
             </select>
           </div>
           <div>
@@ -165,8 +198,9 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
             {form.requiredCertificateIds.length === 0 ? (
               <span className="text-muted-text text-sm px-1">Select required certificates...</span>
             ) : (
-              CERTIFICATE_OPTIONS.filter((cert) => form.requiredCertificateIds.includes(cert.id)).map(
-                (cert) => (
+              certificateOptions
+                .filter((cert) => form.requiredCertificateIds.includes(cert.id))
+                .map((cert) => (
                   <span
                     key={cert.id}
                     className="inline-flex items-center gap-1 bg-supplier-purple-start/15 text-supplier-purple-end border border-supplier-purple-start/30 rounded-full px-2.5 py-1 text-xs"
@@ -184,14 +218,13 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
                       <X size={10} />
                     </span>
                   </span>
-                )
-              )
+                ))
             )}
           </button>
 
           {certDropdownOpen && (
             <div className="absolute z-10 mt-1.5 w-full bg-card border border-border rounded p-2 flex flex-col gap-1 max-h-48 overflow-y-auto shadow-lg">
-              {CERTIFICATE_OPTIONS.map((cert) => {
+              {certificateOptions.map((cert) => {
                 const isSelected = form.requiredCertificateIds.includes(cert.id);
                 return (
                   <button
@@ -241,9 +274,9 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
                 className="focus:!border-supplier-purple-start"
               />
               <Input
-                value={form.unitLabel}
-                onChange={(e) => updateField("unitLabel", e.target.value)}
-                placeholder="Unit label (e.g. case, pack)"
+                value={form.packSize}
+                onChange={(e) => updateField("packSize", e.target.value)}
+                placeholder="Pack size (e.g. Case of 100)"
                 className="col-span-2 focus:!border-supplier-purple-start"
               />
             </div>
@@ -360,8 +393,16 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
           </div>
         </div>
 
-        <Button type="submit" className="w-full !bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end">
-          Save
+        {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
+
+        <Button
+          type="submit"
+          disabled={mutation.isPending}
+          className={`w-full !bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end ${
+            mutation.isPending ? "opacity-50 cursor-not-allowed" : ""
+          }`}
+        >
+          {mutation.isPending ? "Saving…" : "Save"}
         </Button>
       </form>
     </Modal>

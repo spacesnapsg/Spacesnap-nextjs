@@ -1,31 +1,14 @@
 "use client";
 
 import { useState, type ChangeEvent } from "react";
-import { Mail, MapPin, Calendar, CheckCircle2, Camera, Download, FileText, Receipt as ReceiptIcon } from "lucide-react";
+import { useSession } from "next-auth/react";
+import { Mail, Building2, Calendar, CheckCircle2, Camera } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
-import {
-  MOCK_SUPPLIER_PROFILE,
-  MOCK_IS_COMPANY_ADMIN,
-  MOCK_BUSINESS_DETAILS,
-  MOCK_COMPANY_ADMIN_DETAILS,
-  MOCK_LISTING_STATS,
-  MOCK_RECEIVABLE_SUMMARY,
-  MOCK_INVOICES,
-  MOCK_RECEIPTS,
-  type SupplierProfile,
-  type BusinessDetails,
-  type CompanyAdminDetails,
-  type Invoice,
-  type InvoiceStatus,
-  type Receipt,
-} from "@/lib/mockProfile";
-
-const INVOICE_STATUS_STYLES: Record<InvoiceStatus, string> = {
-  Paid: "bg-success-green/15 text-success-green border-success-green/30",
-  Pending: "bg-amber/15 text-amber border-amber/30",
-};
+import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
+import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
+import { useSupplierBookings } from "@/lib/hooks/useSupplierBookings";
 
 function getInitials(name: string) {
   return name
@@ -48,9 +31,10 @@ function InfoRow({ icon: Icon, label, value }: { icon: typeof Mail; label: strin
 }
 
 function CompanyAdminAccessCard() {
+  const { data: session } = useSession();
   const [requested, setRequested] = useState(false);
 
-  if (MOCK_IS_COMPANY_ADMIN) {
+  if (session?.user?.isCompanyAdmin) {
     return (
       <Card className="mt-6">
         <p className="text-xs text-muted-text mb-3">Company Admin Access</p>
@@ -76,395 +60,52 @@ function CompanyAdminAccessCard() {
         Request Promotion to Company Admin
       </Button>
       {requested && (
-        <p className="text-xs text-supplier-purple-end mt-3 text-center">
-          Request submitted &mdash; pending approval
+        <p className="text-xs text-muted-text mt-3 text-center">
+          Not wired yet — there&apos;s no endpoint to submit this request (the
+          <code> promotionRequested</code> column exists but nothing writes to it). Tracked as a
+          backend gap.
         </p>
       )}
     </Card>
   );
 }
 
-function ProfileCard({
-  profile,
-  editing,
-  onToggleEdit,
-  onChange,
-}: {
-  profile: SupplierProfile;
-  editing: boolean;
-  onToggleEdit: () => void;
-  onChange: (field: "name" | "title" | "avatarUrl", value: string) => void;
-}) {
+export default function SupplierProfilePage() {
+  const { data: user, isLoading: userLoading } = useCurrentUser();
+  const { data: listings } = useSupplierListings();
+  const { data: bookings } = useSupplierBookings();
+  const [editing, setEditing] = useState(false);
+  const [nameEdit, setNameEdit] = useState<string | null>(null);
+  const [titleEdit, setTitleEdit] = useState<string | null>(null);
+  const [avatarEdit, setAvatarEdit] = useState<string | null>(null);
+
+  const name = nameEdit ?? user?.name ?? "";
+  const title = titleEdit ?? user?.title ?? "";
+  const avatarUrl = avatarEdit ?? user?.avatarUrl ?? null;
+
   function handleAvatarFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === "string") {
-        onChange("avatarUrl", reader.result);
-      }
+      if (typeof reader.result === "string") setAvatarEdit(reader.result);
     };
     reader.readAsDataURL(file);
   }
 
-  return (
-    <Card>
-      <div className="flex flex-col items-center text-center">
-        <div className="relative">
-          <div className="w-24 h-24 rounded-full bg-supplier-purple-start/20 text-supplier-purple-end border-4 border-supplier-purple-start/20 text-2xl font-semibold flex items-center justify-center overflow-hidden">
-            {profile.avatarUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={profile.avatarUrl} alt="" className="w-full h-full object-cover" />
-            ) : (
-              getInitials(profile.name)
-            )}
-          </div>
-          {editing && (
-            <label
-              className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-supplier-purple-start border-2 border-card flex items-center justify-center text-white cursor-pointer hover:bg-supplier-purple-end transition-colors"
-              aria-label="Upload avatar"
-            >
-              <Camera size={14} />
-              <input type="file" accept="image/*" className="hidden" onChange={handleAvatarFile} />
-            </label>
-          )}
-        </div>
-
-        <span className="inline-flex items-center gap-1.5 bg-gradient-to-r from-supplier-purple-start to-supplier-purple-end text-white rounded-full px-3 py-1 text-xs font-semibold mt-4">
-          <CheckCircle2 size={12} />
-          Verified Supplier
-        </span>
-
-        {editing ? (
-          <div className="w-full flex flex-col gap-4 mt-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-muted-text">Full Name</label>
-              <Input
-                value={profile.name}
-                onChange={(e) => onChange("name", e.target.value)}
-                className="w-full focus:!border-supplier-purple-start"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-muted-text">Job Title</label>
-              <Input
-                value={profile.title}
-                onChange={(e) => onChange("title", e.target.value)}
-                className="w-full focus:!border-supplier-purple-start"
-              />
-            </div>
-          </div>
-        ) : (
-          <>
-            <h2 className="text-lg font-semibold text-body-text mt-3">{profile.name}</h2>
-            <p className="text-muted-text text-sm mt-0.5">{profile.title}</p>
-          </>
-        )}
-
-        <div className="w-full flex flex-col gap-4 mt-6 text-left">
-          <InfoRow icon={Mail} label="Email" value={profile.email} />
-          <InfoRow icon={MapPin} label="Location" value={profile.location} />
-          <InfoRow icon={Calendar} label="Member Since" value={profile.memberSince} />
-        </div>
-
-        <Button variant="ghost" className="w-full mt-6" onClick={onToggleEdit}>
-          {editing ? "Cancel Editing" : "Edit Profile"}
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
-function FieldDisplay({
-  label,
-  value,
-  editing,
-  onChange,
-  multiline,
-}: {
-  label: string;
-  value: string;
-  editing: boolean;
-  onChange: (value: string) => void;
-  multiline?: boolean;
-}) {
-  if (editing) {
-    return (
-      <div>
-        <label className="text-xs text-muted-text">{label}</label>
-        {multiline ? (
-          <textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            rows={3}
-            className="w-full mt-1.5 bg-background border border-border/40 text-body-text placeholder:text-muted-text rounded p-4 focus:outline-none focus:border-supplier-purple-start transition-colors resize-none"
-          />
-        ) : (
-          <Input
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="w-full mt-1.5 focus:!border-supplier-purple-start"
-          />
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-w-0">
-      <p className="text-xs text-muted-text">{label}</p>
-      <p className={`text-sm text-body-text mt-1 ${multiline ? "" : "truncate"}`}>{value}</p>
-    </div>
-  );
-}
-
-function BusinessDetailsCard({
-  editing,
-  business,
-  setBusiness,
-}: {
-  editing: boolean;
-  business: BusinessDetails;
-  setBusiness: (updater: (b: BusinessDetails) => BusinessDetails) => void;
-}) {
-  return (
-    <Card>
-      <div className="flex items-center justify-between mb-5">
-        <h3 className="text-base font-semibold text-body-text">Business Details</h3>
-      </div>
-
-      <div className="flex flex-col gap-4">
-        <FieldDisplay
-          label="Business Name"
-          value={business.businessName}
-          editing={editing}
-          onChange={(v) => setBusiness((b) => ({ ...b, businessName: v }))}
-        />
-        <FieldDisplay
-          label="Business Registration Number"
-          value={business.businessRegistrationNumber}
-          editing={editing}
-          onChange={(v) => setBusiness((b) => ({ ...b, businessRegistrationNumber: v }))}
-        />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <FieldDisplay
-            label="Finance Contact Email"
-            value={business.financeContactEmail}
-            editing={editing}
-            onChange={(v) => setBusiness((b) => ({ ...b, financeContactEmail: v }))}
-          />
-          <FieldDisplay
-            label="Finance Contact Person Name"
-            value={business.financeContactPersonName}
-            editing={editing}
-            onChange={(v) => setBusiness((b) => ({ ...b, financeContactPersonName: v }))}
-          />
-        </div>
-        <FieldDisplay
-          label="Business Location"
-          value={business.businessLocation}
-          editing={editing}
-          onChange={(v) => setBusiness((b) => ({ ...b, businessLocation: v }))}
-        />
-      </div>
-    </Card>
-  );
-}
-
-function CompanyAdminDetailsCard({
-  editing,
-  companyAdmin,
-  setCompanyAdmin,
-}: {
-  editing: boolean;
-  companyAdmin: CompanyAdminDetails;
-  setCompanyAdmin: (updater: (c: CompanyAdminDetails) => CompanyAdminDetails) => void;
-}) {
-  return (
-    <Card>
-      <div className="flex items-center justify-between mb-5">
-        <h3 className="text-base font-semibold text-body-text">Company Admin Details</h3>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FieldDisplay
-          label="Company Registration Number"
-          value={companyAdmin.companyRegistrationNumber}
-          editing={editing}
-          onChange={(v) => setCompanyAdmin((c) => ({ ...c, companyRegistrationNumber: v }))}
-        />
-        <FieldDisplay
-          label="Phone"
-          value={companyAdmin.phone}
-          editing={editing}
-          onChange={(v) => setCompanyAdmin((c) => ({ ...c, phone: v }))}
-        />
-        <FieldDisplay
-          label="Finance Point of Contact"
-          value={companyAdmin.financePocName}
-          editing={editing}
-          onChange={(v) => setCompanyAdmin((c) => ({ ...c, financePocName: v }))}
-        />
-        <FieldDisplay
-          label="Finance POC Email"
-          value={companyAdmin.financePocEmail}
-          editing={editing}
-          onChange={(v) => setCompanyAdmin((c) => ({ ...c, financePocEmail: v }))}
-        />
-      </div>
-    </Card>
-  );
-}
-
-function StatRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-b-0">
-      <p className="text-sm text-muted-text">{label}</p>
-      <p className="text-sm font-semibold text-body-text">{value}</p>
-    </div>
-  );
-}
-
-function ListingStatsCard() {
-  return (
-    <Card>
-      <h3 className="text-base font-semibold text-body-text mb-2">Listing Stats</h3>
-      <div>
-        {MOCK_LISTING_STATS.map((stat) => (
-          <StatRow key={stat.label} label={stat.label} value={stat.value} />
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function InvoiceRow({ invoice }: { invoice: Invoice }) {
-  return (
-    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 py-3 border-b border-border/40 last:border-b-0">
-      <div className="min-w-0 md:w-40 shrink-0">
-        <p className="text-sm font-semibold text-body-text">{invoice.id}</p>
-      </div>
-      <div className="min-w-0 md:flex-1">
-        <p className="text-sm text-body-text truncate">{invoice.payer}</p>
-        <p className="text-xs text-muted-text truncate">{invoice.listing}</p>
-      </div>
-      <div className="min-w-0 md:w-28 shrink-0">
-        <p className="text-sm font-medium text-supplier-purple-end">{invoice.credits} cr</p>
-        <p className="text-xs text-muted-text">Due {invoice.dueDate}</p>
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <span
-          className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${INVOICE_STATUS_STYLES[invoice.status]}`}
-        >
-          {invoice.status}
-        </span>
-        <Button variant="ghost" className="h-9 px-4 text-sm">
-          View Details
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function AccountsReceivableCard() {
-  return (
-    <Card>
-      <h3 className="text-base font-semibold text-body-text mb-5">Accounts Receivable</h3>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div className="bg-gradient-to-r from-supplier-purple-start to-supplier-purple-end rounded p-5">
-          <p className="text-xs text-white/80">Total Receivable</p>
-          <p className="text-2xl font-bold text-white mt-1">
-            ${MOCK_RECEIVABLE_SUMMARY.totalReceivable.toLocaleString()}
-          </p>
-        </div>
-        <div className="bg-background border border-border/40 rounded p-5">
-          <div className="flex items-center justify-between">
-            <p className="text-xs text-muted-text">Overdue Amount</p>
-            {MOCK_RECEIVABLE_SUMMARY.overdueAmount > 0 && (
-              <span className="bg-error-red/15 text-error-red border border-error-red/30 rounded-full px-2 py-0.5 text-[10px] font-medium">
-                Action Required
-              </span>
-            )}
-          </div>
-          <p className="text-2xl font-bold text-error-red mt-1">
-            ${MOCK_RECEIVABLE_SUMMARY.overdueAmount.toLocaleString()}
-          </p>
-          <p className="text-xs text-muted-text mt-1">
-            {MOCK_RECEIVABLE_SUMMARY.overdueCount} overdue invoice
-            {MOCK_RECEIVABLE_SUMMARY.overdueCount === 1 ? "" : "s"}
-          </p>
-        </div>
-      </div>
-
-      <div>
-        {MOCK_INVOICES.map((invoice) => (
-          <InvoiceRow key={invoice.id} invoice={invoice} />
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function ReceiptRow({ receipt }: { receipt: Receipt }) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-3 border-b border-border/40 last:border-b-0">
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="w-9 h-9 rounded-full bg-supplier-purple-start/20 text-supplier-purple-end flex items-center justify-center shrink-0">
-          <ReceiptIcon size={16} />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-body-text truncate">{receipt.id}</p>
-          <p className="text-xs text-muted-text truncate">
-            {receipt.description} &middot; {receipt.date}
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <p className="text-sm font-medium text-supplier-purple-end">{receipt.credits} cr</p>
-        <button
-          type="button"
-          className="border border-border rounded p-2 text-muted-text hover:text-body-text transition-colors"
-        >
-          <Download size={14} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ReceiptsInvoicesCard() {
-  return (
-    <Card>
-      <h3 className="text-base font-semibold text-body-text mb-2 flex items-center gap-2">
-        <FileText size={16} className="text-muted-text" />
-        Receipts &amp; Invoices
-      </h3>
-      <div>
-        {MOCK_RECEIPTS.map((receipt) => (
-          <ReceiptRow key={`${receipt.id}-${receipt.date}`} receipt={receipt} />
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-export default function SupplierProfilePage() {
-  const [editing, setEditing] = useState(false);
-  const [profile, setProfile] = useState<SupplierProfile>(MOCK_SUPPLIER_PROFILE);
-  const [business, setBusiness] = useState<BusinessDetails>(MOCK_BUSINESS_DETAILS);
-  const [companyAdmin, setCompanyAdmin] = useState<CompanyAdminDetails>(MOCK_COMPANY_ADMIN_DETAILS);
-
-  function handleProfileChange(field: "name" | "title" | "avatarUrl", value: string) {
-    setProfile((p) => ({ ...p, [field]: field === "avatarUrl" && !value ? null : value }));
-  }
-
-  function handleSave() {
-    setEditing(false);
-  }
-
   function handleToggleEdit() {
+    if (!editing) {
+      setNameEdit(null);
+      setTitleEdit(null);
+      setAvatarEdit(null);
+    }
     setEditing((e) => !e);
+  }
+
+  const completedBookingsCount = (bookings ?? []).filter((b) => b.status === "completed").length;
+
+  if (userLoading) {
+    return <p className="text-sm text-muted-text text-center py-16">Loading profile…</p>;
   }
 
   return (
@@ -478,38 +119,115 @@ export default function SupplierProfilePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1">
-          <ProfileCard
-            profile={profile}
-            editing={editing}
-            onToggleEdit={handleToggleEdit}
-            onChange={handleProfileChange}
-          />
+          <Card>
+            <div className="flex flex-col items-center text-center">
+              <div className="relative">
+                <div className="w-24 h-24 rounded-full bg-supplier-purple-start/20 text-supplier-purple-end border-4 border-supplier-purple-start/20 text-2xl font-semibold flex items-center justify-center overflow-hidden">
+                  {avatarUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    getInitials(name || "?")
+                  )}
+                </div>
+                {editing && (
+                  <label
+                    className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-supplier-purple-start border-2 border-card flex items-center justify-center text-white cursor-pointer hover:bg-supplier-purple-end transition-colors"
+                    aria-label="Upload avatar"
+                  >
+                    <Camera size={14} />
+                    <input type="file" accept="image/*" className="hidden" onChange={handleAvatarFile} />
+                  </label>
+                )}
+              </div>
+
+              <span className="inline-flex items-center gap-1.5 bg-gradient-to-r from-supplier-purple-start to-supplier-purple-end text-white rounded-full px-3 py-1 text-xs font-semibold mt-4">
+                <CheckCircle2 size={12} />
+                Verified Supplier
+              </span>
+
+              {editing ? (
+                <div className="w-full flex flex-col gap-4 mt-4">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-muted-text">Full Name</label>
+                    <Input
+                      value={name}
+                      onChange={(e) => setNameEdit(e.target.value)}
+                      className="w-full focus:!border-supplier-purple-start"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs text-muted-text">Job Title</label>
+                    <Input
+                      value={title}
+                      onChange={(e) => setTitleEdit(e.target.value)}
+                      className="w-full focus:!border-supplier-purple-start"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <h2 className="text-lg font-semibold text-body-text mt-3">{name}</h2>
+                  <p className="text-muted-text text-sm mt-0.5">{title}</p>
+                </>
+              )}
+
+              <div className="w-full flex flex-col gap-4 mt-6 text-left">
+                <InfoRow icon={Mail} label="Email" value={user?.email ?? ""} />
+                <InfoRow icon={Building2} label="Company" value={user?.companyName ?? "—"} />
+                <InfoRow
+                  icon={Calendar}
+                  label="Member Since"
+                  value={
+                    user ? new Date(user.memberSince).toLocaleDateString("en-US", { month: "short", year: "numeric" }) : ""
+                  }
+                />
+              </div>
+
+              <Button variant="ghost" className="w-full mt-6" onClick={handleToggleEdit}>
+                {editing ? "Cancel Editing" : "Edit Profile"}
+              </Button>
+            </div>
+          </Card>
           <CompanyAdminAccessCard />
         </div>
 
         <div className="lg:col-span-2 flex flex-col gap-6">
-          <BusinessDetailsCard editing={editing} business={business} setBusiness={setBusiness} />
+          <Card>
+            <h3 className="text-base font-semibold text-body-text mb-2">Business Details</h3>
+            <p className="text-sm text-muted-text">
+              Not wired yet — the <code>Company</code> model has some overlapping fields (business
+              name/location/contact email) but no route exposes them for editing, and fields like
+              registration number and finance contact person have no backing columns at all. Tracked
+              as a backend gap.
+            </p>
+          </Card>
 
-          {MOCK_IS_COMPANY_ADMIN && (
-            <CompanyAdminDetailsCard
-              editing={editing}
-              companyAdmin={companyAdmin}
-              setCompanyAdmin={setCompanyAdmin}
-            />
-          )}
+          <Card>
+            <h3 className="text-base font-semibold text-body-text mb-2">Listing Stats</h3>
+            <div>
+              <div className="flex items-center justify-between py-2.5 border-b border-border/40">
+                <p className="text-sm text-muted-text">Total Listings</p>
+                <p className="text-sm font-semibold text-body-text">{(listings ?? []).length}</p>
+              </div>
+              <div className="flex items-center justify-between py-2.5 border-b border-border/40">
+                <p className="text-sm text-muted-text">Total Completed Bookings</p>
+                <p className="text-sm font-semibold text-body-text">{completedBookingsCount}</p>
+              </div>
+              <div className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-b-0">
+                <p className="text-sm text-muted-text">Average Rating</p>
+                <p className="text-sm text-muted-text italic">No rating system built yet</p>
+              </div>
+            </div>
+          </Card>
 
-          {editing && (
-            <Button
-              onClick={handleSave}
-              className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end w-fit self-end"
-            >
-              Save
-            </Button>
-          )}
-
-          <ListingStatsCard />
-          <AccountsReceivableCard />
-          <ReceiptsInvoicesCard />
+          <Card>
+            <h3 className="text-base font-semibold text-body-text mb-2">Accounts Receivable, Receipts &amp; Invoices</h3>
+            <p className="text-sm text-muted-text">
+              Not wired yet — there&apos;s no Invoice, Receipt, or payout concept in the schema at
+              all (Sprint 6&apos;s Stripe integration is unbuilt). Tracked as a backend gap.
+            </p>
+          </Card>
         </div>
       </div>
     </div>

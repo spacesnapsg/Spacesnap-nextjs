@@ -19,7 +19,14 @@ const bookingWithRelationsArgs = {
 
 export type BookingWithRelations = Prisma.BookingGetPayload<typeof bookingWithRelationsArgs>;
 
-export function serializeBooking(booking: Booking | BookingWithRelations) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const bookingWithRatingArgs = {
+  include: { listing: true, rating: true },
+} satisfies Prisma.BookingDefaultArgs;
+
+export type BookingWithRating = Prisma.BookingGetPayload<typeof bookingWithRatingArgs>;
+
+export function serializeBooking(booking: Booking | BookingWithRelations | BookingWithRating) {
   return {
     id: booking.id.toString(),
     userId: booking.userId,
@@ -34,13 +41,27 @@ export function serializeBooking(booking: Booking | BookingWithRelations) {
     ...("listing" in booking
       ? {
           listingName: booking.listing.name,
-          requiredCertificates: booking.listing.requiredCertificates.map((r) => ({
-            certificateId: r.certificate.id.toString(),
-            certificateName: r.certificate.name,
-          })),
+          listingType: booking.listing.type,
+          ...("requiredCertificates" in booking.listing
+            ? {
+                requiredCertificates: booking.listing.requiredCertificates.map((r) => ({
+                  certificateId: r.certificate.id.toString(),
+                  certificateName: r.certificate.name,
+                })),
+              }
+            : {}),
         }
       : {}),
-    ...("user" in booking ? { userName: booking.user.name, userEmail: booking.user.email } : {}),
+    ...("user" in booking
+      ? { userName: booking.user.name, userEmail: booking.user.email, userTitle: booking.user.title }
+      : {}),
+    ...("rating" in booking
+      ? {
+          rating: booking.rating
+            ? { id: booking.rating.id.toString(), score: booking.rating.score, comment: booking.rating.comment }
+            : null,
+        }
+      : {}),
   };
 }
 

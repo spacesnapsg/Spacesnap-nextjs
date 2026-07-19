@@ -237,6 +237,7 @@ model User {
   checkIns             CheckIn[]
   activityLogs         ActivityLog[]
   trainingEnrollments  TrainingEnrollment[]
+  ratings              Rating[]
 
   @@map("users")
 }
@@ -299,6 +300,7 @@ model Listing {
   bulkOrderRequests    BulkOrderRequest[]
   checkIns             CheckIn[]
   activityLogs         ActivityLog[]
+  ratings              Rating[]
 
   @@map("listings")
 }
@@ -444,8 +446,32 @@ model Booking {
 
   transactions Transaction[]
   checkIns     CheckIn[]
+  rating       Rating?
 
   @@map("bookings")
+}
+
+// New feature (not a port from the old Laravel API — no Review/Rating
+// concept existed there). One rating per booking (not per listing), so a
+// user booking the same listing multiple times can rate each stay
+// separately. listingId is denormalized off the booking at creation time so
+// average/count aggregates don't need a join through bookings. score is
+// constrained to 1-5 by a CHECK constraint (see the migration), matching
+// the star-rating UI already in components/RatingStars.tsx.
+model Rating {
+  id        BigInt   @id @default(autoincrement())
+  bookingId BigInt   @unique @map("booking_id")
+  userId    String   @map("user_id")
+  listingId BigInt   @map("listing_id")
+  score     Int
+  comment   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@map("ratings")
 }
 
 // Activity feed row for one hooked action. Sprint 3.5 new schema item — see

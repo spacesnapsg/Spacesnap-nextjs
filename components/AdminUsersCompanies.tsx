@@ -2,16 +2,16 @@
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
-import { Search, ChevronDown } from "lucide-react";
+import { Search } from "lucide-react";
 import Card from "@/components/Card";
 import {
-  MOCK_ADMIN_USERS,
-  MOCK_ADMIN_COMPANIES,
-  type AdminUser,
-  type AdminCompany,
+  useAdminUsers,
+  useSuspendUser,
+  useReinstateUser,
   type UserRole,
   type AccountStatus,
-} from "@/lib/mockAdminUsersCompanies";
+} from "@/lib/hooks/useAdminUsers";
+import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "users" | "companies";
 type RoleFilter = "all" | UserRole;
@@ -64,13 +64,22 @@ function StatusBadge({ status }: { status: AccountStatus }) {
   );
 }
 
-function ToggleStatusButton({ status, onClick }: { status: AccountStatus; onClick: () => void }) {
+function ToggleStatusButton({
+  status,
+  disabled,
+  onClick,
+}: {
+  status: AccountStatus;
+  disabled: boolean;
+  onClick: () => void;
+}) {
   const isActive = status === "active";
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className={`h-9 px-4 rounded text-sm font-medium border transition-colors ${
+      className={`h-9 px-4 rounded text-sm font-medium border transition-colors ${disabled ? "opacity-50 cursor-not-allowed" : ""} ${
         isActive
           ? "border-error-red text-error-red hover:bg-error-red/10"
           : "border-success-green text-success-green hover:bg-success-green/10"
@@ -81,23 +90,29 @@ function ToggleStatusButton({ status, onClick }: { status: AccountStatus; onClic
   );
 }
 
-function UsersTab({
-  users,
-  onToggleStatus,
-}: {
-  users: AdminUser[];
-  onToggleStatus: (id: number) => void;
-}) {
+function UsersTab() {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const query = search.trim().toLowerCase();
-  const filteredUsers = users.filter((u) => {
-    const matchesRole = roleFilter === "all" || u.role === roleFilter;
-    const matchesQuery =
-      !query || u.name.toLowerCase().includes(query) || u.email.toLowerCase().includes(query);
-    return matchesRole && matchesQuery;
+  const { data, isLoading, isError } = useAdminUsers({
+    role: roleFilter === "all" ? undefined : roleFilter,
+    search: search.trim() || undefined,
   });
+  const suspendUser = useSuspendUser();
+  const reinstateUser = useReinstateUser();
+
+  function handleToggleStatus(id: string, status: AccountStatus) {
+    setActionError(null);
+    const mutation = status === "active" ? suspendUser : reinstateUser;
+    mutation.mutate(id, {
+      onError: (error) => {
+        setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong.");
+      },
+    });
+  }
+
+  const users = data?.users ?? [];
 
   return (
     <Card>
@@ -135,103 +150,78 @@ function UsersTab({
         </div>
       </div>
 
-      {filteredUsers.length === 0 ? (
+      {actionError && <p className="text-sm text-error-red mt-4">{actionError}</p>}
+
+      {isLoading ? (
+        <p className="text-sm text-muted-text text-center py-12">Loading users…</p>
+      ) : isError ? (
+        <p className="text-sm text-error-red text-center py-12">Failed to load users.</p>
+      ) : users.length === 0 ? (
         <p className="text-sm text-muted-text text-center py-12">No users found</p>
       ) : (
-        <div className="overflow-x-auto mt-6">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-border">
-                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Name</th>
-                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Email</th>
-                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Role</th>
-                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Company</th>
-                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Member Since</th>
-                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Status</th>
-                <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredUsers.map((user) => (
-                <tr key={user.id} className="border-b border-border/60 last:border-0">
-                  <td className="py-3 px-3 text-sm text-body-text font-medium whitespace-nowrap">{user.name}</td>
-                  <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.email}</td>
-                  <td className="py-3 px-3">
-                    <RoleBadge role={user.role} />
-                  </td>
-                  <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.company || "—"}</td>
-                  <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.memberSince}</td>
-                  <td className="py-3 px-3">
-                    <StatusBadge status={user.status} />
-                  </td>
-                  <td className="py-3 px-3">
-                    <ToggleStatusButton status={user.status} onClick={() => onToggleStatus(user.id)} />
-                  </td>
+        <>
+          <div className="overflow-x-auto mt-6">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Name</th>
+                  <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Email</th>
+                  <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Role</th>
+                  <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Company</th>
+                  <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Member Since</th>
+                  <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Status</th>
+                  <th className="py-3 px-3 text-xs font-medium uppercase tracking-wide text-muted-text whitespace-nowrap">Action</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id} className="border-b border-border/60 last:border-0">
+                    <td className="py-3 px-3 text-sm text-body-text font-medium whitespace-nowrap">{user.name}</td>
+                    <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.email}</td>
+                    <td className="py-3 px-3">
+                      <RoleBadge role={user.role} />
+                    </td>
+                    <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">{user.companyName || "—"}</td>
+                    <td className="py-3 px-3 text-sm text-muted-text whitespace-nowrap">
+                      {new Date(user.createdAt).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+                    </td>
+                    <td className="py-3 px-3">
+                      <StatusBadge status={user.status} />
+                    </td>
+                    <td className="py-3 px-3">
+                      <ToggleStatusButton
+                        status={user.status}
+                        disabled={
+                          (suspendUser.isPending && suspendUser.variables === user.id) ||
+                          (reinstateUser.isPending && reinstateUser.variables === user.id)
+                        }
+                        onClick={() => handleToggleStatus(user.id, user.status)}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {data && data.meta.total > users.length && (
+            <p className="text-xs text-muted-text mt-4">
+              Showing {users.length} of {data.meta.total} — pagination isn&apos;t wired up yet in this UI.
+            </p>
+          )}
+        </>
       )}
     </Card>
   );
 }
 
-function CompanyRow({
-  company,
-  expanded,
-  onToggle,
-}: {
-  company: AdminCompany;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <div className="bg-background rounded p-4">
-      <button type="button" onClick={onToggle} className="w-full flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="font-medium text-body-text truncate">{company.name}</span>
-          <span className="shrink-0 inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs text-muted-text">
-            {company.suppliers.length} supplier{company.suppliers.length === 1 ? "" : "s"}
-          </span>
-        </div>
-        <ChevronDown size={18} className={`shrink-0 text-muted-text transition-transform ${expanded ? "rotate-180" : ""}`} />
-      </button>
-
-      {expanded && (
-        <div className="mt-4 flex flex-col gap-2 pl-4 border-l border-border">
-          {company.suppliers.map((supplier) => (
-            <div key={supplier.email} className="flex items-center justify-between gap-3 bg-card rounded px-3 py-2">
-              <div className="min-w-0">
-                <p className="text-sm text-body-text truncate">{supplier.name}</p>
-                <p className="text-xs text-muted-text truncate">{supplier.email}</p>
-              </div>
-              <StatusBadge status={supplier.status} />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CompaniesTab({
-  companies,
-  expandedIds,
-  onToggle,
-}: {
-  companies: AdminCompany[];
-  expandedIds: Set<number>;
-  onToggle: (id: number) => void;
-}) {
+function CompaniesTab() {
   return (
     <Card>
-      <h2 className="text-lg font-semibold text-body-text mb-6">All Companies</h2>
-      <div className="flex flex-col gap-3">
-        {companies.map((company) => (
-          <CompanyRow key={company.id} company={company} expanded={expandedIds.has(company.id)} onToggle={() => onToggle(company.id)} />
-        ))}
-      </div>
+      <h2 className="text-lg font-semibold text-body-text mb-2">All Companies</h2>
+      <p className="text-sm text-muted-text">
+        Not wired yet — there&apos;s no <code>GET /api/admin/companies</code> endpoint (with nested
+        supplier data) in the backend. Tracked as a backend gap.
+      </p>
     </Card>
   );
 }
@@ -239,30 +229,6 @@ function CompaniesTab({
 export default function AdminUsersCompanies() {
   const pathname = usePathname();
   const [activeTab, setActiveTab] = useState<MainTab>(pathname?.includes("companies") ? "companies" : "users");
-  const [users, setUsers] = useState<AdminUser[]>(MOCK_ADMIN_USERS);
-  const [expandedCompanyIds, setExpandedCompanyIds] = useState<Set<number>>(new Set());
-
-  // System Admin can suspend/reinstate ANY user regardless of role — this is a
-  // platform-wide action, separate from Company Admin's supplier-suspend
-  // feature (which is scoped to suppliers within their own company). These are
-  // two distinct features and should not be merged even though the UI looks similar.
-  function handleToggleStatus(id: number) {
-    // TODO: call PATCH /api/admin/users/{id}/suspend or /reinstate once the
-    // backend admin panel exists — this only updates local mock state for now.
-    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, status: u.status === "active" ? "suspended" : "active" } : u)));
-  }
-
-  function handleToggleCompany(id: number) {
-    setExpandedCompanyIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -288,11 +254,7 @@ export default function AdminUsersCompanies() {
         ))}
       </div>
 
-      {activeTab === "users" ? (
-        <UsersTab users={users} onToggleStatus={handleToggleStatus} />
-      ) : (
-        <CompaniesTab companies={MOCK_ADMIN_COMPANIES} expandedIds={expandedCompanyIds} onToggle={handleToggleCompany} />
-      )}
+      {activeTab === "users" ? <UsersTab /> : <CompaniesTab />}
     </div>
   );
 }

@@ -15,6 +15,7 @@ export function serializeCertificate(certificate: Certificate | CertificateWithC
     name: certificate.name,
     icon: certificate.icon,
     category: certificate.category,
+    earningMethod: certificate.earningMethod,
     submissionNotes: certificate.submissionNotes,
     source: certificate.source,
     status: certificate.status,

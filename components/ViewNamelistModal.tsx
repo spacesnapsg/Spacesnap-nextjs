@@ -1,3 +1,5 @@
+// TODO: still on mock data (lib/mockTutorials.ts) — waiting on this stack's port of
+// the old TrainingSessionController (session namelist/enrollment-listing endpoint).
 import { CheckCircle2, XCircle, Clock, type LucideIcon } from "lucide-react";
 import Modal from "./Modal";
 import type { TrainingSession, ParticipantStatus } from "@/lib/mockTutorials";

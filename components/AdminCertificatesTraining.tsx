@@ -7,16 +7,21 @@ import Button from "@/components/Button";
 import Input from "@/components/Input";
 import Modal from "@/components/Modal";
 import TrainingVideoModal, { type VideoFormRenderProps } from "@/components/TrainingVideoModal";
-import { VIDEO_CATEGORIES, type VideoCategory } from "@/lib/mockTutorials";
 import {
-  CERT_CATEGORIES,
-  MOCK_ADMIN_CERTIFICATES,
+  VIDEO_CATEGORIES,
   MOCK_ADMIN_TRAINING_VIDEOS,
-  type AdminCertificate,
+  type VideoCategory,
   type AdminTrainingVideo,
-  type CertCategory,
-  type CertStatus,
-} from "@/lib/mockAdminCertificates";
+} from "@/lib/mockTutorials";
+import {
+  useAdminCertificates,
+  useApproveCertificate,
+  useRejectCertificate,
+  useAdminCreateCertificate,
+  type AdminCertificate,
+  type CertificateStatus,
+} from "@/lib/hooks/useAdminCertificates";
+import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "certificates" | "training";
 
@@ -25,20 +30,20 @@ const MAIN_TABS: { id: MainTab; label: string }[] = [
   { id: "training", label: "Training Videos" },
 ];
 
-const CERT_STATUS_FILTERS: { id: "all" | CertStatus; label: string }[] = [
+const CERT_STATUS_FILTERS: { id: "all" | CertificateStatus; label: string }[] = [
   { id: "all", label: "All" },
   { id: "pending", label: "Pending" },
   { id: "approved", label: "Approved" },
   { id: "rejected", label: "Rejected" },
 ];
 
-const CERT_STATUS_LABELS: Record<CertStatus, string> = {
+const CERT_STATUS_LABELS: Record<CertificateStatus, string> = {
   pending: "Pending",
   approved: "Approved",
   rejected: "Rejected",
 };
 
-const CERT_STATUS_BADGE_STYLES: Record<CertStatus, string> = {
+const CERT_STATUS_BADGE_STYLES: Record<CertificateStatus, string> = {
   pending: "bg-amber/15 text-amber border-amber/30",
   approved: "bg-success-green/15 text-success-green border-success-green/30",
   rejected: "bg-error-red/15 text-error-red border-error-red/30",
@@ -53,7 +58,7 @@ function formatDate(value: string): string {
     : parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function CertStatusBadge({ status }: { status: CertStatus }) {
+function CertStatusBadge({ status }: { status: CertificateStatus }) {
   return (
     <span className={`inline-block shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium ${CERT_STATUS_BADGE_STYLES[status]}`}>
       {CERT_STATUS_LABELS[status]}
@@ -67,13 +72,18 @@ function CertificateRow({
   onToggleExpand,
   onApprove,
   onReject,
+  isMutating,
 }: {
   cert: AdminCertificate;
   expanded: boolean;
-  onToggleExpand: (id: number) => void;
-  onApprove: (id: number) => void;
-  onReject: (id: number) => void;
+  onToggleExpand: (id: string) => void;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+  isMutating: boolean;
 }) {
+  const submittedBy =
+    cert.source === "supplier_created" ? cert.createdByCompanyName ?? "Submitted by supplier" : "Added by Admin";
+
   return (
     <div className="py-4 border-b border-border/60 last:border-0">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -82,31 +92,33 @@ function CertificateRow({
             <p className="text-body-text font-bold">{cert.name}</p>
             <CertStatusBadge status={cert.status} />
           </div>
-          <p className="text-xs text-muted-text mt-1">{cert.submittedBy}</p>
+          <p className="text-xs text-muted-text mt-1">{submittedBy}</p>
 
-          {cert.description && (
+          {cert.submissionNotes && (
             <button type="button" onClick={() => onToggleExpand(cert.id)} className="text-left mt-2">
-              <p className={`text-sm text-muted-text ${expanded ? "" : "line-clamp-1"}`}>{cert.description}</p>
+              <p className={`text-sm text-muted-text ${expanded ? "" : "line-clamp-1"}`}>{cert.submissionNotes}</p>
               <span className="text-xs text-admin-orange-end mt-0.5 inline-block">{expanded ? "Show less" : "Show more"}</span>
             </button>
           )}
 
-          <p className="text-xs text-muted-text mt-2">Submitted {formatDate(cert.submittedDate)}</p>
+          <p className="text-xs text-muted-text mt-2">Submitted {formatDate(cert.createdAt)}</p>
         </div>
 
         {cert.status === "pending" && (
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
+              disabled={isMutating}
               onClick={() => onApprove(cert.id)}
-              className="h-9 px-4 rounded text-sm font-medium border border-success-green text-success-green hover:bg-success-green/10 transition-colors"
+              className={`h-9 px-4 rounded text-sm font-medium border border-success-green text-success-green hover:bg-success-green/10 transition-colors ${isMutating ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               Approve
             </button>
             <button
               type="button"
+              disabled={isMutating}
               onClick={() => onReject(cert.id)}
-              className="h-9 px-4 rounded text-sm font-medium border border-error-red text-error-red hover:bg-error-red/10 transition-colors"
+              className={`h-9 px-4 rounded text-sm font-medium border border-error-red text-error-red hover:bg-error-red/10 transition-colors ${isMutating ? "opacity-50 cursor-not-allowed" : ""}`}
             >
               Reject
             </button>
@@ -117,37 +129,34 @@ function CertificateRow({
   );
 }
 
-interface AddCertificateFormValues {
-  name: string;
-  category: CertCategory;
-  description: string;
-}
-
-function AddCertificateModal({
-  open,
-  onClose,
-  onSubmit,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (values: AddCertificateFormValues) => void;
-}) {
+function AddCertificateModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = useState("");
-  const [category, setCategory] = useState<CertCategory>(CERT_CATEGORIES[0]);
-  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [submissionNotes, setSubmissionNotes] = useState("");
+  const createCertificate = useAdminCreateCertificate();
 
   function handleClose() {
     setName("");
-    setCategory(CERT_CATEGORIES[0]);
-    setDescription("");
+    setCategory("");
+    setSubmissionNotes("");
+    createCertificate.reset();
     onClose();
   }
+
+  const errorMessage =
+    createCertificate.error instanceof ApiRequestError
+      ? createCertificate.error.message
+      : createCertificate.error
+        ? "Something went wrong."
+        : null;
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    onSubmit({ name: name.trim(), category, description: description.trim() });
-    handleClose();
+    createCertificate.mutate(
+      { name: name.trim(), category: category.trim() || null, submissionNotes: submissionNotes.trim() || null },
+      { onSuccess: handleClose }
+    );
   }
 
   return (
@@ -159,53 +168,48 @@ function AddCertificateModal({
           <Input value={name} onChange={(e) => setName(e.target.value)} required className="w-full focus:!border-admin-red-start" />
         </div>
         <div>
-          <label className="text-xs font-medium text-muted-text mb-1.5 block">Category</label>
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value as CertCategory)}
-            className="w-full bg-background border border-border/40 text-body-text rounded h-11 px-4 focus:outline-none focus:border-admin-red-start transition-colors"
-          >
-            {CERT_CATEGORIES.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
+          <label className="text-xs font-medium text-muted-text mb-1.5 block">Category (optional)</label>
+          <Input value={category} onChange={(e) => setCategory(e.target.value)} className="w-full focus:!border-admin-red-start" />
         </div>
         <div>
           <label className="text-xs font-medium text-muted-text mb-1.5 block">Description / Context</label>
           <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            value={submissionNotes}
+            onChange={(e) => setSubmissionNotes(e.target.value)}
             rows={3}
             className="w-full bg-background border border-border/40 text-body-text placeholder:text-muted-text rounded px-4 py-3 focus:outline-none focus:border-admin-red-start transition-colors resize-none"
           />
         </div>
-        <Button type="submit" className="!bg-gradient-to-r !from-admin-red-start !to-admin-orange-end mt-2">
-          Add Certificate
+
+        {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
+
+        <Button
+          type="submit"
+          disabled={createCertificate.isPending}
+          className={`!bg-gradient-to-r !from-admin-red-start !to-admin-orange-end mt-2 ${createCertificate.isPending ? "opacity-50 cursor-not-allowed" : ""}`}
+        >
+          {createCertificate.isPending ? "Adding…" : "Add Certificate"}
         </Button>
       </form>
     </Modal>
   );
 }
 
-function CertificatesTab({
-  certificates,
-  onApprove,
-  onReject,
-  onAddCertificate,
-}: {
-  certificates: AdminCertificate[];
-  onApprove: (id: number) => void;
-  onReject: (id: number) => void;
-  onAddCertificate: (values: AddCertificateFormValues) => void;
-}) {
-  const [statusFilter, setStatusFilter] = useState<"all" | CertStatus>("all");
+function CertificatesTab() {
+  const [statusFilter, setStatusFilter] = useState<"all" | CertificateStatus>("all");
   const [search, setSearch] = useState("");
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  function toggleExpand(id: number) {
+  const { data, isLoading, isError } = useAdminCertificates({
+    status: statusFilter === "all" ? undefined : statusFilter,
+    search: search.trim() || undefined,
+  });
+  const approveCertificate = useApproveCertificate();
+  const rejectCertificate = useRejectCertificate();
+
+  function toggleExpand(id: string) {
     setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -214,12 +218,21 @@ function CertificatesTab({
     });
   }
 
-  const query = search.trim().toLowerCase();
-  const filteredCertificates = certificates.filter((c) => {
-    const matchesStatus = statusFilter === "all" || c.status === statusFilter;
-    const matchesQuery = !query || c.name.toLowerCase().includes(query);
-    return matchesStatus && matchesQuery;
-  });
+  function handleApprove(id: string) {
+    setActionError(null);
+    approveCertificate.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  function handleReject(id: string) {
+    setActionError(null);
+    rejectCertificate.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  const certificates = data?.certificates ?? [];
 
   return (
     <>
@@ -261,19 +274,36 @@ function CertificatesTab({
         </div>
       </Card>
 
+      {actionError && <p className="text-sm text-error-red mt-4">{actionError}</p>}
+
       <Card className="mt-6">
-        {filteredCertificates.length === 0 ? (
+        {isLoading ? (
+          <p className="text-sm text-muted-text text-center py-12">Loading…</p>
+        ) : isError ? (
+          <p className="text-sm text-error-red text-center py-12">Failed to load certificates.</p>
+        ) : certificates.length === 0 ? (
           <p className="text-sm text-muted-text text-center py-12">No certificates found</p>
         ) : (
           <div>
-            {filteredCertificates.map((cert) => (
-              <CertificateRow key={cert.id} cert={cert} expanded={expandedIds.has(cert.id)} onToggleExpand={toggleExpand} onApprove={onApprove} onReject={onReject} />
+            {certificates.map((cert) => (
+              <CertificateRow
+                key={cert.id}
+                cert={cert}
+                expanded={expandedIds.has(cert.id)}
+                onToggleExpand={toggleExpand}
+                onApprove={handleApprove}
+                onReject={handleReject}
+                isMutating={
+                  (approveCertificate.isPending && approveCertificate.variables === cert.id) ||
+                  (rejectCertificate.isPending && rejectCertificate.variables === cert.id)
+                }
+              />
             ))}
           </div>
         )}
       </Card>
 
-      <AddCertificateModal open={addModalOpen} onClose={() => setAddModalOpen(false)} onSubmit={onAddCertificate} />
+      <AddCertificateModal open={addModalOpen} onClose={() => setAddModalOpen(false)} />
     </>
   );
 }
@@ -390,12 +420,14 @@ function VideoModal({
       }
     : EMPTY_ADMIN_VIDEO_FORM;
 
-  // Mock only — Sprint 3 wires this to POST/PATCH /admin/training-videos[/:id].
+  // TODO: still on mock data — waiting on this stack's port of the old
+  // TrainingVideoController (POST/PATCH /admin/training-videos[/:id]).
   async function saveVideo(values: AdminVideoFormValues, videoId: number | null): Promise<SavedAdminVideo> {
     return { id: videoId ?? Date.now(), ...values };
   }
 
-  // Mock only — Sprint 3 wires this to POST /admin/training-videos/:id/quiz-questions.
+  // TODO: still on mock data — waiting on this stack's port of the old
+  // QuizQuestionController (POST /admin/training-videos/:id/quiz-questions).
   async function saveQuiz(): Promise<void> {}
 
   return (
@@ -550,29 +582,7 @@ function TrainingVideosTab({
 
 export default function AdminCertificatesTraining() {
   const [activeTab, setActiveTab] = useState<MainTab>("certificates");
-  const [certificates, setCertificates] = useState<AdminCertificate[]>(MOCK_ADMIN_CERTIFICATES);
   const [videos, setVideos] = useState<AdminTrainingVideo[]>(MOCK_ADMIN_TRAINING_VIDEOS);
-
-  // TODO: call PATCH /admin/certificates/{id}/approve once the backend admin panel
-  // exists — this only updates local mock state for now.
-  function handleApprove(id: number) {
-    setCertificates((prev) => prev.map((c) => (c.id === id ? { ...c, status: "approved" } : c)));
-  }
-
-  // TODO: call PATCH /admin/certificates/{id}/reject once the backend admin panel
-  // exists — this only updates local mock state for now.
-  function handleReject(id: number) {
-    setCertificates((prev) => prev.map((c) => (c.id === id ? { ...c, status: "rejected" } : c)));
-  }
-
-  // TODO: call POST /admin/certificates once the backend admin panel exists — this
-  // only updates local mock state for now.
-  function handleAddCertificate({ name, category, description }: AddCertificateFormValues) {
-    setCertificates((prev) => [
-      { id: Date.now(), name, category, submittedBy: "Added by Admin", description, status: "approved", submittedDate: new Date().toISOString() },
-      ...prev,
-    ]);
-  }
 
   function handleVideoSaved(video: SavedAdminVideo) {
     setVideos((prev) => {
@@ -585,8 +595,8 @@ export default function AdminCertificatesTraining() {
     setVideos((prev) => prev.map((v) => (v.id === videoId ? { ...v, quiz: questions } : v)));
   }
 
-  // TODO: DELETE /admin/training-videos/{id} — Sprint 3 wires this once the backend
-  // admin panel exists; this only updates local mock state for now.
+  // TODO: still on mock data — waiting on this stack's port of the old
+  // TrainingVideoController (DELETE /admin/training-videos/{id}).
   function handleDeleteVideo(id: number) {
     setVideos((prev) => prev.filter((v) => v.id !== id));
   }
@@ -616,7 +626,7 @@ export default function AdminCertificatesTraining() {
       </div>
 
       {activeTab === "certificates" ? (
-        <CertificatesTab certificates={certificates} onApprove={handleApprove} onReject={handleReject} onAddCertificate={handleAddCertificate} />
+        <CertificatesTab />
       ) : (
         <TrainingVideosTab videos={videos} onVideoSaved={handleVideoSaved} onQuizSaved={handleQuizSaved} onDelete={handleDeleteVideo} />
       )}

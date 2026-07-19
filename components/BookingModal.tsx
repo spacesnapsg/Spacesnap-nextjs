@@ -1,23 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, Image as ImageIcon, MapPin, Minus, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Image as ImageIcon, MapPin } from "lucide-react";
 import Modal from "@/components/Modal";
 import Button from "@/components/Button";
-import type { Listing } from "@/lib/mockListings";
-
-const MOCK_CREDIT_BALANCE = 300;
+import { useCreateBooking, type BookingType, type Listing } from "@/lib/hooks/useListings";
+import { ApiRequestError } from "@/lib/api-client";
 
 const TYPE_BADGE_STYLES: Record<Listing["type"], string> = {
   space: "bg-user-teal-start/15 text-user-teal-end border-user-teal-start/30",
   equipment: "bg-purple-500/15 text-purple-400 border-purple-500/30",
-  consumable: "bg-amber/15 text-amber border-amber/30",
+  consumables: "bg-amber/15 text-amber border-amber/30",
 };
 
 const DURATIONS = [
-  { key: "day", label: "Daily", days: 1 },
-  { key: "week", label: "Weekly", days: 7 },
-  { key: "month", label: "Monthly", days: 30 },
+  { key: "daily", label: "Daily", days: 1 },
+  { key: "weekly", label: "Weekly", days: 7 },
+  { key: "monthly", label: "Monthly", days: 30 },
 ] as const;
 
 type DurationKey = (typeof DURATIONS)[number]["key"];
@@ -32,6 +31,10 @@ function addDays(date: Date, amount: number) {
   const result = new Date(date);
   result.setDate(result.getDate() + amount);
   return result;
+}
+
+function toDateString(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function isSameDay(a: Date | null, b: Date | null) {
@@ -165,27 +168,43 @@ interface BookingModalProps {
 }
 
 export default function BookingModal({ open, onClose, listing }: BookingModalProps) {
-  const [duration, setDuration] = useState<DurationKey>("day");
+  const [duration, setDuration] = useState<DurationKey>("daily");
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [quantity, setQuantity] = useState(1);
+  const createBooking = useCreateBooking();
 
   if (!open || !listing) return null;
 
-  const isConsumable = listing.type === "consumable";
   const activeDuration = DURATIONS.find((d) => d.key === duration) ?? DURATIONS[0];
 
-  const selectedPrice = isConsumable
-    ? listing.price_per_unit * quantity
-    : duration === "day"
-      ? listing.price_day
-      : duration === "week"
-        ? listing.price_week
-        : listing.price_month;
+  const selectedPrice =
+    duration === "daily" ? listing.priceDay : duration === "weekly" ? listing.priceWeek : listing.priceMonth;
 
-  const isInsufficient = MOCK_CREDIT_BALANCE < selectedPrice;
+  function handleClose() {
+    setDuration("daily");
+    setSelectedDate(null);
+    createBooking.reset();
+    onClose();
+  }
+
+  function handleConfirm() {
+    if (!selectedDate || !listing) return;
+    const endDate = addDays(selectedDate, activeDuration.days - 1);
+    createBooking.mutate(
+      {
+        listingId: listing.id,
+        bookingType: duration as BookingType,
+        startDate: toDateString(selectedDate),
+        endDate: toDateString(endDate),
+      },
+      { onSuccess: handleClose }
+    );
+  }
+
+  const errorMessage =
+    createBooking.error instanceof ApiRequestError ? createBooking.error.message : createBooking.error ? "Something went wrong." : null;
 
   return (
-    <Modal open={open} onClose={onClose} className="w-full max-w-[480px]">
+    <Modal open={open} onClose={handleClose} className="w-full max-w-[480px]">
       <div className="flex flex-col gap-5">
         <div className="flex gap-4 pr-6">
           <div className="h-20 w-20 shrink-0 rounded-xl bg-background flex items-center justify-center">
@@ -207,75 +226,42 @@ export default function BookingModal({ open, onClose, listing }: BookingModalPro
           </div>
         </div>
 
-        {isConsumable ? (
-          <div className="border-t border-border/40 pt-4">
-            <p className="text-sm text-muted-text mb-2">Quantity</p>
-            <div className="flex items-center gap-3">
+        <div className="border-t border-border/40 pt-4">
+          <p className="text-sm text-muted-text mb-2">Duration</p>
+          <div className="flex gap-2">
+            {DURATIONS.map((d) => (
               <button
+                key={d.key}
                 type="button"
-                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                aria-label="Decrease quantity"
-                className="h-9 w-9 flex items-center justify-center rounded border border-border text-muted-text hover:text-body-text hover:bg-background transition-colors"
+                onClick={() => setDuration(d.key)}
+                className={`flex-1 h-9 rounded-full text-sm font-medium border transition-colors ${
+                  duration === d.key
+                    ? "bg-user-teal-start text-white border-user-teal-start"
+                    : "bg-background border-border text-muted-text hover:text-body-text"
+                }`}
               >
-                <Minus size={14} />
+                {d.label}
               </button>
-              <span className="text-body-text font-medium w-8 text-center">{quantity}</span>
-              <button
-                type="button"
-                onClick={() => setQuantity((q) => q + 1)}
-                aria-label="Increase quantity"
-                className="h-9 w-9 flex items-center justify-center rounded border border-border text-muted-text hover:text-body-text hover:bg-background transition-colors"
-              >
-                <Plus size={14} />
-              </button>
-              <p className="text-sm text-muted-text ml-1">
-                × {listing.price_per_unit} cr / {listing.unit_label}
-              </p>
-            </div>
-            <p className="text-body-text font-medium mt-3">{selectedPrice} credits</p>
+            ))}
           </div>
-        ) : (
-          <>
-            <div className="border-t border-border/40 pt-4">
-              <p className="text-sm text-muted-text mb-2">Duration</p>
-              <div className="flex gap-2">
-                {DURATIONS.map((d) => (
-                  <button
-                    key={d.key}
-                    type="button"
-                    onClick={() => setDuration(d.key)}
-                    className={`flex-1 h-9 rounded-full text-sm font-medium border transition-colors ${
-                      duration === d.key
-                        ? "bg-user-teal-start text-white border-user-teal-start"
-                        : "bg-background border-border text-muted-text hover:text-body-text"
-                    }`}
-                  >
-                    {d.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-body-text font-medium mt-3">{selectedPrice} credits</p>
-            </div>
+          <p className="text-body-text font-medium mt-3">{selectedPrice} credits</p>
+        </div>
 
-            <DatePicker
-              durationDays={activeDuration.days}
-              selectedDate={selectedDate}
-              onSelectDate={setSelectedDate}
-            />
-          </>
-        )}
+        <DatePicker
+          durationDays={activeDuration.days}
+          selectedDate={selectedDate}
+          onSelectDate={setSelectedDate}
+        />
 
-        <p className={`text-sm ${isInsufficient ? "text-amber font-medium" : "text-muted-text"}`}>
-          Your balance: {MOCK_CREDIT_BALANCE} credits
-        </p>
+        {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
 
         <Button
           variant="primary"
-          disabled={isInsufficient}
-          onClick={onClose}
-          className={`w-full ${isInsufficient ? "opacity-50 cursor-not-allowed" : ""}`}
+          disabled={!selectedDate || createBooking.isPending}
+          onClick={handleConfirm}
+          className={`w-full ${!selectedDate || createBooking.isPending ? "opacity-50 cursor-not-allowed" : ""}`}
         >
-          {isConsumable ? "Confirm Purchase" : "Confirm Booking"}
+          {createBooking.isPending ? "Confirming…" : "Confirm Booking"}
         </Button>
       </div>
     </Modal>

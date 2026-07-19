@@ -21,7 +21,7 @@ export async function GET() {
     orderBy: { id: "asc" },
   });
 
-  return NextResponse.json({ listings: listings.map(serializeListing) });
+  return NextResponse.json({ listings: listings.map((listing) => serializeListing(listing)) });
 }
 
 export async function POST(request: NextRequest) {

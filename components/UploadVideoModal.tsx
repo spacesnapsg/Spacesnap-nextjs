@@ -1,5 +1,7 @@
 "use client";
 
+// TODO: still on mock data (lib/mockTutorials.ts) — waiting on this stack's port of
+// the old TrainingVideoController (supplier upload endpoint).
 import { useRef, useState, type FormEvent } from "react";
 import { Video, Image as ImageIcon } from "lucide-react";
 import TrainingVideoModal, { type VideoFormRenderProps } from "./TrainingVideoModal";

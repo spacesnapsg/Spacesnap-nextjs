@@ -6,15 +6,14 @@ import { Users, Building2, CalendarCheck, DollarSign, Award } from "lucide-react
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Modal from "@/components/Modal";
+import { useAdminUsers } from "@/lib/hooks/useAdminUsers";
 import {
-  MOCK_ADMIN_STATS,
-  MOCK_PENDING_BOOKINGS,
-  MOCK_PROMOTION_REQUESTS,
-  MOCK_PENDING_CERTIFICATES,
-  type PendingCertificate,
-} from "@/lib/mockAdminOverview";
-
-const STAT_ICONS = [Users, Building2, CalendarCheck, DollarSign];
+  usePendingCertificates,
+  useApproveCertificate,
+  useRejectCertificate,
+  type AdminCertificate,
+} from "@/lib/hooks/useAdminCertificates";
+import { ApiRequestError } from "@/lib/api-client";
 
 function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Users }) {
   return (
@@ -38,8 +37,8 @@ function ApprovalRow({
 }: {
   icon: typeof Users;
   label: string;
-  count: number;
-  onReview: () => void;
+  count: number | null;
+  onReview?: () => void;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 py-4 border-b border-border/60 last:border-0">
@@ -49,32 +48,45 @@ function ApprovalRow({
         </div>
         <div className="min-w-0">
           <p className="text-body-text font-medium truncate">{label}</p>
-          <p className="text-xs text-muted-text mt-0.5">{count} pending</p>
+          <p className="text-xs text-muted-text mt-0.5">
+            {count === null ? "not wired yet" : `${count} pending`}
+          </p>
         </div>
       </div>
       <div className="flex items-center gap-3 shrink-0">
-        <span className="text-lg font-semibold text-body-text w-8 text-right">{count}</span>
-        <Button variant="ghost" onClick={onReview} className="h-9 px-4 text-sm">
-          Review
-        </Button>
+        <span className="text-lg font-semibold text-body-text w-8 text-right">{count ?? "—"}</span>
+        {onReview && (
+          <Button variant="ghost" onClick={onReview} className="h-9 px-4 text-sm">
+            Review
+          </Button>
+        )}
       </div>
     </div>
   );
 }
 
-function CertificateReviewModal({
-  open,
-  onClose,
-  certificates,
-  onApprove,
-  onReject,
-}: {
-  open: boolean;
-  onClose: () => void;
-  certificates: PendingCertificate[];
-  onApprove: (id: number) => void;
-  onReject: (id: number) => void;
-}) {
+function CertificateReviewModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data: certificates } = usePendingCertificates();
+  const approveCertificate = useApproveCertificate();
+  const rejectCertificate = useRejectCertificate();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleApprove(id: string) {
+    setError(null);
+    approveCertificate.mutate(id, {
+      onError: (e) => setError(e instanceof ApiRequestError ? e.message : "Something went wrong."),
+    });
+  }
+
+  function handleReject(id: string) {
+    setError(null);
+    rejectCertificate.mutate(id, {
+      onError: (e) => setError(e instanceof ApiRequestError ? e.message : "Something went wrong."),
+    });
+  }
+
+  const list: AdminCertificate[] = certificates ?? [];
+
   return (
     <Modal open={open} onClose={onClose} className="w-full max-w-[560px]">
       <h2 className="text-xl font-semibold text-body-text mb-1">Pending Certificates</h2>
@@ -82,27 +94,35 @@ function CertificateReviewModal({
         Review supplier-submitted certificates before adding them to the pool.
       </p>
 
-      {certificates.length === 0 ? (
+      {error && <p className="text-sm text-error-red mb-4">{error}</p>}
+
+      {list.length === 0 ? (
         <p className="text-sm text-muted-text text-center py-8">No pending certificates.</p>
       ) : (
         <div className="flex flex-col gap-4">
-          {certificates.map((cert) => (
+          {list.map((cert) => (
             <div key={cert.id} className="border border-border rounded p-4">
               <p className="font-medium text-body-text">{cert.name}</p>
               <p className="text-xs text-muted-text mt-1">
                 {cert.category || "Uncategorized"}
                 {" · "}
-                {cert.source === "supplier_created" ? "Submitted by supplier" : cert.source}
+                {cert.source === "supplier_created" ? `Submitted by ${cert.createdByCompanyName ?? "supplier"}` : cert.source}
               </p>
-              <p className="text-sm text-body-text mt-2">{cert.context}</p>
+              {cert.submissionNotes && <p className="text-sm text-body-text mt-2">{cert.submissionNotes}</p>}
               <div className="flex items-center gap-2 mt-3">
                 <Button
-                  onClick={() => onApprove(cert.id)}
+                  disabled={approveCertificate.isPending && approveCertificate.variables === cert.id}
+                  onClick={() => handleApprove(cert.id)}
                   className="!bg-gradient-to-r !from-admin-red-start !to-admin-orange-end h-9 px-4 text-sm"
                 >
                   Approve
                 </Button>
-                <Button variant="ghost" onClick={() => onReject(cert.id)} className="h-9 px-4 text-sm">
+                <Button
+                  variant="ghost"
+                  disabled={rejectCertificate.isPending && rejectCertificate.variables === cert.id}
+                  onClick={() => handleReject(cert.id)}
+                  className="h-9 px-4 text-sm"
+                >
                   Reject
                 </Button>
               </div>
@@ -116,18 +136,12 @@ function CertificateReviewModal({
 
 export default function AdminOverviewPage() {
   const router = useRouter();
-  const [certificates, setCertificates] = useState<PendingCertificate[]>(MOCK_PENDING_CERTIFICATES);
   const [certModalOpen, setCertModalOpen] = useState(false);
+  const { data: usersData } = useAdminUsers();
+  const { data: pendingCertificates } = usePendingCertificates();
 
-  function handleApprove(id: number) {
-    setCertificates((prev) => prev.filter((c) => c.id !== id));
-  }
-
-  function handleReject(id: number) {
-    setCertificates((prev) => prev.filter((c) => c.id !== id));
-  }
-
-  const totalPending = MOCK_PENDING_BOOKINGS + MOCK_PROMOTION_REQUESTS + certificates.length;
+  const totalUsers = usersData?.meta.total;
+  const certCount = pendingCertificates?.length ?? 0;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -139,16 +153,22 @@ export default function AdminOverviewPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        {MOCK_ADMIN_STATS.map((stat, i) => (
-          <StatCard key={stat.label} label={stat.label} value={stat.value} icon={STAT_ICONS[i]} />
-        ))}
+        <StatCard label="Total Users" value={totalUsers === undefined ? "…" : String(totalUsers)} icon={Users} />
+        <StatCard label="Total Companies" value="—" icon={Building2} />
+        <StatCard label="Total Bookings" value="—" icon={CalendarCheck} />
+        <StatCard label="Platform Revenue" value="—" icon={DollarSign} />
       </div>
+      <p className="text-xs text-muted-text -mt-4 mb-8">
+        Total Companies, Total Bookings, and Platform Revenue aren&apos;t wired yet — there&apos;s no
+        admin-wide aggregation endpoint for companies, cross-supplier bookings, or platform revenue.
+        Tracked as a backend gap.
+      </p>
 
       <Card>
         <div className="flex items-center gap-2 mb-2">
           <h2 className="text-lg font-semibold text-body-text">Pending Approvals</h2>
           <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-gradient-to-r from-admin-red-start to-admin-orange-end text-white text-xs font-semibold">
-            {totalPending}
+            {certCount}
           </span>
         </div>
 
@@ -156,31 +176,25 @@ export default function AdminOverviewPage() {
           <ApprovalRow
             icon={CalendarCheck}
             label="Pending Bookings"
-            count={MOCK_PENDING_BOOKINGS}
+            count={null}
             onReview={() => router.push("/admin-approvals")}
           />
           <ApprovalRow
             icon={Building2}
             label="Company Admin Promotion Requests"
-            count={MOCK_PROMOTION_REQUESTS}
+            count={null}
             onReview={() => router.push("/admin-approvals")}
           />
           <ApprovalRow
             icon={Award}
             label="Pending Certificates"
-            count={certificates.length}
+            count={certCount}
             onReview={() => setCertModalOpen(true)}
           />
         </div>
       </Card>
 
-      <CertificateReviewModal
-        open={certModalOpen}
-        onClose={() => setCertModalOpen(false)}
-        certificates={certificates}
-        onApprove={handleApprove}
-        onReject={handleReject}
-      />
+      <CertificateReviewModal open={certModalOpen} onClose={() => setCertModalOpen(false)} />
     </div>
   );
 }

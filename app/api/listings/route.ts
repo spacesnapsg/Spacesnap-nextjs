@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ListingType } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { serializeListing } from "@/lib/listings";
+import { getListingRatingAggregates } from "@/lib/ratings";
 
 const LISTING_TYPES = new Set<string>(Object.values(ListingType));
 
@@ -38,9 +39,13 @@ export async function GET(request: NextRequest) {
           }
         : {}),
     },
-    include: { requiredCertificates: { include: { certificate: true } } },
+    include: { requiredCertificates: { include: { certificate: true } }, company: { select: { name: true } } },
     orderBy: { id: "asc" },
   });
 
-  return NextResponse.json({ listings: listings.map(serializeListing) });
+  const ratingAggregates = await getListingRatingAggregates(listings.map((l) => l.id));
+
+  return NextResponse.json({
+    listings: listings.map((listing) => serializeListing(listing, ratingAggregates.get(listing.id.toString()))),
+  });
 }

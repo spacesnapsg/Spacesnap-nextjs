@@ -7,11 +7,26 @@ interface RatingStarsProps {
   initialRating?: number;
   onRate?: (rating: number) => void;
   size?: number;
+  readOnly?: boolean;
 }
 
-export default function RatingStars({ initialRating = 0, onRate, size = 16 }: RatingStarsProps) {
+export default function RatingStars({ initialRating = 0, onRate, size = 16, readOnly = false }: RatingStarsProps) {
   const [rating, setRating] = useState(initialRating);
   const [hovered, setHovered] = useState(0);
+
+  if (readOnly) {
+    return (
+      <div className="flex items-center gap-0.5" aria-label={`Rated ${initialRating} out of 5 stars`}>
+        {[1, 2, 3, 4, 5].map((star) => (
+          <Star
+            key={star}
+            size={size}
+            className={star <= initialRating ? "fill-amber text-amber" : "text-muted-text"}
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-0.5" onMouseLeave={() => setHovered(0)}>

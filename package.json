@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "DOTENV_CONFIG_PATH=.env.testing tsx --test prisma/tests/db-constraints.test.ts lib/certificate-gating.test.ts lib/bookings.test.ts lib/bulk-orders.test.ts lib/wallet.test.ts lib/check-ins.test.ts lib/training-enrollments.test.ts",
+    "test": "DOTENV_CONFIG_PATH=.env.testing tsx --test prisma/tests/db-constraints.test.ts lib/certificate-gating.test.ts lib/bookings.test.ts lib/bulk-orders.test.ts lib/wallet.test.ts lib/check-ins.test.ts lib/training-enrollments.test.ts lib/ratings.test.ts",
     "test:db:migrate": "DOTENV_CONFIG_PATH=.env.testing prisma migrate deploy",
     "test:db:seed": "DOTENV_CONFIG_PATH=.env.testing prisma db seed",
     "test:db:setup": "npm run test:db:migrate && npm run test:db:seed"

@@ -19,9 +19,8 @@ import Input from "@/components/Input";
 import BookingModal from "@/components/BookingModal";
 import RequestPurchaseModal from "@/components/RequestPurchaseModal";
 import RatingDisplay from "@/components/RatingDisplay";
-import { MOCK_LISTINGS, MOCK_LISTING_RATINGS, type Listing, type ListingType } from "@/lib/mockListings";
-import { getCompanyName } from "@/lib/mockCompanies";
-import { MOCK_CERTIFICATES, MOCK_USER_CERTIFICATES } from "@/lib/mockPassport";
+import { useListings, type Listing, type ListingType } from "@/lib/hooks/useListings";
+import { useCredentials, isCredentialHeld, type Credential } from "@/lib/hooks/useCredentials";
 
 type TypeFilter = "all" | ListingType;
 type ViewMode = "grid" | "map";
@@ -30,26 +29,23 @@ const TYPE_FILTERS: { key: TypeFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "space", label: "Spaces" },
   { key: "equipment", label: "Equipment" },
-  { key: "consumable", label: "Consumables" },
+  { key: "consumables", label: "Consumables" },
 ];
 
 const TYPE_BADGE_STYLES: Record<ListingType, string> = {
   space: "bg-user-teal-start/15 text-user-teal-end border-user-teal-start/30",
   equipment: "bg-purple-500/15 text-purple-400 border-purple-500/30",
-  consumable: "bg-amber/15 text-amber border-amber/30",
+  consumables: "bg-amber/15 text-amber border-amber/30",
 };
 
-const EARNED_CERT_IDS = new Set(MOCK_USER_CERTIFICATES.map((uc) => uc.certificate_id));
-
 function isOutOfStock(listing: Listing) {
-  return listing.type === "consumable" && listing.stock_quantity <= 0;
+  return listing.type === "consumables" && (listing.stockQuantity ?? 0) <= 0;
 }
 
-function getMissingCertNames(listing: Listing) {
-  return listing.required_certificate_ids
-    .filter((id) => !EARNED_CERT_IDS.has(id))
-    .map((id) => MOCK_CERTIFICATES.find((cert) => cert.id === id)?.name)
-    .filter((name): name is string => !!name);
+function getMissingCertNames(listing: Listing, credentials: Credential[] | undefined) {
+  return (listing.requiredCertificates ?? [])
+    .filter((cert) => !isCredentialHeld(credentials, cert.id))
+    .map((cert) => cert.name);
 }
 
 interface ListingDetails {
@@ -60,13 +56,13 @@ interface ListingDetails {
   isCertMissing: boolean;
 }
 
-function getListingDetails(listing: Listing): ListingDetails {
-  const isConsumable = listing.type === "consumable";
+function getListingDetails(listing: Listing, credentials: Credential[] | undefined): ListingDetails {
+  const isConsumable = listing.type === "consumables";
   const isOutOfStockItem = isOutOfStock(listing);
-  const missingCertNames = getMissingCertNames(listing);
+  const missingCertNames = getMissingCertNames(listing, credentials);
 
   return {
-    isUnavailable: !listing.is_available,
+    isUnavailable: !listing.isAvailable,
     isConsumable,
     isOutOfStockItem,
     missingCertNames,
@@ -92,12 +88,9 @@ function ListingBody({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="font-semibold text-body-text leading-snug line-clamp-2">{listing.name}</h3>
-          {listing.type !== "consumable" && MOCK_LISTING_RATINGS[listing.id] && (
+          {listing.type !== "consumables" && listing.ratingCount > 0 && (
             <div className="mt-1">
-              <RatingDisplay
-                average={MOCK_LISTING_RATINGS[listing.id].average}
-                count={MOCK_LISTING_RATINGS[listing.id].count}
-              />
+              <RatingDisplay average={listing.averageRating ?? 0} count={listing.ratingCount} />
             </div>
           )}
         </div>
@@ -110,7 +103,7 @@ function ListingBody({
 
       <div className="flex items-center gap-1.5 text-xs text-muted-text min-w-0">
         <Building2 size={13} className="shrink-0" />
-        <span className="truncate">{getCompanyName(listing.company_id)}</span>
+        <span className="truncate">{listing.companyName ?? "Unknown supplier"}</span>
       </div>
 
       <div className="flex items-center gap-1.5 text-sm text-muted-text min-w-0">
@@ -135,34 +128,32 @@ function ListingBody({
           Requires: {missingCertNames.join(", ")}
         </span>
       ) : (
-        listing.type === "consumable" && (
+        listing.type === "consumables" && (
           <span className="inline-flex items-center gap-1.5 w-fit bg-background text-muted-text border border-border/60 rounded-full px-2.5 py-1 text-xs font-medium">
             <Package size={12} />
-            Pack Size: {listing.pack_size}
+            Pack Size: {listing.packSize}
           </span>
         )
       )}
 
-      {listing.type === "consumable" ? (
+      {listing.type === "consumables" ? (
         <div className="border-t border-border/40 pt-3 mt-1">
           <p className="text-muted-text text-xs">Price</p>
-          <p className="text-body-text font-medium">
-            {listing.price_per_unit} cr / {listing.unit_label}
-          </p>
+          <p className="text-body-text font-medium">{listing.pricePerUnit} cr / unit</p>
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-2 text-sm border-t border-border/40 pt-3 mt-1">
           <div>
             <p className="text-muted-text text-xs">Day</p>
-            <p className="text-body-text font-medium">{listing.price_day} cr</p>
+            <p className="text-body-text font-medium">{listing.priceDay} cr</p>
           </div>
           <div>
             <p className="text-muted-text text-xs">Week</p>
-            <p className="text-body-text font-medium">{listing.price_week} cr</p>
+            <p className="text-body-text font-medium">{listing.priceWeek} cr</p>
           </div>
           <div>
             <p className="text-muted-text text-xs">Month</p>
-            <p className="text-body-text font-medium">{listing.price_month} cr</p>
+            <p className="text-body-text font-medium">{listing.priceMonth} cr</p>
           </div>
         </div>
       )}
@@ -171,7 +162,7 @@ function ListingBody({
 
       <Button
         disabled={isUnavailable || isCertMissing}
-        onClick={() => (isOutOfStockItem ? onRequestPurchase(listing) : onBookNow(listing))}
+        onClick={() => (isConsumable ? onRequestPurchase(listing) : onBookNow(listing))}
         className={`w-full mt-1 ${
           isUnavailable
             ? "opacity-50 cursor-not-allowed"
@@ -194,14 +185,16 @@ function ListingBody({
 
 function ListingCard({
   listing,
+  credentials,
   onBookNow,
   onRequestPurchase,
 }: {
   listing: Listing;
+  credentials: Credential[] | undefined;
   onBookNow: (listing: Listing) => void;
   onRequestPurchase: (listing: Listing) => void;
 }) {
-  const details = getListingDetails(listing);
+  const details = getListingDetails(listing, credentials);
 
   return (
     <div className="bg-card border border-border/10 rounded-card overflow-hidden flex flex-col">
@@ -213,7 +206,7 @@ function ListingCard({
             Out of Stock
           </span>
         ) : (
-          listing.is_available && (
+          listing.isAvailable && (
             <span className="absolute top-3 left-3 flex items-center gap-1 bg-success-green/15 text-success-green border border-success-green/30 rounded-full px-2.5 py-1 text-xs font-medium">
               <CheckCircle2 size={12} />
               Available Now
@@ -249,16 +242,18 @@ const MAP_PIN_POSITIONS = [
 
 function MapView({
   listings,
+  credentials,
   onBookNow,
   onRequestPurchase,
 }: {
   listings: Listing[];
+  credentials: Credential[] | undefined;
   onBookNow: (listing: Listing) => void;
   onRequestPurchase: (listing: Listing) => void;
 }) {
-  const [activeId, setActiveId] = useState<number | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const activeListing = listings.find((listing) => listing.id === activeId) ?? null;
-  const activeDetails = activeListing ? getListingDetails(activeListing) : null;
+  const activeDetails = activeListing ? getListingDetails(activeListing, credentials) : null;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -294,9 +289,9 @@ function MapView({
                 }`}
               >
                 <MapPin size={12} />
-                {listing.type === "consumable"
-                  ? `${listing.price_per_unit} cr/${listing.unit_label}`
-                  : `${listing.price_day} cr/day`}
+                {listing.type === "consumables"
+                  ? `${listing.pricePerUnit} cr/unit`
+                  : `${listing.priceDay} cr/day`}
               </span>
               <span
                 className={`h-2 w-2 rotate-45 -mt-1 ${
@@ -319,41 +314,42 @@ function MapView({
                 {activeListing.type}
               </span>
             </div>
+            {activeListing.type !== "consumables" && activeListing.ratingCount > 0 && (
+              <RatingDisplay average={activeListing.averageRating ?? 0} count={activeListing.ratingCount} />
+            )}
             <div className="flex items-center gap-1.5 text-xs text-muted-text min-w-0">
               <Building2 size={13} className="shrink-0" />
-              <span className="truncate">{getCompanyName(activeListing.company_id)}</span>
+              <span className="truncate">{activeListing.companyName ?? "Unknown supplier"}</span>
             </div>
             <div className="flex items-center gap-1.5 text-sm text-muted-text min-w-0">
               <MapPin size={14} className="shrink-0" />
               <span className="truncate">{activeListing.location}</span>
             </div>
-            {activeListing.type === "consumable" ? (
+            {activeListing.type === "consumables" ? (
               <div className="border-t border-border/40 pt-3">
                 <p className="text-muted-text text-xs">Price</p>
-                <p className="text-body-text font-medium">
-                  {activeListing.price_per_unit} cr / {activeListing.unit_label}
-                </p>
+                <p className="text-body-text font-medium">{activeListing.pricePerUnit} cr / unit</p>
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-2 text-sm border-t border-border/40 pt-3">
                 <div>
                   <p className="text-muted-text text-xs">Day</p>
-                  <p className="text-body-text font-medium">{activeListing.price_day} cr</p>
+                  <p className="text-body-text font-medium">{activeListing.priceDay} cr</p>
                 </div>
                 <div>
                   <p className="text-muted-text text-xs">Week</p>
-                  <p className="text-body-text font-medium">{activeListing.price_week} cr</p>
+                  <p className="text-body-text font-medium">{activeListing.priceWeek} cr</p>
                 </div>
                 <div>
                   <p className="text-muted-text text-xs">Month</p>
-                  <p className="text-body-text font-medium">{activeListing.price_month} cr</p>
+                  <p className="text-body-text font-medium">{activeListing.priceMonth} cr</p>
                 </div>
               </div>
             )}
             <Button
               disabled={activeDetails.isUnavailable || activeDetails.isCertMissing}
               onClick={() =>
-                activeDetails.isOutOfStockItem ? onRequestPurchase(activeListing) : onBookNow(activeListing)
+                activeDetails.isConsumable ? onRequestPurchase(activeListing) : onBookNow(activeListing)
               }
               className={`w-full mt-1 ${
                 activeDetails.isUnavailable || activeDetails.isCertMissing
@@ -365,7 +361,7 @@ function MapView({
                 ? "Cert Required"
                 : activeDetails.isOutOfStockItem
                   ? "Request Purchase"
-                  : activeListing.type === "consumable"
+                  : activeListing.type === "consumables"
                     ? "Buy Now"
                     : "Book Now"}
             </Button>
@@ -389,17 +385,28 @@ export default function MarketplacePage() {
   const [bookingListing, setBookingListing] = useState<Listing | null>(null);
   const [requestListing, setRequestListing] = useState<Listing | null>(null);
 
+  const { data: listings, isLoading, isError } = useListings();
+  const { data: credentials } = useCredentials();
+
   const filteredListings = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return MOCK_LISTINGS.filter((listing) => {
+    return (listings ?? []).filter((listing) => {
       const matchesType = typeFilter === "all" || listing.type === typeFilter;
       const matchesQuery =
         query === "" ||
         listing.name.toLowerCase().includes(query) ||
-        listing.location.toLowerCase().includes(query);
+        (listing.location ?? "").toLowerCase().includes(query);
       return matchesType && matchesQuery;
     });
-  }, [typeFilter, search]);
+  }, [listings, typeFilter, search]);
+
+  if (isLoading) {
+    return <p className="text-sm text-muted-text text-center py-16">Loading listings…</p>;
+  }
+
+  if (isError) {
+    return <p className="text-sm text-error-red text-center py-16">Failed to load listings.</p>;
+  }
 
   return (
     <>
@@ -483,11 +490,6 @@ export default function MarketplacePage() {
             );
           })}
 
-          {typeFilter === "consumable" && (
-            <Button variant="ghost" className="ml-auto">
-              Bulk Order
-            </Button>
-          )}
         </div>
 
         {filteredListings.length === 0 ? (
@@ -498,6 +500,7 @@ export default function MarketplacePage() {
               <ListingCard
                 key={listing.id}
                 listing={listing}
+                credentials={credentials}
                 onBookNow={setBookingListing}
                 onRequestPurchase={setRequestListing}
               />
@@ -506,6 +509,7 @@ export default function MarketplacePage() {
         ) : (
           <MapView
             listings={filteredListings}
+            credentials={credentials}
             onBookNow={setBookingListing}
             onRequestPurchase={setRequestListing}
           />

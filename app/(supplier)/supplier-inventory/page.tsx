@@ -4,17 +4,13 @@ import { useState } from "react";
 import { Plus, MapPin, Image as ImageIcon } from "lucide-react";
 import Button from "@/components/Button";
 import AddEditListingModal from "@/components/AddEditListingModal";
-import {
-  MOCK_LISTINGS,
-  MOCK_CURRENT_SUPPLIER_ID,
-  type Listing,
-  type ListingType,
-} from "@/lib/mockListings";
+import { useSupplierListings, useToggleAvailability } from "@/lib/hooks/useSupplierListings";
+import type { Listing, ListingType } from "@/lib/hooks/useListings";
 
 const TYPE_BADGE_STYLES: Record<ListingType, string> = {
   space: "bg-body-text/10 text-body-text border-body-text/20",
   equipment: "bg-supplier-purple-start/15 text-supplier-purple-end border-supplier-purple-start/30",
-  consumable: "bg-amber/15 text-amber border-amber/30",
+  consumables: "bg-amber/15 text-amber border-amber/30",
 };
 
 type TypeFilter = "all" | ListingType;
@@ -23,19 +19,21 @@ const TYPE_FILTERS: { key: TypeFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "space", label: "Spaces" },
   { key: "equipment", label: "Equipment" },
-  { key: "consumable", label: "Consumables" },
+  { key: "consumables", label: "Consumables" },
 ];
 
 function ListingCard({
   listing,
   onEdit,
   onToggleAvailability,
+  isToggling,
 }: {
   listing: Listing;
   onEdit: (listing: Listing) => void;
-  onToggleAvailability: (id: number) => void;
+  onToggleAvailability: (id: string) => void;
+  isToggling: boolean;
 }) {
-  const isConsumable = listing.type === "consumable";
+  const isConsumable = listing.type === "consumables";
 
   return (
     <div className="bg-card border border-border/10 rounded-card overflow-hidden flex flex-col">
@@ -43,12 +41,12 @@ function ListingCard({
         <ImageIcon size={28} className="text-muted-text" />
         <span
           className={`absolute top-3 right-3 rounded-full border px-2.5 py-1 text-xs font-medium ${
-            listing.is_available
+            listing.isAvailable
               ? "bg-success-green/15 text-success-green border-success-green/30"
               : "bg-error-red/15 text-error-red border-error-red/30"
           }`}
         >
-          {listing.is_available ? "Available" : "Unavailable"}
+          {listing.isAvailable ? "Available" : "Unavailable"}
         </span>
       </div>
 
@@ -70,27 +68,27 @@ function ListingCard({
         {isConsumable ? (
           <div className="grid grid-cols-2 gap-2 text-sm border-t border-border/40 pt-3 mt-1">
             <div>
-              <p className="text-muted-text text-xs">Per {listing.unit_label || "Unit"}</p>
-              <p className="text-body-text font-medium">{listing.price_per_unit} cr</p>
+              <p className="text-muted-text text-xs">Per unit</p>
+              <p className="text-body-text font-medium">{listing.pricePerUnit} cr</p>
             </div>
             <div>
               <p className="text-muted-text text-xs">Stock</p>
-              <p className="text-body-text font-medium">{listing.stock_quantity}</p>
+              <p className="text-body-text font-medium">{listing.stockQuantity}</p>
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-2 text-sm border-t border-border/40 pt-3 mt-1">
             <div>
               <p className="text-muted-text text-xs">Day</p>
-              <p className="text-body-text font-medium">{listing.price_day} cr</p>
+              <p className="text-body-text font-medium">{listing.priceDay} cr</p>
             </div>
             <div>
               <p className="text-muted-text text-xs">Week</p>
-              <p className="text-body-text font-medium">{listing.price_week} cr</p>
+              <p className="text-body-text font-medium">{listing.priceWeek} cr</p>
             </div>
             <div>
               <p className="text-muted-text text-xs">Month</p>
-              <p className="text-body-text font-medium">{listing.price_month} cr</p>
+              <p className="text-body-text font-medium">{listing.priceMonth} cr</p>
             </div>
           </div>
         )}
@@ -101,14 +99,17 @@ function ListingCard({
           </Button>
           <button
             type="button"
+            disabled={isToggling}
             onClick={() => onToggleAvailability(listing.id)}
             className={`flex-1 h-9 rounded text-sm font-medium border transition-colors ${
-              listing.is_available
+              isToggling ? "opacity-50 cursor-not-allowed" : ""
+            } ${
+              listing.isAvailable
                 ? "bg-error-red/15 text-error-red border-error-red/30 hover:bg-error-red/25"
                 : "bg-supplier-purple-start/15 text-supplier-purple-end border-supplier-purple-start/30 hover:bg-supplier-purple-start/25"
             }`}
           >
-            {listing.is_available ? "Mark Unavailable" : "Mark Available"}
+            {listing.isAvailable ? "Mark Unavailable" : "Mark Available"}
           </button>
         </div>
       </div>
@@ -117,14 +118,13 @@ function ListingCard({
 }
 
 export default function SupplierInventoryPage() {
-  const [listings, setListings] = useState<Listing[]>(() =>
-    MOCK_LISTINGS.filter((listing) => listing.company_id === MOCK_CURRENT_SUPPLIER_ID)
-  );
+  const { data: listings, isLoading, isError } = useSupplierListings();
+  const toggleAvailability = useToggleAvailability();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingListing, setEditingListing] = useState<Listing | null>(null);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
 
-  const filteredListings = listings.filter(
+  const filteredListings = (listings ?? []).filter(
     (listing) => typeFilter === "all" || listing.type === typeFilter
   );
 
@@ -138,10 +138,12 @@ export default function SupplierInventoryPage() {
     setModalOpen(true);
   }
 
-  function toggleAvailability(id: number) {
-    setListings((prev) =>
-      prev.map((l) => (l.id === id ? { ...l, is_available: !l.is_available } : l))
-    );
+  if (isLoading) {
+    return <p className="text-sm text-muted-text text-center py-16">Loading inventory…</p>;
+  }
+
+  if (isError) {
+    return <p className="text-sm text-error-red text-center py-16">Failed to load inventory.</p>;
   }
 
   return (
@@ -191,7 +193,8 @@ export default function SupplierInventoryPage() {
               key={listing.id}
               listing={listing}
               onEdit={openEditModal}
-              onToggleAvailability={toggleAvailability}
+              onToggleAvailability={(id) => toggleAvailability.mutate(id)}
+              isToggling={toggleAvailability.isPending && toggleAvailability.variables === listing.id}
             />
           ))}
         </div>

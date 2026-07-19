@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { BookingStatus } from "@/app/generated/prisma/client";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError, unauthorizedResponse, validationErrorResponse } from "@/lib/api-errors";
@@ -13,6 +14,35 @@ import {
 } from "@/lib/bookings";
 
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
+const BOOKING_STATUSES = new Set<string>(Object.values(BookingStatus));
+
+// GET: the caller's own bookings (not company-scoped like /api/supplier/bookings).
+// New — needed for the "rate your past bookings" feature on the user dashboard,
+// same "no GET to list a user's own bookings" gap already tracked in the sprint
+// plan, closed here as part of that feature rather than left stubbed.
+export async function GET(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user) return unauthorizedResponse();
+
+  const status = new URL(request.url).searchParams.get("status");
+  if (status && !BOOKING_STATUSES.has(status)) {
+    return NextResponse.json(
+      { message: "status must be one of pending, confirmed, active, completed, cancelled." },
+      { status: 422 }
+    );
+  }
+
+  const bookings = await prisma.booking.findMany({
+    where: {
+      userId: session.user.id,
+      ...(status ? { status: status as BookingStatus } : {}),
+    },
+    include: { listing: true, rating: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return NextResponse.json({ bookings: bookings.map(serializeBooking) });
+}
 
 // POST: create a booking. Mirrors old BookingController::store's shape
 // (consumables rejection, cert-existence check, overlap-constraint 409), plus

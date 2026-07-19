@@ -4,53 +4,44 @@ import { useState, type FormEvent } from "react";
 import Modal from "@/components/Modal";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
+import { useSubmitCertificate } from "@/lib/hooks/useSupplierCertificates";
+import { ApiRequestError } from "@/lib/api-client";
 
 interface CertificateRequestModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (values: { name: string; context: string }) => Promise<void>;
 }
 
-export default function CertificateRequestModal({ open, onClose, onSubmit }: CertificateRequestModalProps) {
+export default function CertificateRequestModal({ open, onClose }: CertificateRequestModalProps) {
   const [name, setName] = useState("");
-  const [context, setContext] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState(false);
+  const [category, setCategory] = useState("");
+  const submitCertificate = useSubmitCertificate();
 
   function handleClose() {
     setName("");
-    setContext("");
-    setError("");
-    setSuccess(false);
+    setCategory("");
+    submitCertificate.reset();
     onClose();
   }
 
-  async function handleSubmit(e: FormEvent) {
+  const errorMessage =
+    submitCertificate.error instanceof ApiRequestError
+      ? submitCertificate.error.message
+      : submitCertificate.error
+        ? "Something went wrong."
+        : null;
+
+  function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setSuccess(false);
-
-    if (!name.trim() || !context.trim()) {
-      setError("Please fill in both fields before submitting.");
-      return;
-    }
-
-    setError("");
-    setSubmitting(true);
-    try {
-      await onSubmit({ name: name.trim(), context: context.trim() });
-      setName("");
-      setContext("");
-      setSuccess(true);
-      setTimeout(() => {
-        setSuccess(false);
-        onClose();
-      }, 1000);
-    } catch {
-      setError("Something went wrong submitting your request. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
+    if (!name.trim()) return;
+    submitCertificate.mutate(
+      { name: name.trim(), category: category.trim() || null },
+      {
+        onSuccess: () => {
+          setTimeout(handleClose, 1000);
+        },
+      }
+    );
   }
 
   return (
@@ -76,29 +67,29 @@ export default function CertificateRequestModal({ open, onClose, onSubmit }: Cer
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-body-text mb-1.5" htmlFor="cert-context">
-            Context / justification
+          <label className="block text-sm font-medium text-body-text mb-1.5" htmlFor="cert-category">
+            Category (optional)
           </label>
-          <textarea
-            id="cert-context"
-            rows={4}
-            value={context}
-            onChange={(e) => setContext(e.target.value)}
-            placeholder="Explain what this certificate covers and why it's needed"
-            required
-            className="w-full bg-background border border-border/40 text-body-text placeholder:text-muted-text rounded px-4 py-3 focus:outline-none focus:border-supplier-purple-start transition-colors resize-none"
+          <Input
+            id="cert-category"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            placeholder="e.g. Safety"
+            className="w-full focus:!border-supplier-purple-start"
           />
         </div>
 
-        {error && <p className="text-sm text-error-red">{error}</p>}
-        {success && <p className="text-sm text-success-green">Request submitted for review</p>}
+        {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
+        {submitCertificate.isSuccess && (
+          <p className="text-sm text-success-green">Request submitted for review</p>
+        )}
 
         <Button
           type="submit"
-          disabled={submitting}
+          disabled={submitCertificate.isPending}
           className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end w-full disabled:opacity-60"
         >
-          {submitting ? "Submitting..." : "Submit for Approval"}
+          {submitCertificate.isPending ? "Submitting..." : "Submit for Approval"}
         </Button>
       </form>
     </Modal>

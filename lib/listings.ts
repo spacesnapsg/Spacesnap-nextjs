@@ -1,6 +1,7 @@
 import { ListingType, Prisma, type Listing } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import type { ListingRatingAggregate } from "@/lib/ratings";
 
 // API contract uses the same field names as the Prisma model / DB columns
 // (type, priceDay, priceWeek, priceMonth, pricePerUnit, stockQuantity,
@@ -15,7 +16,7 @@ const LISTING_TYPES = new Set<string>(Object.values(ListingType));
 // standard Prisma pattern for typing a query's `include` shape.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const listingWithCertificatesArgs = {
-  include: { requiredCertificates: { include: { certificate: true } } },
+  include: { requiredCertificates: { include: { certificate: true } }, company: { select: { name: true } } },
 } satisfies Prisma.ListingDefaultArgs;
 
 export type ListingWithCertificates = Prisma.ListingGetPayload<typeof listingWithCertificatesArgs>;
@@ -33,10 +34,16 @@ function serializeDecimal(value: Listing["priceDay"]): number | null {
   return value === null ? null : Number(value);
 }
 
-export function serializeListing(listing: Listing | ListingWithCertificates) {
+export function serializeListing(
+  listing: Listing | ListingWithCertificates,
+  ratingAggregate?: ListingRatingAggregate
+) {
   return {
     id: listing.id.toString(),
     companyId: listing.companyId.toString(),
+    companyName: "company" in listing ? listing.company.name : undefined,
+    averageRating: ratingAggregate?.averageRating ?? null,
+    ratingCount: ratingAggregate?.ratingCount ?? 0,
     type: listing.type,
     name: listing.name,
     location: listing.location,

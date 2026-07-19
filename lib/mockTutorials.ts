@@ -166,3 +166,55 @@ export const SESSION_CERTIFICATE_OPTIONS: string[] = [
   "Chemical Handling Cert",
   "Radiation Safety Cert",
 ];
+
+export interface AdminTrainingVideo {
+  id: number;
+  title: string;
+  category: VideoCategory;
+  description: string;
+  duration: string;
+  thumbnailUrl: string;
+  videoUrl: string;
+  quiz?: QuizQuestion[];
+}
+
+// TODO: still on mock data — waiting on this stack's port of the old
+// TrainingVideoController (admin-side list/create/edit/delete).
+export const MOCK_ADMIN_TRAINING_VIDEOS: AdminTrainingVideo[] = [
+  {
+    id: 1,
+    title: "Platform-Wide Fire Safety & Emergency Exits",
+    category: "Safety",
+    description: "Baseline evacuation procedures required for every facility on the platform.",
+    duration: "6:15",
+    thumbnailUrl: "",
+    videoUrl: "",
+  },
+  {
+    id: 2,
+    title: "Shared Lab Access & House Rules",
+    category: "House Rules",
+    description: "Covers badge-in procedures, quiet hours, and shared-equipment courtesy expectations.",
+    duration: "3:47",
+    thumbnailUrl: "",
+    videoUrl: "",
+  },
+  {
+    id: 3,
+    title: "Autoclave Operation Guide",
+    category: "Equipment",
+    description: "Manufacturer-endorsed walkthrough for autoclave loading, cycle selection, and unloading.",
+    duration: "7:30",
+    thumbnailUrl: "",
+    videoUrl: "",
+  },
+  {
+    id: 4,
+    title: "PCR Technique Walkthrough",
+    category: "Techniques",
+    description: "Standard operating procedure for PCR setup shared across all supplier facilities.",
+    duration: "12:02",
+    thumbnailUrl: "",
+    videoUrl: "",
+  },
+];

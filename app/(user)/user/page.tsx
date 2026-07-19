@@ -1,21 +1,15 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
-import { Award, CalendarCheck, CalendarClock, MapPin, Wallet } from "lucide-react";
+import { CalendarCheck, MapPin, Wallet } from "lucide-react";
 import Card from "@/components/Card";
 import RatingStars from "@/components/RatingStars";
-import { MOCK_CURRENT_USER_WALLET } from "@/lib/mockWallet";
-import { MOCK_LISTINGS } from "@/lib/mockListings";
-import {
-  MOCK_ACTIVE_CHECK_INS,
-  MOCK_ACTIVITY_LOG,
-  MOCK_DASHBOARD_USERS,
-  MOCK_UPCOMING_BOOKINGS,
-  TOTAL_BOOKINGS,
-  type ActivityActionType,
-  type Booking,
-  type CheckIn,
-} from "@/lib/mockDashboard";
+import { useWallet } from "@/lib/hooks/useWallet";
+import { useUserBookings, useSubmitRating, type UserBooking } from "@/lib/hooks/useUserBookings";
+import { ApiRequestError } from "@/lib/api-client";
 
-const BOOKING_STATUS_STYLES: Record<Booking["status"], string> = {
+const BOOKING_STATUS_STYLES: Record<UserBooking["status"], string> = {
   pending: "bg-amber/15 text-amber border-amber/30",
   confirmed: "bg-success-green/15 text-success-green border-success-green/30",
   active: "bg-success-green/15 text-success-green border-success-green/30",
@@ -23,89 +17,67 @@ const BOOKING_STATUS_STYLES: Record<Booking["status"], string> = {
   cancelled: "bg-red-400/15 text-red-400 border-red-400/30",
 };
 
-const BOOKING_TYPE_LABELS: Record<Booking["booking_type"], string> = {
-  daily: "Full Day",
-  weekly: "Full Week",
-  monthly: "Full Month",
-};
-
-const ACTIVITY_STYLES: Record<ActivityActionType, { icon: typeof CalendarCheck; className: string }> = {
-  booking: { icon: CalendarCheck, className: "bg-user-teal-start/15 text-user-teal-end" },
-  certification: { icon: Award, className: "bg-amber/15 text-amber" },
-  checkin: { icon: MapPin, className: "bg-success-green/15 text-success-green" },
-};
-
 function formatDate(dateString: string) {
-  return new Date(dateString).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return new Date(dateString).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function formatRelativeTime(dateString: string) {
-  const diffDays = Math.round((Date.now() - new Date(dateString).getTime()) / (1000 * 60 * 60 * 24));
-  if (diffDays <= 0) return "Today";
-  if (diffDays === 1) return "1 day ago";
-  if (diffDays < 7) return `${diffDays} days ago`;
-  const weeks = Math.round(diffDays / 7);
-  return weeks === 1 ? "1 week ago" : `${weeks} weeks ago`;
-}
+function BookingActivityRow({ booking }: { booking: UserBooking }) {
+  const submitRating = useSubmitRating();
+  const [error, setError] = useState<string | null>(null);
 
-function getListingName(listingId: number) {
-  return MOCK_LISTINGS.find((listing) => listing.id === listingId)?.name ?? "Unknown Listing";
-}
+  function handleRate(score: number) {
+    setError(null);
+    submitRating.mutate(
+      { bookingId: booking.id, score },
+      {
+        onError: (e) => setError(e instanceof ApiRequestError ? e.message : "Something went wrong."),
+      }
+    );
+  }
 
-function isRentalBooking(activity: { action_type: ActivityActionType; related_listing_id: number | null }) {
-  if (activity.action_type !== "booking" || activity.related_listing_id == null) return false;
-  const listing = MOCK_LISTINGS.find((listing) => listing.id === activity.related_listing_id);
-  return listing?.type === "space" || listing?.type === "equipment";
-}
+  const canRate = booking.status === "completed" && booking.listingType !== "consumables";
 
-function getInitial(name: string) {
-  return name.charAt(0).toUpperCase();
-}
-
-function UpcomingBookingRow({ booking }: { booking: Booking }) {
   return (
-    <div className="flex items-center justify-between bg-background border border-border/60 rounded px-4 py-3">
+    <div className="flex items-center justify-between gap-3 py-3 border-b border-border/40 last:border-0">
       <div className="flex items-center gap-3 min-w-0">
-        <span className="h-9 w-9 shrink-0 rounded-full bg-card border border-border flex items-center justify-center">
-          <CalendarClock size={16} className="text-user-teal-end" />
+        <span className="h-9 w-9 shrink-0 rounded-full bg-user-teal-start/15 text-user-teal-end flex items-center justify-center">
+          <CalendarCheck size={16} />
         </span>
         <div className="min-w-0">
-          <p className="text-sm text-body-text font-medium truncate">{getListingName(booking.listing_id)}</p>
-          <p className="text-xs text-muted-text">
-            {formatDate(booking.start_date)} · {BOOKING_TYPE_LABELS[booking.booking_type]}
+          <p className="text-sm text-body-text font-medium truncate">{booking.listingName}</p>
+          <p className="text-xs text-muted-text flex items-center gap-1">
+            <MapPin size={11} />
+            {formatDate(booking.startDate)}
+            {booking.startDate !== booking.endDate ? ` – ${formatDate(booking.endDate)}` : ""}
           </p>
         </div>
       </div>
-      <span
-        className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${BOOKING_STATUS_STYLES[booking.status]}`}
-      >
-        {booking.status}
-      </span>
-    </div>
-  );
-}
 
-function ActiveUserAvatar({ checkIn }: { checkIn: CheckIn }) {
-  const name = MOCK_DASHBOARD_USERS.find((user) => user.id === checkIn.user_id)?.name ?? "Unknown";
-
-  return (
-    <div className="flex flex-col items-center gap-2 text-center w-20 shrink-0">
-      <span className="h-14 w-14 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center text-white font-semibold text-lg">
-        {getInitial(name)}
-      </span>
-      <div>
-        <p className="text-sm text-body-text font-medium truncate w-20">{name}</p>
-        <p className="text-xs text-muted-text truncate w-20">{getListingName(checkIn.listing_id)}</p>
+      <div className="flex flex-col items-end gap-1 shrink-0">
+        <span
+          className={`rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${BOOKING_STATUS_STYLES[booking.status]}`}
+        >
+          {booking.status}
+        </span>
+        {canRate &&
+          (booking.rating ? (
+            <RatingStars initialRating={booking.rating.score} size={14} readOnly />
+          ) : (
+            <div className="flex flex-col items-end gap-0.5">
+              <p className="text-xs text-muted-text">Rate this session</p>
+              <RatingStars onRate={handleRate} size={14} />
+              {error && <p className="text-xs text-error-red">{error}</p>}
+            </div>
+          ))}
       </div>
     </div>
   );
 }
 
 export default function UserDashboardPage() {
+  const { data: wallet, isLoading: walletLoading } = useWallet();
+  const { data: bookings, isLoading: bookingsLoading } = useUserBookings();
+
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
       <div className="mb-8">
@@ -118,76 +90,56 @@ export default function UserDashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
         <Card className="flex flex-col gap-4">
           <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center">
-            <CalendarCheck size={20} className="text-white" />
-          </div>
-          <div>
-            <p className="text-muted-text text-sm">Total Bookings</p>
-            <p className="text-2xl font-semibold text-body-text mt-1">{TOTAL_BOOKINGS}</p>
-          </div>
-        </Card>
-
-        <Card className="flex flex-col gap-4">
-          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center">
             <Wallet size={20} className="text-white" />
           </div>
           <div>
             <p className="text-muted-text text-sm">Credit Balance</p>
             <p className="text-2xl font-semibold text-body-text mt-1">
-              {MOCK_CURRENT_USER_WALLET.credit_balance} cr
+              {walletLoading ? "…" : `${wallet?.balance ?? 0} cr`}
             </p>
             <Link href="/wallet" className="text-xs text-user-teal-end hover:underline mt-2 inline-block">
               View Wallet
             </Link>
           </div>
         </Card>
+
+        <Card className="flex flex-col gap-4">
+          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center">
+            <CalendarCheck size={20} className="text-white" />
+          </div>
+          <div>
+            <p className="text-muted-text text-sm">Total Bookings</p>
+            <p className="text-2xl font-semibold text-body-text mt-1">
+              {bookingsLoading ? "…" : (bookings?.length ?? 0)}
+            </p>
+          </div>
+        </Card>
       </div>
 
       <Card className="mb-6">
-        <h2 className="text-lg font-semibold text-body-text mb-4">Upcoming Bookings</h2>
-        <div className="flex flex-col gap-3">
-          {MOCK_UPCOMING_BOOKINGS.map((booking) => (
-            <UpcomingBookingRow key={booking.id} booking={booking} />
-          ))}
-        </div>
-      </Card>
-
-      <Card className="mb-6">
-        <h2 className="text-lg font-semibold text-body-text">Currently Active</h2>
-        <p className="text-sm text-muted-text mb-5">See who&apos;s checked in right now</p>
-        <div className="flex gap-6 overflow-x-auto pb-1">
-          {MOCK_ACTIVE_CHECK_INS.map((checkIn) => (
-            <ActiveUserAvatar key={checkIn.id} checkIn={checkIn} />
-          ))}
-        </div>
+        <h2 className="text-lg font-semibold text-body-text mb-2">Currently Active</h2>
+        <p className="text-sm text-muted-text">
+          Not wired yet — there&apos;s no GET endpoint to list active check-ins (only POST create and
+          PATCH check-out exist). Tracked as a backend gap.
+        </p>
       </Card>
 
       <Card>
         <h2 className="text-lg font-semibold text-body-text mb-2">Recent Activity</h2>
-        <div className="flex flex-col">
-          {MOCK_ACTIVITY_LOG.map((activity) => {
-            const { icon: Icon, className } = ACTIVITY_STYLES[activity.action_type];
-            return (
-              <div
-                key={activity.id}
-                className="flex items-center gap-3 py-3 border-b border-border/40 last:border-0"
-              >
-                <span className={`h-9 w-9 shrink-0 rounded-full flex items-center justify-center ${className}`}>
-                  <Icon size={18} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm text-body-text font-medium truncate">{activity.description}</p>
-                  <p className="text-xs text-muted-text">{formatRelativeTime(activity.created_at)}</p>
-                </div>
-                {isRentalBooking(activity) && (
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <p className="text-xs text-muted-text">Please rate your session!</p>
-                    <RatingStars />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        <p className="text-sm text-muted-text mb-2">
+          Your recent bookings — rate a space or equipment once its booking is completed.
+        </p>
+        {bookingsLoading ? (
+          <p className="text-sm text-muted-text py-4">Loading…</p>
+        ) : !bookings || bookings.length === 0 ? (
+          <p className="text-sm text-muted-text py-4">No bookings yet.</p>
+        ) : (
+          <div className="flex flex-col">
+            {bookings.map((booking) => (
+              <BookingActivityRow key={booking.id} booking={booking} />
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );

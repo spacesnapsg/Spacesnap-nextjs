@@ -4,40 +4,34 @@ import { useState } from "react";
 import { CalendarCheck, Building2, Award } from "lucide-react";
 import Card from "@/components/Card";
 import {
-  MOCK_PENDING_BOOKINGS,
-  MOCK_PENDING_PROMOTIONS,
-  type PendingBooking,
-  type PendingPromotion,
-} from "@/lib/mockAdminApprovals";
-import { MOCK_PENDING_CERTIFICATES, type PendingCertificate } from "@/lib/mockAdminOverview";
+  usePendingCertificates,
+  useApproveCertificate,
+  useRejectCertificate,
+} from "@/lib/hooks/useAdminCertificates";
+import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "bookings" | "promotions" | "certificates";
 
-function formatDate(value: string): string {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime())
-    ? value
-    : parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-function ApproveButton({ onClick }: { onClick: () => void }) {
+function ApproveButton({ disabled, onClick }: { disabled?: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className="h-9 px-4 rounded text-sm font-medium border border-success-green text-success-green hover:bg-success-green/10 transition-colors"
+      className={`h-9 px-4 rounded text-sm font-medium border border-success-green text-success-green hover:bg-success-green/10 transition-colors ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
     >
       Approve
     </button>
   );
 }
 
-function RejectButton({ onClick }: { onClick: () => void }) {
+function RejectButton({ disabled, onClick }: { disabled?: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className="h-9 px-4 rounded text-sm font-medium border border-error-red text-error-red hover:bg-error-red/10 transition-colors"
+      className={`h-9 px-4 rounded text-sm font-medium border border-error-red text-error-red hover:bg-error-red/10 transition-colors ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
     >
       Reject
     </button>
@@ -48,77 +42,57 @@ function EmptyState({ label }: { label: string }) {
   return <p className="text-sm text-muted-text text-center py-12">No pending {label}</p>;
 }
 
-function BookingsTab({ bookings, onApprove, onReject }: { bookings: PendingBooking[]; onApprove: (id: number) => void; onReject: (id: number) => void }) {
-  if (bookings.length === 0) return <EmptyState label="bookings" />;
-  return (
-    <div>
-      {bookings.map((b) => (
-        <div key={b.id} className="py-4 border-b border-border/60 last:border-0">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <p className="text-body-text font-bold">{b.listing}</p>
-              <p className="text-xs text-muted-text mt-1">
-                {b.user} · {b.company}
-              </p>
-              <p className="text-sm text-muted-text mt-2">
-                {b.dateRange} · {b.bookingType} · {b.credits} cr
-              </p>
-              <p className="text-xs text-muted-text mt-2">Submitted {formatDate(b.submittedDate)}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <ApproveButton onClick={() => onApprove(b.id)} />
-              <RejectButton onClick={() => onReject(b.id)} />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+function GapNote({ children }: { children: React.ReactNode }) {
+  return <p className="text-sm text-muted-text py-8">{children}</p>;
 }
 
-function PromotionsTab({ promotions, onApprove, onReject }: { promotions: PendingPromotion[]; onApprove: (id: number) => void; onReject: (id: number) => void }) {
-  if (promotions.length === 0) return <EmptyState label="promotion requests" />;
-  return (
-    <div>
-      {promotions.map((p) => (
-        <div key={p.id} className="py-4 border-b border-border/60 last:border-0">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <p className="text-body-text font-bold">{p.name}</p>
-              <p className="text-xs text-muted-text mt-1">
-                {p.email} · {p.company}
-              </p>
-              <p className="text-sm text-muted-text mt-2">Requesting Company Admin access</p>
-              <p className="text-xs text-muted-text mt-2">Submitted {formatDate(p.submittedDate)}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <ApproveButton onClick={() => onApprove(p.id)} />
-              <RejectButton onClick={() => onReject(p.id)} />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+function CertificatesTab() {
+  const { data: certificates, isLoading, isError } = usePendingCertificates();
+  const approveCertificate = useApproveCertificate();
+  const rejectCertificate = useRejectCertificate();
+  const [actionError, setActionError] = useState<string | null>(null);
 
-function CertificatesTab({ certificates, onApprove, onReject }: { certificates: PendingCertificate[]; onApprove: (id: number) => void; onReject: (id: number) => void }) {
-  if (certificates.length === 0) return <EmptyState label="certificates" />;
+  function handleApprove(id: string) {
+    setActionError(null);
+    approveCertificate.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  function handleReject(id: string) {
+    setActionError(null);
+    rejectCertificate.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  if (isLoading) return <p className="text-sm text-muted-text text-center py-12">Loading…</p>;
+  if (isError) return <p className="text-sm text-error-red text-center py-12">Failed to load.</p>;
+  if (!certificates || certificates.length === 0) return <EmptyState label="certificates" />;
+
   return (
     <div>
+      {actionError && <p className="text-sm text-error-red mb-4">{actionError}</p>}
       {certificates.map((c) => (
         <div key={c.id} className="py-4 border-b border-border/60 last:border-0">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="min-w-0 flex-1">
               <p className="text-body-text font-bold">{c.name}</p>
               <p className="text-xs text-muted-text mt-1">
-                {c.category || "Uncategorized"} · {c.source === "supplier_created" ? "Submitted by supplier" : c.source}
+                {c.category || "Uncategorized"} ·{" "}
+                {c.source === "supplier_created" ? `Submitted by ${c.createdByCompanyName ?? "supplier"}` : c.source}
               </p>
-              <p className="text-sm text-muted-text mt-2">{c.context}</p>
+              {c.submissionNotes && <p className="text-sm text-muted-text mt-2">{c.submissionNotes}</p>}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <ApproveButton onClick={() => onApprove(c.id)} />
-              <RejectButton onClick={() => onReject(c.id)} />
+              <ApproveButton
+                disabled={approveCertificate.isPending && approveCertificate.variables === c.id}
+                onClick={() => handleApprove(c.id)}
+              />
+              <RejectButton
+                disabled={rejectCertificate.isPending && rejectCertificate.variables === c.id}
+                onClick={() => handleReject(c.id)}
+              />
             </div>
           </div>
         </div>
@@ -129,29 +103,12 @@ function CertificatesTab({ certificates, onApprove, onReject }: { certificates: 
 
 export default function AdminApprovals() {
   const [activeTab, setActiveTab] = useState<MainTab>("bookings");
-  const [bookings, setBookings] = useState<PendingBooking[]>(MOCK_PENDING_BOOKINGS);
-  const [promotions, setPromotions] = useState<PendingPromotion[]>(MOCK_PENDING_PROMOTIONS);
-  const [certificates, setCertificates] = useState<PendingCertificate[]>(MOCK_PENDING_CERTIFICATES);
-
-  // TODO: call PATCH /admin/bookings/{id}/approve|reject once the backend admin panel exists.
-  function handleBookingDecision(id: number) {
-    setBookings((prev) => prev.filter((b) => b.id !== id));
-  }
-
-  // TODO: call PATCH /admin/promotions/{id}/approve|reject once the backend admin panel exists.
-  function handlePromotionDecision(id: number) {
-    setPromotions((prev) => prev.filter((p) => p.id !== id));
-  }
-
-  // TODO: call PATCH /admin/certificates/{id}/approve|reject once the backend admin panel exists.
-  function handleCertificateDecision(id: number) {
-    setCertificates((prev) => prev.filter((c) => c.id !== id));
-  }
+  const { data: pendingCertificates } = usePendingCertificates();
 
   const MAIN_TABS: { id: MainTab; label: string; count: number; icon: typeof CalendarCheck }[] = [
-    { id: "bookings", label: "Bookings", count: bookings.length, icon: CalendarCheck },
-    { id: "promotions", label: "Promotions", count: promotions.length, icon: Building2 },
-    { id: "certificates", label: "Certificates", count: certificates.length, icon: Award },
+    { id: "bookings", label: "Bookings", count: 0, icon: CalendarCheck },
+    { id: "promotions", label: "Promotions", count: 0, icon: Building2 },
+    { id: "certificates", label: "Certificates", count: pendingCertificates?.length ?? 0, icon: Award },
   ];
 
   const activeTabMeta = MAIN_TABS.find((t) => t.id === activeTab)!;
@@ -195,9 +152,21 @@ export default function AdminApprovals() {
           <h2 className="text-lg font-semibold text-body-text">{activeTabMeta.label}</h2>
         </div>
 
-        {activeTab === "bookings" && <BookingsTab bookings={bookings} onApprove={handleBookingDecision} onReject={handleBookingDecision} />}
-        {activeTab === "promotions" && <PromotionsTab promotions={promotions} onApprove={handlePromotionDecision} onReject={handlePromotionDecision} />}
-        {activeTab === "certificates" && <CertificatesTab certificates={certificates} onApprove={handleCertificateDecision} onReject={handleCertificateDecision} />}
+        {activeTab === "bookings" && (
+          <GapNote>
+            Not wired yet — there&apos;s no admin-level booking approval concept in this backend.
+            Bookings are confirmed/declined by the supplier who owns the listing (Requests page), not
+            by a system admin. Tracked as a backend gap in case an admin-override flow is wanted.
+          </GapNote>
+        )}
+        {activeTab === "promotions" && (
+          <GapNote>
+            Not wired yet — there&apos;s no <code>GET /api/admin/promotions/pending</code> or
+            approve/reject route. The <code>promotionRequested</code> column exists on{" "}
+            <code>users</code> but nothing reads or writes it yet. Tracked as a backend gap.
+          </GapNote>
+        )}
+        {activeTab === "certificates" && <CertificatesTab />}
       </Card>
     </div>
   );

@@ -1,22 +1,19 @@
-import { DollarSign, CalendarCheck, Package, Star } from "lucide-react";
+"use client";
+
+import { CalendarCheck, Package } from "lucide-react";
 import Card from "@/components/Card";
-import {
-  MOCK_SUPPLIER_STATS,
-  MOCK_REVENUE_BARS,
-  MOCK_SUPPLIER_RECENT_BOOKINGS,
-  type SupplierBookingStatus,
-} from "@/lib/mockSupplierDashboard";
+import { useSupplierBookings, type BookingStatus } from "@/lib/hooks/useSupplierBookings";
+import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
 
-const STAT_ICONS = [DollarSign, CalendarCheck, Package, Star];
-
-const STATUS_STYLES: Record<SupplierBookingStatus, string> = {
+const STATUS_STYLES: Record<BookingStatus, string> = {
+  pending: "bg-muted-text/15 text-muted-text border-border",
   confirmed: "bg-success-green/15 text-success-green border-success-green/30",
   active: "bg-success-green/15 text-success-green border-success-green/30",
-  pending: "bg-muted-text/15 text-muted-text border-border",
+  completed: "bg-white/10 text-body-text border-white/20",
   cancelled: "bg-error-red/15 text-error-red border-error-red/30",
 };
 
-function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof DollarSign }) {
+function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof CalendarCheck }) {
   return (
     <Card className="flex flex-col gap-4">
       <div className="w-11 h-11 rounded-full bg-gradient-to-br from-supplier-purple-start to-supplier-purple-end flex items-center justify-center">
@@ -31,6 +28,14 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: string; 
 }
 
 export default function SupplierAnalyticsPage() {
+  const { data: bookings, isLoading: bookingsLoading } = useSupplierBookings();
+  const { data: listings, isLoading: listingsLoading } = useSupplierListings();
+
+  const activeBookings = (bookings ?? []).filter((b) => b.status === "active" || b.status === "confirmed").length;
+  const recentBookings = [...(bookings ?? [])]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 10);
+
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
       <div className="mb-8">
@@ -40,66 +45,68 @@ export default function SupplierAnalyticsPage() {
         <p className="text-muted-text mt-1">Track your listings performance</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        {MOCK_SUPPLIER_STATS.map((stat, i) => (
-          <StatCard key={stat.label} label={stat.label} value={stat.value} icon={STAT_ICONS[i]} />
-        ))}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+        <StatCard
+          label="Active Bookings"
+          value={bookingsLoading ? "…" : String(activeBookings)}
+          icon={CalendarCheck}
+        />
+        <StatCard
+          label="Total Listings"
+          value={listingsLoading ? "…" : String((listings ?? []).length)}
+          icon={Package}
+        />
       </div>
 
       <Card className="mb-8">
-        <h2 className="text-lg font-semibold text-body-text mb-6">Revenue Over Time</h2>
-        <div className="flex items-end gap-4 h-44 px-2">
-          {MOCK_REVENUE_BARS.map((height, i) => (
-            <div
-              key={i}
-              className="flex-1 rounded-t-lg bg-gradient-to-t from-supplier-purple-end to-supplier-purple-start"
-              style={{ height: `${height}%` }}
-            />
-          ))}
-        </div>
-        <div className="flex gap-4 px-2 mt-2">
-          {MOCK_REVENUE_BARS.map((_, i) => (
-            <span key={i} className="flex-1 text-center text-xs text-muted-text">
-              W{i + 1}
-            </span>
-          ))}
-        </div>
+        <h2 className="text-lg font-semibold text-body-text mb-2">Revenue Over Time</h2>
+        <p className="text-sm text-muted-text">
+          Not wired yet — there&apos;s no revenue-by-supplier aggregation endpoint (the transaction
+          ledger is keyed by user, not by company). Tracked as a backend gap, same bucket as
+          admin financials.
+        </p>
       </Card>
 
       <Card>
         <h2 className="text-lg font-semibold text-body-text mb-6">Recent Bookings</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-sm">
-            <thead>
-              <tr className="text-left text-muted-text border-b border-border/60">
-                <th className="pb-3 pr-4 font-medium whitespace-nowrap">User Name</th>
-                <th className="pb-3 pr-4 font-medium whitespace-nowrap">Listing Name</th>
-                <th className="pb-3 pr-4 font-medium whitespace-nowrap">Type</th>
-                <th className="pb-3 pr-4 font-medium whitespace-nowrap">Credits</th>
-                <th className="pb-3 pr-4 font-medium whitespace-nowrap">Status</th>
-                <th className="pb-3 font-medium whitespace-nowrap">Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_SUPPLIER_RECENT_BOOKINGS.map((booking) => (
-                <tr key={booking.id} className="border-b border-border/40 last:border-0">
-                  <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.user}</td>
-                  <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.listing}</td>
-                  <td className="py-3 pr-4 text-muted-text capitalize whitespace-nowrap">{booking.type}</td>
-                  <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.credits} cr</td>
-                  <td className="py-3 pr-4 whitespace-nowrap">
-                    <span
-                      className={`inline-block rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${STATUS_STYLES[booking.status]}`}
-                    >
-                      {booking.status}
-                    </span>
-                  </td>
-                  <td className="py-3 text-muted-text whitespace-nowrap">{booking.date}</td>
+        {bookingsLoading ? (
+          <p className="text-sm text-muted-text">Loading…</p>
+        ) : recentBookings.length === 0 ? (
+          <p className="text-sm text-muted-text">No bookings yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead>
+                <tr className="text-left text-muted-text border-b border-border/60">
+                  <th className="pb-3 pr-4 font-medium whitespace-nowrap">User Name</th>
+                  <th className="pb-3 pr-4 font-medium whitespace-nowrap">Listing Name</th>
+                  <th className="pb-3 pr-4 font-medium whitespace-nowrap">Type</th>
+                  <th className="pb-3 pr-4 font-medium whitespace-nowrap">Credits</th>
+                  <th className="pb-3 pr-4 font-medium whitespace-nowrap">Status</th>
+                  <th className="pb-3 font-medium whitespace-nowrap">Date</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {recentBookings.map((booking) => (
+                  <tr key={booking.id} className="border-b border-border/40 last:border-0">
+                    <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.userName}</td>
+                    <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.listingName}</td>
+                    <td className="py-3 pr-4 text-muted-text capitalize whitespace-nowrap">{booking.bookingType}</td>
+                    <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.credits} cr</td>
+                    <td className="py-3 pr-4 whitespace-nowrap">
+                      <span
+                        className={`inline-block rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${STATUS_STYLES[booking.status]}`}
+                      >
+                        {booking.status}
+                      </span>
+                    </td>
+                    <td className="py-3 text-muted-text whitespace-nowrap">{booking.startDate}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
     </div>
   );
