@@ -2,6 +2,9 @@ import { BookingType, BookingStatus, TransactionType, type Booking, Prisma } fro
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
+import { assertSufficientBalance, getCreditBalance, InsufficientCreditBalanceError } from "@/lib/credits";
+
+export { getCreditBalance, InsufficientCreditBalanceError };
 
 const BOOKING_TYPES = new Set<string>(Object.values(BookingType));
 
@@ -132,34 +135,6 @@ export async function hasOverlappingBooking(listingId: bigint, startDate: string
   return overlapping !== null;
 }
 
-// Thrown inside createBookingWithDebit's transaction when the ledger balance
-// is below the booking's cost. Caught in the route and turned into a clean
-// 422 — there's no DB constraint backstopping this (unlike the overlap
-// exclusion constraint), so the app-layer check is the only line of defense.
-export class InsufficientCreditBalanceError extends Error {
-  constructor(
-    public readonly balance: Prisma.Decimal,
-    public readonly required: Prisma.Decimal
-  ) {
-    super("Insufficient credit balance for this booking.");
-  }
-}
-
-// Balance is never stored denormalized (see the Transaction model's comment
-// in schema.prisma) — it's always the live SUM of the user's ledger rows.
-// Accepts a $transaction callback's tx client so the read can happen inside
-// the same transaction as the debit write in createBookingWithDebit below.
-export async function getCreditBalance(
-  userId: string,
-  client: Prisma.TransactionClient | typeof prisma = prisma
-): Promise<Prisma.Decimal> {
-  const result = await client.transaction.aggregate({
-    where: { userId },
-    _sum: { amount: true },
-  });
-  return result._sum.amount ?? new Prisma.Decimal(0);
-}
-
 interface CreateBookingWithDebitParams {
   userId: string;
   listingId: bigint;
@@ -182,10 +157,7 @@ interface CreateBookingWithDebitParams {
 // silently missed.
 export async function createBookingWithDebit(params: CreateBookingWithDebitParams): Promise<Booking> {
   return prisma.$transaction(async (tx) => {
-    const balance = await getCreditBalance(params.userId, tx);
-    if (balance.lt(params.cost)) {
-      throw new InsufficientCreditBalanceError(balance, params.cost);
-    }
+    await assertSufficientBalance(tx, params.userId, params.cost);
 
     const booking = await tx.booking.create({
       data: {

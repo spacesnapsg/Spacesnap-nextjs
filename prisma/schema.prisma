@@ -77,6 +77,15 @@ enum BookingStatus {
   @@map("booking_status")
 }
 
+enum BulkOrderStatus {
+  pending
+  confirmed
+  fulfilled
+  cancelled
+
+  @@map("bulk_order_status")
+}
+
 // topup/refund are credit-direction, booking/purchase are debit-direction —
 // amount sign still carries the actual direction, this just makes the ledger
 // readable instead of overloading `booking` for both the original debit and
@@ -192,10 +201,11 @@ model User {
   accounts Account[]
   sessions Session[]
 
-  reviewedCertificates Certificate[]     @relation("CertificateReviewer")
+  reviewedCertificates Certificate[]      @relation("CertificateReviewer")
   userCertificates     UserCertificate[]
   videoCompletions     VideoCompletion[]
   bookings             Booking[]
+  bulkOrderRequests    BulkOrderRequest[]
   transactions         Transaction[]
 
   @@map("users")
@@ -256,6 +266,7 @@ model Listing {
 
   requiredCertificates ListingRequiredCertificate[]
   bookings             Booking[]
+  bulkOrderRequests    BulkOrderRequest[]
 
   @@map("listings")
 }
@@ -402,24 +413,52 @@ model Booking {
   @@map("bookings")
 }
 
-// The wallet ledger — balance is always SUM(amount) WHERE user_id = ?, never
-// stored denormalized. bookingId nullable (topups/purchases aren't tied to a
-// booking). Supports one row per credit-affecting event (booking create debit,
-// booking confirm, decline/refund credit, bulk-order purchase, topup) rather
-// than the old app's single create-time-only row.
-model Transaction {
-  id                    BigInt          @id @default(autoincrement())
-  userId                String          @map("user_id")
-  bookingId             BigInt?         @map("booking_id")
-  type                  TransactionType
-  amount                Decimal         @db.Decimal(10, 2)
-  stripePaymentIntentId String?         @map("stripe_payment_intent_id")
-  description           String?
-  createdAt             DateTime        @default(now()) @map("created_at")
-  updatedAt             DateTime        @updatedAt @map("updated_at")
+// Consumables-only counterpart to Booking. Unlike the old Laravel schema,
+// this rewrite never supported anonymous requests (no requester_name/
+// requester_email — auth was already required by the time this table was
+// designed, so those legacy-only columns aren't recreated here; see
+// CODEBASEAPI_SUMMARY.md §6 "Fixed during recent sprints"). `credits` is
+// NOT NULL from the start (computed at creation, cost = pricePerUnit *
+// quantity) — the old schema only reached NOT NULL after a backfill
+// migration; this rewrite starts there directly.
+model BulkOrderRequest {
+  id        BigInt          @id @default(autoincrement())
+  userId    String          @map("user_id")
+  listingId BigInt          @map("listing_id")
+  quantity  Int
+  credits   Decimal         @db.Decimal(10, 2)
+  status    BulkOrderStatus @default(pending)
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
 
-  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  transactions Transaction[]
+
+  @@map("bulk_order_requests")
+}
+
+// The wallet ledger — balance is always SUM(amount) WHERE user_id = ?, never
+// stored denormalized. bookingId/bulkOrderRequestId nullable (topups aren't
+// tied to either). Supports one row per credit-affecting event (booking
+// create debit, booking confirm, decline/refund credit, bulk-order purchase,
+// topup) rather than the old app's single create-time-only row.
+model Transaction {
+  id                    BigInt            @id @default(autoincrement())
+  userId                String            @map("user_id")
+  bookingId             BigInt?           @map("booking_id")
+  bulkOrderRequestId    BigInt?           @map("bulk_order_request_id")
+  type                  TransactionType
+  amount                Decimal           @db.Decimal(10, 2)
+  stripePaymentIntentId String?           @map("stripe_payment_intent_id")
+  description           String?
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking          Booking?          @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  bulkOrderRequest BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
 }
