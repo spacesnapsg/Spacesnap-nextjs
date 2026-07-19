@@ -1024,3 +1024,61 @@ seeded state.
 **Not touched, per the brief's explicit scope:** kiosk/middleware auth
 (Sprint 5), and the `activity_log`/`training_enrollments` schema items remain
 separate, still-open lines in the sprint plan.
+
+---
+
+## Sprint 3.5, New Schema Item — `activity_log` Table + Write-Path Hooks (2026-07-19)
+
+Brief's own wording: hook logging calls into the actions this sprint already
+touches "so the log actually gets populated by real app code, not left empty
+like the type:purchase gap this sprint is fixing elsewhere," and "confirm
+action_type values against what's actually happening rather than inventing a
+taxonomy." No feed UI this session — schema + write-path only.
+
+**Taxonomy, confirmed against the actual write-paths, not invented ahead of
+them:** grepped `lib/bookings.ts`, `lib/bulk-orders.ts`, `lib/wallet.ts`, and
+`lib/check-ins.ts` for every credit- or status-affecting event a real request
+can trigger this sprint. Seven distinct events, seven `ActivityActionType`
+enum values — one per event, not a generic `booking` bucket, so the eventual
+feed can render a row without re-deriving what happened from the description
+string: `booking_created`, `booking_confirmed`, `booking_declined`,
+`bulk_order_created`, `wallet_topup`, `check_in`, `check_out`.
+
+**What was built:**
+- `prisma/schema.prisma` — `ActivityLog` model (`activity_log` table):
+  `userId`, `actionType` (new `ActivityActionType` enum), `description`,
+  `relatedListingId` nullable (not every action ties to a listing —
+  `wallet_topup` doesn't), `createdAt` only, no `updatedAt` — rows are
+  append-only, never edited after insert, unlike every other model in this
+  schema. Relations added to `User` and `Listing`. Migration
+  `20260719105326_add_activity_log`, applied to both the dev and test DBs.
+- One `tx.activityLog.create` added inside each of the six existing
+  `$transaction` callbacks that already do the credit-ledger or status work,
+  so the log write is atomic with the action it describes — same pattern the
+  Transaction rows already use, never a separate non-transactional write:
+  `createBookingWithDebit`, `confirmBookingWithAudit`,
+  `declineBookingWithRefund` (`lib/bookings.ts`, three log rows —
+  `booking_created`/`booking_confirmed`/`booking_declined`),
+  `createBulkOrderWithDebit` (`lib/bulk-orders.ts`, `bulk_order_created`),
+  `createTopUp` (`lib/wallet.ts`, `wallet_topup`), `createCheckIn` and
+  `checkOutCheckIn` (`lib/check-ins.ts`, `check_in`/`check_out`).
+
+**Not done, per the brief's explicit scope:** no feed UI, no new dedicated
+unit-test file for `activity_log` itself — verification was live, per the
+brief's own instruction, not a new test suite.
+
+**Verified live**, not just by re-running the existing suite: full `npm test`
+still 53/53 green (no regression — the new inserts only add a row alongside
+each action's existing writes, they don't change any existing assertion's
+shape). Then, against the real dev DB, logged in as `ethan@example.com` and
+drove all seven actions end-to-end through the real routes — wallet top-up,
+two bookings created (one to confirm, one to decline) on listing 110 "Studio
+Space A", the first confirmed and the second declined by
+`ben@acmecoworking.sg` (listing 110's supplier), a check-in and check-out
+against the confirmed booking, and a bulk order on listing 114 "Compostable
+Packaging Boxes." Queried `activity_log` directly afterward: exactly 8 rows
+(the extra one is the second `booking_created` from the decline-path
+booking), one per real write, correct `action_type`, `related_listing_id`,
+and description on every row. Scratch rows (`activity_log`, `check_ins`,
+`bulk_order_requests`, `transactions`, `bookings`) deleted afterward, DB back
+to seeded state.

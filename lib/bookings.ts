@@ -1,4 +1,4 @@
-import { BookingType, BookingStatus, TransactionType, type Booking, Prisma } from "@/app/generated/prisma/client";
+import { BookingType, BookingStatus, TransactionType, ActivityActionType, type Booking, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
@@ -179,6 +179,15 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
       },
     });
 
+    await tx.activityLog.create({
+      data: {
+        userId: params.userId,
+        actionType: ActivityActionType.booking_created,
+        description: `Booking #${booking.id} created (${params.cost} credits debited).`,
+        relatedListingId: params.listingId,
+      },
+    });
+
     return booking;
   });
 }
@@ -228,6 +237,15 @@ export async function confirmBookingWithAudit(bookingId: bigint): Promise<Bookin
       },
     });
 
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.booking_confirmed,
+        description: `Booking #${updated.id} confirmed.`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
     return updated;
   });
 }
@@ -270,6 +288,15 @@ export async function declineBookingWithRefund(bookingId: bigint): Promise<Booki
         type: TransactionType.refund,
         amount: updated.credits,
         description: `Booking #${updated.id} declined — refund of the ${updated.credits} debited at creation.`,
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.booking_declined,
+        description: `Booking #${updated.id} declined (${updated.credits} credits refunded).`,
+        relatedListingId: updated.listingId,
       },
     });
 

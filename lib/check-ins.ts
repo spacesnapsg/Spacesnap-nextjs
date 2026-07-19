@@ -1,4 +1,4 @@
-import { BookingStatus, type CheckIn } from "@/app/generated/prisma/client";
+import { BookingStatus, ActivityActionType, type CheckIn } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 
@@ -79,13 +79,24 @@ export async function createCheckIn(params: CreateCheckInParams): Promise<CheckI
       await tx.booking.update({ where: { id: params.bookingId }, data: { status: BookingStatus.active } });
     }
 
-    return tx.checkIn.create({
+    const checkIn = await tx.checkIn.create({
       data: {
         userId: params.userId,
         listingId: params.listingId,
         bookingId: params.bookingId,
       },
     });
+
+    await tx.activityLog.create({
+      data: {
+        userId: params.userId,
+        actionType: ActivityActionType.check_in,
+        description: `Checked in at listing #${params.listingId}.`,
+        relatedListingId: params.listingId,
+      },
+    });
+
+    return checkIn;
   });
 }
 
@@ -124,9 +135,20 @@ export async function checkOutCheckIn(checkInId: bigint): Promise<CheckIn> {
       await tx.booking.update({ where: { id: checkIn.bookingId }, data: { status: BookingStatus.completed } });
     }
 
-    return tx.checkIn.update({
+    const updated = await tx.checkIn.update({
       where: { id: checkInId },
       data: { checkedOutAt: new Date() },
     });
+
+    await tx.activityLog.create({
+      data: {
+        userId: checkIn.userId,
+        actionType: ActivityActionType.check_out,
+        description: `Checked out of listing #${checkIn.listingId}.`,
+        relatedListingId: checkIn.listingId,
+      },
+    });
+
+    return updated;
   });
 }

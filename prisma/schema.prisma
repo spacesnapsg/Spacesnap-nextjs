@@ -99,6 +99,23 @@ enum TransactionType {
   @@map("transaction_type")
 }
 
+// Confirmed against what lib/bookings.ts, lib/bulk-orders.ts, lib/wallet.ts,
+// and lib/check-ins.ts actually do this sprint, not invented ahead of the
+// write-paths that populate them. One value per hooked action, not a generic
+// "booking" bucket, so the eventual feed can render each row without
+// re-deriving what happened from the description string.
+enum ActivityActionType {
+  booking_created
+  booking_confirmed
+  booking_declined
+  bulk_order_created
+  wallet_topup
+  check_in
+  check_out
+
+  @@map("activity_action_type")
+}
+
 // ---------------------------------------------------------------------------
 // Auth.js (NextAuth v5) — required by @auth/prisma-adapter, session strategy
 // "database" per auth.ts. Model names must stay User/Account/Session/
@@ -208,6 +225,7 @@ model User {
   bulkOrderRequests    BulkOrderRequest[]
   transactions         Transaction[]
   checkIns             CheckIn[]
+  activityLogs         ActivityLog[]
 
   @@map("users")
 }
@@ -269,6 +287,7 @@ model Listing {
   bookings             Booking[]
   bulkOrderRequests    BulkOrderRequest[]
   checkIns             CheckIn[]
+  activityLogs         ActivityLog[]
 
   @@map("listings")
 }
@@ -414,6 +433,27 @@ model Booking {
   checkIns     CheckIn[]
 
   @@map("bookings")
+}
+
+// Activity feed row for one hooked action. Sprint 3.5 new schema item — see
+// SPRINT_PLAN_NEXTJS_REWRITE.md's Sprint 3.5 "new schema items" list. No
+// updatedAt: rows are append-only, never edited after insert, unlike every
+// other model in this file. relatedListingId is nullable because not every
+// hooked action ties to a listing (wallet_topup doesn't). No feed UI yet —
+// this sprint only wires the write path; verify by querying this table
+// directly after performing a hooked action.
+model ActivityLog {
+  id               BigInt             @id @default(autoincrement())
+  userId           String             @map("user_id")
+  actionType       ActivityActionType @map("action_type")
+  description      String
+  relatedListingId BigInt?            @map("related_listing_id")
+  createdAt        DateTime           @default(now()) @map("created_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing Listing? @relation(fields: [relatedListingId], references: [id], onDelete: SetNull)
+
+  @@map("activity_log")
 }
 
 // Consumables-only counterpart to Booking. Unlike the old Laravel schema,

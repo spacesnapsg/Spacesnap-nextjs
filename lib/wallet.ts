@@ -1,4 +1,4 @@
-import { TransactionType, type Transaction, Prisma } from "@/app/generated/prisma/client";
+import { TransactionType, ActivityActionType, type Transaction, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getCreditBalance } from "@/lib/credits";
@@ -52,6 +52,14 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal): Promi
         type: TransactionType.topup,
         amount,
         description: "Wallet top-up",
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId,
+        actionType: ActivityActionType.wallet_topup,
+        description: `Wallet topped up with ${amount} credits.`,
       },
     });
 

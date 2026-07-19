@@ -1,4 +1,4 @@
-import { TransactionType, type BulkOrderRequest, Prisma } from "@/app/generated/prisma/client";
+import { TransactionType, ActivityActionType, type BulkOrderRequest, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientBalance } from "@/lib/credits";
@@ -85,6 +85,15 @@ export async function createBulkOrderWithDebit(params: CreateBulkOrderWithDebitP
         bulkOrderRequestId: bulkOrderRequest.id,
         type: TransactionType.purchase,
         amount: params.cost.negated(),
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: params.userId,
+        actionType: ActivityActionType.bulk_order_created,
+        description: `Bulk order #${bulkOrderRequest.id} created for ${params.quantity} unit(s) (${params.cost} credits debited).`,
+        relatedListingId: params.listingId,
       },
     });
 
