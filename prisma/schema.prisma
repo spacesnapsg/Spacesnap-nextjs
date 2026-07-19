@@ -112,8 +112,18 @@ enum ActivityActionType {
   wallet_topup
   check_in
   check_out
+  training_enrolled
 
   @@map("activity_action_type")
+}
+
+enum TrainingEnrollmentStatus {
+  enrolled
+  awaiting_signoff
+  completed
+  cancelled
+
+  @@map("training_enrollment_status")
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +236,7 @@ model User {
   transactions         Transaction[]
   checkIns             CheckIn[]
   activityLogs         ActivityLog[]
+  trainingEnrollments  TrainingEnrollment[]
 
   @@map("users")
 }
@@ -406,6 +417,8 @@ model TrainingSession {
 
   company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
 
+  enrollments TrainingEnrollment[]
+
   @@map("training_sessions")
 }
 
@@ -529,4 +542,27 @@ model CheckIn {
   booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
 
   @@map("check_ins")
+}
+
+// Sprint 3.5 new schema item — backs the training session "enrolled
+// participants" list referenced by the Digital Passport / training pages
+// (no roster UI built yet this sprint; see SPRINT_PLAN_NEXTJS_REWRITE.md
+// Sprint 3.5). One row per user per session, enforced at the DB level (not
+// just app-layer) by @@unique below — same "app-layer pre-check + DB
+// constraint as race-condition fallback" idiom as bookings_no_overlap (see
+// lib/training-enrollments.ts and app/api/bookings/route.ts's 23P01 catch;
+// this one catches Postgres 23505 instead).
+model TrainingEnrollment {
+  id                BigInt                   @id @default(autoincrement())
+  userId            String                   @map("user_id")
+  trainingSessionId BigInt                   @map("training_session_id")
+  status            TrainingEnrollmentStatus @default(enrolled)
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trainingSession TrainingSession @relation(fields: [trainingSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, trainingSessionId])
+  @@map("training_enrollments")
 }
