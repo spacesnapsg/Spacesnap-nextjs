@@ -1,4 +1,4 @@
-import { BookingType, TransactionType, type Booking, Prisma } from "@/app/generated/prisma/client";
+import { BookingType, BookingStatus, TransactionType, type Booking, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
@@ -10,7 +10,6 @@ const BOOKING_TYPES = new Set<string>(Object.values(BookingType));
 // the identical user-facing message.
 export const BOOKING_OVERLAP_MESSAGE = "This listing is not available for the selected dates.";
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const bookingWithRelationsArgs = {
   include: { listing: { include: { requiredCertificates: { include: { certificate: true } } } }, user: true },
 } satisfies Prisma.BookingDefaultArgs;
@@ -209,5 +208,54 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
     });
 
     return booking;
+  });
+}
+
+// Thrown inside confirmBookingWithAudit when the booking isn't in `pending`
+// status. Caught in the route and turned into a clean 422, mirroring
+// InsufficientCreditBalanceError's pattern above.
+export class BookingNotConfirmableError extends Error {
+  constructor(public readonly status: BookingStatus) {
+    super(`Booking is already ${status} and cannot be confirmed.`);
+  }
+}
+
+// Sprint 3.5 known-gap #2: confirm needs its own audit-trail Transaction row
+// (per the Transaction model's own schema comment, which lists "booking
+// confirm" as a distinct credit-affecting event from "booking create debit").
+//
+// Checked against both this design and the old Laravel build
+// (BookingController::store vs. SupplierBookingController::confirm) before
+// writing this: credits are debited in full at booking *creation*
+// (createBookingWithDebit above) in both systems — old and new. Confirm
+// never moved money in the old build either; it only flipped status, which
+// is exactly the gap CLAUDE1.md's Sprint 3 Session 4 notes flagged. So this
+// function does not create a second debit (that would double-charge the
+// user for one booking) — it records a zero-amount audit entry tying the
+// confirm event to the booking, without altering the ledger sum.
+export async function confirmBookingWithAudit(bookingId: bigint): Promise<BookingWithRelations> {
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
+    if (booking.status !== BookingStatus.pending) {
+      throw new BookingNotConfirmableError(booking.status);
+    }
+
+    const updated = await tx.booking.update({
+      where: { id: bookingId },
+      data: { status: "confirmed" },
+      include: bookingWithRelationsArgs.include,
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId: updated.userId,
+        bookingId: updated.id,
+        type: TransactionType.booking,
+        amount: new Prisma.Decimal(0),
+        description: `Booking #${updated.id} confirmed — credits were already debited at creation, no additional ledger movement here.`,
+      },
+    });
+
+    return updated;
   });
 }

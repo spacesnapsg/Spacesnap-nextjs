@@ -797,3 +797,78 @@ script (deleted afterward, not committed):
 Transaction record and booking decline's refund Transaction (Sprint 3.5's
 own checklist lists these as separate, still-open items) and bulk-order
 pricing/balance — none of these were asked for here and none were built.
+
+## Sprint 3.5, Known Gap #2 — Booking-Confirm Audit Transaction (2026-07-19)
+
+Task brief's own wording ("the original build silently deducted credits on
+confirm with no audit trail") assumes the old build moved money at confirm
+time. Checked that assumption against both this design and the old Laravel
+source before writing anything, per the brief's explicit instruction to
+state a read rather than guess:
+
+- **This design**: credits are already fully debited at booking *creation*
+  (`createBookingWithDebit`, Known Gap #1 above) inside one DB transaction
+  with the Booking insert.
+- **Old build**: read `BookingController::store` and
+  `SupplierBookingController::confirm` directly
+  (`~/Documents/spacesnap-api`). Same shape — `store()` creates the debit
+  Transaction; `confirm()` only ever did `$booking->update(['status' =>
+  'confirmed'])`, no Transaction, ever. `decline()`, by contrast, does sum
+  the booking's existing debit Transactions and creates a refund if
+  negative — that's a real, distinct gap (Known Gap #3, still open, not
+  touched here).
+
+So the brief's "silently deducted on confirm" framing doesn't match either
+codebase — nobody ever deducted at confirm. The actual, correctly-scoped
+gap is just what Session 4 documented: confirm produced no audit trail at
+all for the (already-fully-recorded) create-time debit. Building a second
+debit here would double-charge the user for one booking; the brief itself
+flagged this risk ("don't invent a double-deduction").
+
+**What was built:** `confirmBookingWithAudit(bookingId)` in `lib/bookings.ts`
+— one `prisma.$transaction` that re-reads the booking's status (guards
+against a stale read between the route's ownership check and this call),
+throws `BookingNotConfirmableError` if not `pending`, otherwise updates
+status to `confirmed` and creates a **zero-amount** `Transaction` row
+(`type: booking`, `bookingId` set, description noting the debit already
+happened at creation). Zero-amount because it's a real ledger row —
+`SUM(Transaction.amount)` stays correct — but represents no actual credit
+movement, matching the audit-trail-not-a-charge intent.
+
+Worth noting: `prisma/seed.ts`'s "confirmed booking" fixture (`farah`,
+Forklift Rental) already seeded exactly this shape — a `-950.00` create
+debit plus a `0.00` "Booking confirmed by supplier" row — before this
+session touched any code. That's independent confirmation this read
+matches the schema's own design intent (the `Transaction` model's comment
+lists "booking confirm" as a distinct credit-affecting event from "booking
+create debit," not a second charge).
+
+`app/api/supplier/bookings/[id]/confirm/route.ts` now calls
+`confirmBookingWithAudit` instead of a bare `prisma.booking.update`, and
+catches `BookingNotConfirmableError` → clean `422` (previously this route
+had no status guard at all — confirming an already-confirmed or cancelled
+booking silently re-ran the update).
+
+**Tests:** `lib/bookings.test.ts`, 3 new cases — pending booking confirms
+with exactly one zero-amount Transaction row; confirming an
+already-confirmed booking rejects with `BookingNotConfirmableError` and
+writes no second row; confirming a cancelled booking rejects and writes no
+orphan row. All 30 tests in `npm test` pass (no regression to the 27 from
+before).
+
+**Verified live**, not just unit-tested — real cookie-jar logins against
+the dev server/DB: `ethan@example.com` booked listing 113 (Power Drill Set,
+no cert requirement) for `2029-05-05` → `201`, booking id `131`, ledger
+debit `-25.00` confirmed. `divya@toolshare.sg` (ToolShare supplier)
+confirmed booking 131 → `200`, status `confirmed`; direct query on
+`transactions` showed exactly two rows for `booking_id=131`: the `-25.00`
+create debit and a new `0.00` confirm-audit row with the expected
+description. Re-confirming the same booking as `divya` → clean `422
+{"message":"Booking is already confirmed and cannot be confirmed."}`, and
+the transaction count for that booking stayed at `2` (no duplicate).
+Booking 131 and both its Transaction rows deleted afterward; ethan's ledger
+balance re-confirmed back to `80`, DB back to seeded state.
+
+**Not touched, per Sprint 3.5's own checklist:** booking decline's refund
+Transaction (Known Gap #3) and bulk-order pricing/balance — separate,
+still-open items.

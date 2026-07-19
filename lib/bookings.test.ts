@@ -8,7 +8,14 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, BookingType, TransactionType } from "../app/generated/prisma/client";
-import { hasOverlappingBooking, createBookingWithDebit, getCreditBalance, InsufficientCreditBalanceError } from "./bookings";
+import {
+  hasOverlappingBooking,
+  createBookingWithDebit,
+  getCreditBalance,
+  InsufficientCreditBalanceError,
+  confirmBookingWithAudit,
+  BookingNotConfirmableError,
+} from "./bookings";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -298,6 +305,98 @@ describe("createBookingWithDebit (Sprint 3.5, ledger-atomic booking creation)", 
       assert.ok(debit);
       assert.equal(debit!.bookingId?.toString(), booking.id.toString());
       assert.equal(debit!.amount.toString(), "-10");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// Coverage for the Sprint 3.5 ledger gap #2: confirm's own audit-trail row.
+// Credits are already fully debited at booking creation (createBookingWithDebit
+// above, in both this design and the old Laravel build) — so confirm writes a
+// zero-amount Transaction rather than a second debit, and must never write a
+// second row when called against a booking that isn't `pending`.
+describe("confirmBookingWithAudit (Sprint 3.5, known gap #2)", () => {
+  test("confirms a pending booking and writes exactly one zero-amount audit Transaction", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-10-01"),
+          endDate: new Date("2027-10-01"),
+          credits: "10.00",
+        },
+      });
+
+      const updated = await confirmBookingWithAudit(booking.id);
+      assert.equal(updated.status, "confirmed");
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].type, TransactionType.booking);
+      assert.equal(transactions[0].amount.toString(), "0");
+      assert.equal(transactions[0].userId, user.id);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("confirming an already-confirmed booking rejects cleanly, no duplicate Transaction written", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-10-02"),
+          endDate: new Date("2027-10-02"),
+          credits: "10.00",
+        },
+      });
+
+      await confirmBookingWithAudit(booking.id);
+
+      await assert.rejects(() => confirmBookingWithAudit(booking.id), BookingNotConfirmableError);
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 1);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("confirming a cancelled booking rejects cleanly and writes no orphan Transaction", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-10-03"),
+          endDate: new Date("2027-10-03"),
+          credits: "10.00",
+          status: "cancelled",
+        },
+      });
+
+      await assert.rejects(() => confirmBookingWithAudit(booking.id), BookingNotConfirmableError);
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 0);
+
+      const bookingRow = await prisma.booking.findUnique({ where: { id: booking.id } });
+      assert.equal(bookingRow!.status, "cancelled");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

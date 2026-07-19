@@ -3,13 +3,14 @@ import { prisma } from "@/lib/prisma";
 import { requireSupplier } from "@/lib/supplier-auth";
 import { forbiddenResponse, notFoundResponse } from "@/lib/api-errors";
 import { parseBigIntParam } from "@/lib/listings";
-import { missingCertificateIds, serializeBooking } from "@/lib/bookings";
+import { missingCertificateIds, serializeBooking, confirmBookingWithAudit, BookingNotConfirmableError } from "@/lib/bookings";
 
 // Mirrors old SupplierBookingController::confirm (company-ownership check
-// via BookingPolicy::update, re-checks certs at confirm time). Per Sprint 3
-// Session 4 scope, does NOT create a Transaction record here — the old build
-// never wired one on confirm either (that's the audit-trail gap Sprint 3.5
-// is explicitly re-implementing correctly, not a regression introduced now).
+// via BookingPolicy::update, re-checks certs at confirm time). Sprint 3.5
+// known-gap #2: confirm now creates its own audit-trail Transaction row via
+// confirmBookingWithAudit (see lib/bookings.ts for why that row is a
+// zero-amount entry rather than a second debit — credits are already fully
+// debited at booking creation in this design, same as the old build).
 export async function PATCH(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSupplier();
   if ("error" in auth) return auth.error;
@@ -39,11 +40,13 @@ export async function PATCH(_request: Request, { params }: { params: Promise<{ i
     );
   }
 
-  const updated = await prisma.booking.update({
-    where: { id: bookingId },
-    data: { status: "confirmed" },
-    include: { listing: { include: { requiredCertificates: { include: { certificate: true } } } }, user: true },
-  });
-
-  return NextResponse.json({ booking: serializeBooking(updated) });
+  try {
+    const updated = await confirmBookingWithAudit(bookingId);
+    return NextResponse.json({ booking: serializeBooking(updated) });
+  } catch (error) {
+    if (error instanceof BookingNotConfirmableError) {
+      return NextResponse.json({ message: error.message }, { status: 422 });
+    }
+    throw error;
+  }
 }

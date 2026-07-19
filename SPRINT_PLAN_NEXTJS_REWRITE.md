@@ -111,7 +111,7 @@ This is the sprint that didn't exist as its own thing in the original build — 
 
 **Known gaps to close (do not recreate these):**
 - [x] Booking creation: check `credit_balance`, deduct credits, create a debit Transaction record, all wrapped in a single DB transaction with the Booking create — not two separate operations
-- [ ] Booking confirm: creates a Transaction record (the original build never wired this — booking confirm silently deducted credits with no audit trail)
+- [x] Booking confirm: creates a Transaction record (the original build never wired this — booking confirm silently deducted credits with no audit trail)
 - [ ] Booking decline: refund path creates a credit Transaction record correctly
 - [ ] Bulk order: pricing field on bulk_order_requests (cost = credits_per_unit × quantity), same balance-check + Transaction pattern as booking
 - [ ] `type: purchase` transactions actually created by app code, not only ever seeded for demos
