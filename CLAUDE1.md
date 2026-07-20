@@ -2714,3 +2714,138 @@ aren't exposed by the new edit form (product owner's explicit scope call,
 not an oversight). The supplier-profile "Average Rating: No rating system
 built yet" line is now stale — ratings shipped in Sprint 4.5 — noticed in
 passing but out of this session's scope to fix.
+
+## Credit Hold on Bulk-Order Confirmation (2026-07-20)
+
+Closed the Sprint 4.5 "approved in principle, deferred" item: confirming a
+bulk order now places a hold on the buyer's credit rather than leaving
+confirm as a pure status transition. Scoped with the product owner via a
+round of explicit design questions before writing any code (data model,
+whether confirm should hard-block or warn, stale-hold handling, wallet
+visibility), then built same session.
+
+**Design decisions, all confirmed with the product owner first:**
+- **Separate `CreditHold` model**, not a `Transaction` row — `Transaction`
+  stays "money that actually moved" (per its own schema comment); a hold is
+  a reservation against money that hasn't moved yet. `available balance =
+  live Transaction SUM - active, non-expired holds for that user`.
+- **Confirm warns, doesn't hard-block.** If available balance is short, the
+  route returns a clean `409 { requiresOverride, available, required }`
+  instead of confirming. The supplier can resubmit with `override: true` to
+  push it through anyway — the hold is still placed either way once confirm
+  actually succeeds.
+- **Override writes an audit-trail row**, not just a silent flag — a new
+  `ActivityActionType` value, `bulk_order_confirmed_despite_insufficient_credit`.
+  **Deliberately logged under the buyer's `userId`, not the supplier's** —
+  a refinement over the initial framing ("logged under the supplier, the
+  actor"): every other `bulk_order_*` activity type in this codebase is
+  buyer-scoped and surfaces in the user dashboard's Recent Activity feed
+  (Sprint 4.5); there's no equivalent supplier-facing activity UI anywhere
+  in the app, so a supplier-scoped row would be queryable via the API but
+  invisible to anyone. Buyer-scoped means the buyer actually sees "you were
+  confirmed despite insufficient credit" in their own feed — a more useful
+  trail in practice, and consistent with the family of events it belongs to.
+- **Stale holds auto-expire after 7 days, released lazily.** No
+  scheduled-job infrastructure exists anywhere in this codebase (confirmed
+  before choosing this over a real cron), so
+  `releaseExpiredHoldsForUser` runs at the start of every
+  `getAvailableCreditBalance` read — same "always a live computation, never
+  cached" idiom `lib/credits.ts` already uses for the ledger balance itself.
+  A hold can look "active" for up to 7 days past its true expiry if nobody
+  reads that user's balance in the meantime, but is never wrong once
+  actually checked.
+- **Wallet shows available/held/total**, not just one balance number.
+
+**What was built:**
+- Migration `20260720111342_add_credit_holds`: `CreditHold` (`userId`,
+  `bulkOrderRequestId` unique, `amount`, `status` active/released,
+  `createdAt`, `expiresAt`, `releasedAt`) + the new `ActivityActionType`
+  value. Applied to both `spacesnap_dev` and the isolated test DB.
+- `lib/credit-holds.ts` — `getAvailableCreditBalance` (releases expired
+  holds first, then live-balance-minus-active-holds), `createHold`,
+  `releaseHoldForBulkOrder` (idempotent no-op if nothing's active — a hold
+  may have already lazily expired by the time a release point runs),
+  `InsufficientAvailableCreditError`.
+- `lib/bulk-orders.ts`: `confirmBulkOrder` gained an `options.override`
+  param, checks available balance, creates the hold, and — only on an
+  actual override — writes the second activity-log row.
+  `fulfillBulkOrderWithDebit`/`declineBulkOrder`/`approveBulkOrderCancellation`
+  each now call `releaseHoldForBulkOrder`. `fulfillBulkOrderWithDebit`
+  deliberately still checks the *real* ledger balance via
+  `assertSufficientBalance`, unchanged — the hold only ever gated the
+  confirm decision, not whether the debit can actually go through later.
+- `GET /api/wallet` returns `held`/`available` alongside the existing
+  `balance`; `PATCH .../confirm` accepts `override` in the body and returns
+  the `409`/warning shape on insufficient available credit.
+- Frontend: `ConfirmBulkOrderModal` gained a warning-banner state (amber,
+  `AlertTriangle`) with a "Confirm Anyway" button that resubmits with
+  `override: true`; wallet page splits the hero number into
+  Available/held/total.
+
+**Real bug found and fixed during live verification, same root cause as an
+already-documented one:** the "Confirm Anyway" button, styled with
+`!bg-amber` against `Button`'s `primary` variant, rendered teal instead of
+amber — `getComputedStyle` showed `background-color: rgb(245,158,11)`
+(correct) but `background-image: linear-gradient(...)` (the variant's teal
+gradient) painted over it, since `!bg-amber` only overrides
+`background-color`. Identical root cause to the Fulfill-button gradient bug
+from the "Bulk Order Cancellation Flow" session above. That session's fix
+was switching to `variant="ghost"`; this one instead added `!bg-none`
+alongside `!bg-amber` to explicitly clear the gradient image first. Caught
+via `getComputedStyle` in the live browser, not by eyeballing a screenshot —
+same lesson as before, a screenshot alone reads as "close enough" when it's
+actually wrong.
+
+**Tests:** new `lib/credit-holds.test.ts` (14 cases: zero-state, active hold
+reduces available not ledger balance, expired-hold lazy release, confirm
+with/without sufficient balance, override creates the hold and logs the
+audit row, a second confirm blocked by the first request's hold even though
+the raw ledger balance alone would cover it, all three release points, and
+`getCreditBalance` staying unaffected by holds) — real dev-Postgres DB via
+Prisma, no mocking, same convention as every other lib test in this repo.
+Every pre-existing `confirmBulkOrder` call in `lib/bulk-orders.test.ts` now
+passes `{ override: true }` (none of those buyers top up before confirming,
+and that was never what those tests were about) — a comment at the top of
+that file explains why, so a future session doesn't mistake it for
+copy-paste noise. All 182 tests pass (18 new, 0 regressions). `npx tsc
+--noEmit`, `npx eslint .` (only the two pre-existing, unrelated findings —
+`passport/page.tsx`, `prisma/tests/db-constraints.test.ts` — confirmed
+untouched), and `next build` all clean.
+
+**Verified live**, full loop, both via `curl` cookie-jar sessions and the
+real browser (not just unit tests) — `ethan@example.com` (buyer, seeded
+balance 80) and `gabriel@greenpack.sg` (GreenPack supplier), listing 166
+(Compostable Packaging Boxes, 18.50 cr/unit):
+- Confirmed a 55.5 cr request within available balance → hold created,
+  wallet showed `held: 55.5, available: 24.5`, no override log written.
+- Confirming a second, 92.5 cr request against the now-24.5 available
+  balance → clean `409 {requiresOverride:true, available:24.5,
+  required:92.5}` — proves a hold from one request actually constrains a
+  *different* request's confirm, the whole point of the feature (the raw
+  ledger balance of 80 alone would have covered it).
+- Same request, resubmitted with `override:true` → succeeded, hold placed
+  anyway, `GET /api/activity?types=bulk_order_confirmed_despite_insufficient_credit`
+  showed exactly one row with the correct available/required numbers in the
+  description.
+- Fulfilling the first request released its hold and debited the real
+  ledger (balance 80 → 24.5); declining the second (now-confirmed) request
+  released its hold with no refund (nothing was ever debited); a third
+  request's cancellation-approval flow also confirmed to release its hold.
+  Wallet correctly returned to `held: 0` after each release point.
+- Browser verification hit the same "clicks don't register" issue noted
+  informally before in this session (not a code bug — `computer` left_click
+  wasn't triggering React's event handling for reasons unrelated to this
+  feature); worked around by dispatching real `.click()` calls via the
+  debugging JS tool once ref-based clicks also failed, which is how the
+  gradient bug above was actually caught (screenshot showed the modal
+  render, `getComputedStyle` showed the real problem).
+- All scratch state (bulk order requests 13–16, their `CreditHold` rows, the
+  one fulfillment `Transaction`, and 14 `ActivityLog` rows) deleted via a
+  one-off script afterward; Ethan's wallet reconfirmed at `balance: 80,
+  held: 0, available: 80` — DB back to seeded state.
+
+**Not touched:** the credit-hold concept only applies to bulk orders, per
+the original scope — bookings and "Buy Now" purchases still debit
+immediately at creation/fulfillment with no hold step, unchanged. No changes
+to `fulfillBulkOrderWithDebit`'s actual debit logic beyond adding the
+release call.

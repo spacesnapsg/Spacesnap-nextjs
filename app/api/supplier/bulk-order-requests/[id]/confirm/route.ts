@@ -9,9 +9,13 @@ import {
   parseEstimatedDeliveryDate,
   BulkOrderNotConfirmableError,
 } from "@/lib/bulk-orders";
+import { InsufficientAvailableCreditError } from "@/lib/credit-holds";
 
 // estimatedDeliveryDate is required in the body (2026-07-20 product owner
-// request) — see parseEstimatedDeliveryDate, lib/bulk-orders.ts.
+// request) — see parseEstimatedDeliveryDate, lib/bulk-orders.ts. `override`
+// (optional boolean, credit-hold feature, same date) lets the supplier push
+// a confirm through after seeing the insufficient-available-credit warning
+// below — omitted/false means "ask first."
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSupplier();
   if ("error" in auth) return auth.error;
@@ -42,12 +46,25 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return forbiddenResponse("You do not have access to this bulk order request.");
   }
 
+  const override = (body as Record<string, unknown>).override === true;
+
   try {
-    const updated = await confirmBulkOrder(bulkOrderRequestId, estimatedDeliveryDate);
+    const updated = await confirmBulkOrder(bulkOrderRequestId, estimatedDeliveryDate, { override });
     return NextResponse.json({ bulkOrderRequest: serializeBulkOrderRequest(updated) });
   } catch (error) {
     if (error instanceof BulkOrderNotConfirmableError) {
       return NextResponse.json({ message: error.message }, { status: 422 });
+    }
+    if (error instanceof InsufficientAvailableCreditError) {
+      return NextResponse.json(
+        {
+          message: error.message,
+          requiresOverride: true,
+          available: Number(error.available),
+          required: Number(error.required),
+        },
+        { status: 409 }
+      );
     }
     throw error;
   }

@@ -163,7 +163,12 @@ export default function CreditWalletPage() {
           </span>
         </div>
         <p className="text-white/80 text-sm">Available Balance</p>
-        <p className="text-white text-4xl font-extrabold mt-1 mb-6">{wallet.balance} Credits</p>
+        <p className="text-white text-4xl font-extrabold mt-1">{wallet.available} Credits</p>
+        <p className="text-white/70 text-xs mt-1 mb-6">
+          {wallet.held > 0
+            ? `${wallet.balance} total · ${wallet.held} held on confirmed bulk orders`
+            : `${wallet.balance} total`}
+        </p>
         <button
           type="button"
           onClick={() => setTopUpOpen(true)}

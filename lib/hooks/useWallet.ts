@@ -11,6 +11,8 @@ export interface WalletTransaction {
 
 export interface Wallet {
   balance: number;
+  held: number;
+  available: number;
   transactions: WalletTransaction[];
 }
 

@@ -10,6 +10,15 @@
 // debit credits directly; that was wrong and this file was rewritten
 // alongside the lib/bulk-orders.ts correction. Hits the real dev Postgres DB
 // through Prisma (no mocking), same as lib/bookings.test.ts.
+//
+// 2026-07-20 credit-hold feature: confirmBulkOrder now checks the buyer's
+// *available* balance (live balance minus active holds) and rejects with
+// InsufficientAvailableCreditError unless `{ override: true }` is passed —
+// see lib/credit-holds.test.ts for that behavior's own coverage. None of
+// these buyers top up before confirming (that's not what these tests are
+// about), so every confirmBulkOrder call here passes `{ override: true }`
+// to keep testing the status/ownership rules these tests actually cover,
+// not the credit check.
 import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -141,7 +150,7 @@ describe("confirmBulkOrder", () => {
         cost: listing.pricePerUnit!.mul(2),
       });
 
-      const updated = await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      const updated = await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
       assert.equal(updated.status, "confirmed");
       assert.equal(updated.estimatedDeliveryDate?.toISOString(), SAMPLE_DELIVERY_DATE.toISOString());
 
@@ -164,8 +173,8 @@ describe("confirmBulkOrder", () => {
         cost: listing.pricePerUnit!,
       });
 
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
-      await assert.rejects(() => confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE), BulkOrderNotConfirmableError);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
+      await assert.rejects(() => confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true }), BulkOrderNotConfirmableError);
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -209,7 +218,7 @@ describe("declineBulkOrder", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
 
       const updated = await declineBulkOrder(bulkOrderRequest.id);
       assert.equal(updated.status, "cancelled");
@@ -317,7 +326,7 @@ describe("fulfillBulkOrderWithDebit", () => {
       const listing = await createConsumablesListing(company.id); // pricePerUnit 18.50
       const cost = listing.pricePerUnit!.mul(3); // 55.50
       const bulkOrderRequest = await createBulkOrder({ userId: user.id, listingId: listing.id, quantity: 3, cost });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
       await prisma.transaction.create({
         data: { userId: user.id, type: TransactionType.topup, amount: "100.00" },
       });
@@ -426,7 +435,7 @@ describe("cancelBulkOrderByUser", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
 
       await assert.rejects(() => cancelBulkOrderByUser(bulkOrderRequest.id, user.id), BulkOrderNotCancellableError);
     } finally {
@@ -447,7 +456,7 @@ describe("requestBulkOrderCancellation", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
 
       const updated = await requestBulkOrderCancellation(bulkOrderRequest.id, user.id, "No longer needed");
       assert.equal(updated.status, "confirmed");
@@ -490,7 +499,7 @@ describe("requestBulkOrderCancellation", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
       await requestBulkOrderCancellation(bulkOrderRequest.id, user.id, "first reason");
 
       await assert.rejects(
@@ -514,7 +523,7 @@ describe("requestBulkOrderCancellation", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
 
       await assert.rejects(
         () => requestBulkOrderCancellation(bulkOrderRequest.id, impostor.id, "reason"),
@@ -538,7 +547,7 @@ describe("approveBulkOrderCancellation / rejectBulkOrderCancellation", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
       await requestBulkOrderCancellation(bulkOrderRequest.id, user.id, "reason");
 
       const updated = await approveBulkOrderCancellation(bulkOrderRequest.id);
@@ -564,7 +573,7 @@ describe("approveBulkOrderCancellation / rejectBulkOrderCancellation", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
       await requestBulkOrderCancellation(bulkOrderRequest.id, user.id, "reason");
 
       const updated = await rejectBulkOrderCancellation(bulkOrderRequest.id);
@@ -587,7 +596,7 @@ describe("approveBulkOrderCancellation / rejectBulkOrderCancellation", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
 
       await assert.rejects(() => approveBulkOrderCancellation(bulkOrderRequest.id), BulkOrderCancellationNotPendingError);
     } finally {
@@ -606,7 +615,7 @@ describe("approveBulkOrderCancellation / rejectBulkOrderCancellation", () => {
         quantity: 1,
         cost: listing.pricePerUnit!,
       });
-      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
 
       await assert.rejects(() => rejectBulkOrderCancellation(bulkOrderRequest.id), BulkOrderCancellationNotPendingError);
     } finally {

@@ -2,6 +2,7 @@ import { TransactionType, ActivityActionType, BulkOrderStatus, type BulkOrderReq
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientBalance } from "@/lib/credits";
+import { createHold, releaseHoldForBulkOrder, getAvailableCreditBalance, InsufficientAvailableCreditError } from "@/lib/credit-holds";
 
 export const bulkOrderRequestWithRelationsArgs = {
   include: { listing: true, user: true },
@@ -145,19 +146,37 @@ export class BulkOrderNotConfirmableError extends Error {
   }
 }
 
-// Status-only transition — no credit movement, since none has happened yet
-// at this point. Unlike confirmBookingWithAudit (lib/bookings.ts), there's
-// no zero-amount audit Transaction to write here: that pattern exists there
-// because booking credits are already debited at creation, so there's a
-// ledger event to annotate. Nothing has moved yet for a bulk order.
+// No credit movement at confirm — the real debit still only happens at
+// fulfillment (fulfillBulkOrderWithDebit). What confirm *does* do, since the
+// credit-hold feature (2026-07-20 product owner scope): place a CreditHold
+// for the request's cost, checked against the buyer's *available* balance
+// (live balance minus their other active holds), so a supplier can't
+// unknowingly confirm an order the buyer can no longer afford by the time it
+// reaches fulfillment. This isn't a hard gate, though — if available balance
+// is short and `override` isn't set, confirm throws
+// InsufficientAvailableCreditError (no write happens, transaction rolls
+// back) so the route can surface a warning; the supplier can then resubmit
+// with `override: true` to confirm anyway, which still places the hold and
+// additionally logs a distinct activity-log entry so there's an audit trail
+// for "confirmed despite insufficient credit," not just a silent override.
 // `estimatedDeliveryDate` is required (2026-07-20 product owner request) —
 // enforced by parseEstimatedDeliveryDate at the route layer, not re-validated
 // here.
-export async function confirmBulkOrder(bulkOrderRequestId: bigint, estimatedDeliveryDate: Date): Promise<BulkOrderRequest> {
+export async function confirmBulkOrder(
+  bulkOrderRequestId: bigint,
+  estimatedDeliveryDate: Date,
+  options: { override?: boolean } = {}
+): Promise<BulkOrderRequest> {
   return prisma.$transaction(async (tx) => {
     const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
     if (request.status !== BulkOrderStatus.pending) {
       throw new BulkOrderNotConfirmableError(request.status);
+    }
+
+    const { available } = await getAvailableCreditBalance(request.userId, tx);
+    const isOverride = available.lt(request.credits);
+    if (isOverride && !options.override) {
+      throw new InsufficientAvailableCreditError(available, request.credits);
     }
 
     const updated = await tx.bulkOrderRequest.update({
@@ -165,14 +184,27 @@ export async function confirmBulkOrder(bulkOrderRequestId: bigint, estimatedDeli
       data: { status: BulkOrderStatus.confirmed, estimatedDeliveryDate },
     });
 
+    await createHold(tx, { userId: updated.userId, bulkOrderRequestId: updated.id, amount: updated.credits });
+
     await tx.activityLog.create({
       data: {
         userId: updated.userId,
         actionType: ActivityActionType.bulk_order_confirmed,
-        description: `Bulk order #${updated.id} confirmed by supplier (estimated delivery ${estimatedDeliveryDate.toISOString().slice(0, 10)}).`,
+        description: `Bulk order #${updated.id} confirmed by supplier (estimated delivery ${estimatedDeliveryDate.toISOString().slice(0, 10)}); ${updated.credits} credits held.`,
         relatedListingId: updated.listingId,
       },
     });
+
+    if (isOverride) {
+      await tx.activityLog.create({
+        data: {
+          userId: updated.userId,
+          actionType: ActivityActionType.bulk_order_confirmed_despite_insufficient_credit,
+          description: `Supplier confirmed bulk order #${updated.id} despite insufficient available credit (${available} available, ${updated.credits} required).`,
+          relatedListingId: updated.listingId,
+        },
+      });
+    }
 
     return updated;
   });
@@ -185,13 +217,17 @@ export class BulkOrderNotDeclinableError extends Error {
 }
 
 // No refund path needed (unlike declineBookingWithRefund) — nothing was ever
-// debited for a pending/confirmed bulk order.
+// debited for a pending/confirmed bulk order. Releases the hold if declining
+// from `confirmed` (a `pending` decline never had one — releaseHoldForBulkOrder
+// is a no-op in that case).
 export async function declineBulkOrder(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
   return prisma.$transaction(async (tx) => {
     const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
     if (request.status !== BulkOrderStatus.pending && request.status !== BulkOrderStatus.confirmed) {
       throw new BulkOrderNotDeclinableError(request.status);
     }
+
+    await releaseHoldForBulkOrder(tx, bulkOrderRequestId);
 
     const updated = await tx.bulkOrderRequest.update({
       where: { id: bulkOrderRequestId },
@@ -224,7 +260,13 @@ export class BulkOrderNotFulfillableError extends Error {
 // debit Transaction is created, and status flips to fulfilled — all atomic.
 // `type: purchase` on the Transaction row matches the type
 // createPurchaseWithDebit ("Buy Now") already uses for the same kind of
-// debit event.
+// debit event. Still checks the real (non-hold) balance here, deliberately —
+// the hold placed at confirm only ever gated the *confirm* decision; whether
+// the debit can actually go through is always re-checked against the live
+// ledger balance at the moment fulfillment happens, same as before the hold
+// feature existed. Releases the request's hold either way (a pending request
+// — one that skipped confirm — never had a hold to release, and
+// releaseHoldForBulkOrder is a no-op when there's nothing active).
 export async function fulfillBulkOrderWithDebit(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
   return prisma.$transaction(async (tx) => {
     const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
@@ -233,6 +275,7 @@ export async function fulfillBulkOrderWithDebit(bulkOrderRequestId: bigint): Pro
     }
 
     await assertSufficientBalance(tx, request.userId, request.credits);
+    await releaseHoldForBulkOrder(tx, bulkOrderRequestId);
 
     const updated = await tx.bulkOrderRequest.update({
       where: { id: bulkOrderRequestId },
@@ -366,12 +409,16 @@ export class BulkOrderCancellationNotPendingError extends Error {
   }
 }
 
+// Only reachable from `confirmed` (see requestBulkOrderCancellation's own
+// status guard), so there's always an active hold to release here.
 export async function approveBulkOrderCancellation(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
   return prisma.$transaction(async (tx) => {
     const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
     if (!request.cancellationRequestedAt) {
       throw new BulkOrderCancellationNotPendingError();
     }
+
+    await releaseHoldForBulkOrder(tx, bulkOrderRequestId);
 
     const updated = await tx.bulkOrderRequest.update({
       where: { id: bulkOrderRequestId },

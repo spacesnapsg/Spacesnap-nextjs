@@ -6,7 +6,7 @@ import Card from "@/components/Card";
 import Button from "@/components/Button";
 import DeclineReasonModal from "@/components/DeclineReasonModal";
 import CertificateRequestModal from "@/components/CertificateRequestModal";
-import ConfirmBulkOrderModal from "@/components/ConfirmBulkOrderModal";
+import ConfirmBulkOrderModal, { type InsufficientCreditWarning } from "@/components/ConfirmBulkOrderModal";
 import CancellationReviewModal from "@/components/CancellationReviewModal";
 import {
   useSupplierBookings,
@@ -291,6 +291,7 @@ export default function SupplierRequestsPage() {
   const [declineBulkOrderTarget, setDeclineBulkOrderTarget] = useState<DeclineTarget | null>(null);
   const [confirmBulkOrderTarget, setConfirmBulkOrderTarget] = useState<DeclineTarget | null>(null);
   const [confirmBulkOrderError, setConfirmBulkOrderError] = useState<string | null>(null);
+  const [confirmBulkOrderWarning, setConfirmBulkOrderWarning] = useState<InsufficientCreditWarning | null>(null);
   const [cancellationReviewTarget, setCancellationReviewTarget] = useState<CancellationReviewTarget | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -325,14 +326,23 @@ export default function SupplierRequestsPage() {
     setDeclineTarget(null);
   }
 
-  function handleConfirmBulkOrderSubmit(estimatedDeliveryDate: string) {
+  function handleConfirmBulkOrderSubmit(estimatedDeliveryDate: string, override = false) {
     if (!confirmBulkOrderTarget) return;
     setConfirmBulkOrderError(null);
+    if (!override) setConfirmBulkOrderWarning(null);
     confirmBulkOrder.mutate(
-      { id: confirmBulkOrderTarget.id, estimatedDeliveryDate },
+      { id: confirmBulkOrderTarget.id, estimatedDeliveryDate, override },
       {
-        onSuccess: () => setConfirmBulkOrderTarget(null),
+        onSuccess: () => {
+          setConfirmBulkOrderTarget(null);
+          setConfirmBulkOrderWarning(null);
+        },
         onError: (error) => {
+          const body = error instanceof ApiRequestError ? (error.body as Record<string, unknown> | null) : null;
+          if (body && body.requiresOverride === true) {
+            setConfirmBulkOrderWarning({ available: Number(body.available), required: Number(body.required) });
+            return;
+          }
           setConfirmBulkOrderError(error instanceof ApiRequestError ? error.message : "Something went wrong.");
         },
       }
@@ -550,11 +560,13 @@ export default function SupplierRequestsPage() {
         onClose={() => {
           setConfirmBulkOrderTarget(null);
           setConfirmBulkOrderError(null);
+          setConfirmBulkOrderWarning(null);
         }}
         onConfirm={handleConfirmBulkOrderSubmit}
         requestName={confirmBulkOrderTarget?.name}
         isSubmitting={confirmBulkOrder.isPending}
         errorMessage={confirmBulkOrderError}
+        creditWarning={confirmBulkOrderWarning}
       />
 
       <CancellationReviewModal

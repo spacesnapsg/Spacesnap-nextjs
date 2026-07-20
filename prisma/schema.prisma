@@ -86,6 +86,20 @@ enum BulkOrderStatus {
   @@map("bulk_order_status")
 }
 
+// Scoped 2026-07-20 (product owner): confirming a bulk order places a hold on
+// the buyer's credits — reserved but not yet debited, since the real debit
+// still only happens at fulfillment (fulfillBulkOrderWithDebit). Deliberately
+// a separate table, not a Transaction row: Transaction represents money that
+// actually moved (see its own comment below), a hold is a reservation against
+// money that hasn't moved yet. "Available" balance = live Transaction SUM
+// minus the user's own active, non-expired holds (lib/credit-holds.ts).
+enum CreditHoldStatus {
+  active
+  released
+
+  @@map("credit_hold_status")
+}
+
 // topup/refund are credit-direction, booking/purchase are debit-direction —
 // amount sign still carries the actual direction, this just makes the ledger
 // readable instead of overloading `booking` for both the original debit and
@@ -129,6 +143,7 @@ enum ActivityActionType {
   training_waitlist_approved
   training_session_created
   booking_completed
+  bulk_order_confirmed_despite_insufficient_credit
 
   @@map("activity_action_type")
 }
@@ -300,6 +315,7 @@ model User {
   trainingEnrollments     TrainingEnrollment[]
   ratings                 Rating[]
   quizAttempts            QuizAttempt[]
+  creditHolds             CreditHold[]
 
   @@map("users")
 }
@@ -612,8 +628,34 @@ model BulkOrderRequest {
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
   transactions Transaction[]
+  creditHold   CreditHold?
 
   @@map("bulk_order_requests")
+}
+
+// One hold per confirmed bulk order (unique bulkOrderRequestId) — a request
+// only ever has one hold across its lifetime, created at confirm and released
+// exactly once (fulfill/decline/cancellation-approved/lazy expiry). expiresAt
+// is fixed at 7 days from creation (product owner decision, 2026-07-20); there
+// is no scheduled job anywhere in this codebase, so expiry is enforced lazily
+// — every read of a user's available balance first releases that user's own
+// expired holds (see releaseExpiredHoldsForUser, lib/credit-holds.ts), not by
+// a background process.
+model CreditHold {
+  id                 BigInt           @id @default(autoincrement())
+  userId             String           @map("user_id")
+  bulkOrderRequestId BigInt           @unique @map("bulk_order_request_id")
+  amount             Decimal          @db.Decimal(10, 2)
+  status             CreditHoldStatus @default(active)
+  createdAt          DateTime         @default(now()) @map("created_at")
+  expiresAt          DateTime         @map("expires_at")
+  releasedAt         DateTime?        @map("released_at")
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bulkOrderRequest BulkOrderRequest @relation(fields: [bulkOrderRequestId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("credit_holds")
 }
 
 // "Buy Now" is deliberately NOT a BulkOrderRequest — a bulk order is a

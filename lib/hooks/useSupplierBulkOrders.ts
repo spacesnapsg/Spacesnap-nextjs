@@ -37,10 +37,21 @@ function useInvalidateSupplierBulkOrders() {
 export function useConfirmBulkOrder() {
   const invalidate = useInvalidateSupplierBulkOrders();
   return useMutation({
-    mutationFn: ({ id, estimatedDeliveryDate }: { id: string; estimatedDeliveryDate: string }) =>
+    mutationFn: ({
+      id,
+      estimatedDeliveryDate,
+      override,
+    }: {
+      id: string;
+      estimatedDeliveryDate: string;
+      // Credit-hold feature (2026-07-20): resubmits after the
+      // insufficient-available-credit warning is dismissed with "Confirm
+      // Anyway." Omitted/false on the first attempt.
+      override?: boolean;
+    }) =>
       apiFetch<{ bulkOrderRequest: SupplierBulkOrderRequest }>(`/api/supplier/bulk-order-requests/${id}/confirm`, {
         method: "PATCH",
-        body: JSON.stringify({ estimatedDeliveryDate }),
+        body: JSON.stringify({ estimatedDeliveryDate, override: override === true }),
       }),
     onSuccess: invalidate,
   });
