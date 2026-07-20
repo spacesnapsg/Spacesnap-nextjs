@@ -7,8 +7,9 @@ import Button from "@/components/Button";
 import UploadVideoModal from "@/components/UploadVideoModal";
 import CreateSessionModal from "@/components/CreateSessionModal";
 import ViewNamelistModal from "@/components/ViewNamelistModal";
-import { MOCK_TUTORIAL_VIDEOS, VIDEO_CATEGORIES, type TutorialVideo, type VideoCategory } from "@/lib/mockTutorials";
+import { VIDEO_CATEGORIES, type VideoCategory } from "@/lib/mockTutorials";
 import { useSupplierTrainingSessions, type SupplierTrainingSession } from "@/lib/hooks/useSupplierTrainingSessions";
+import { useTrainingVideos, type TrainingVideo } from "@/lib/hooks/useTrainingVideos";
 
 type Tab = "videos" | "sessions";
 
@@ -38,25 +39,37 @@ const DERIVED_STATUS_STYLES: Record<SupplierTrainingSession["derivedStatus"], st
   past: "bg-white/10 text-body-text border-white/20",
 };
 
-function VideoCard({ video }: { video: TutorialVideo }) {
+function formatDuration(seconds: number | null): string | null {
+  if (seconds === null || seconds < 0) return null;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = seconds % 60;
+  return `${minutes}:${String(remaining).padStart(2, "0")}`;
+}
+
+function VideoCard({ video }: { video: TrainingVideo }) {
+  const duration = formatDuration(video.durationSeconds);
   return (
     <div className="bg-card border border-border/10 rounded-card overflow-hidden flex flex-col">
       <div className="relative h-40 bg-background flex items-center justify-center">
         <PlayCircle size={28} className="text-muted-text" />
-        <span
-          className={`absolute bottom-3 left-3 rounded-full border px-2.5 py-1 text-[11px] font-medium ${CATEGORY_STYLES[video.category]}`}
-        >
-          {video.category}
-        </span>
-        {video.duration && (
+        {video.category && (
+          <span
+            className={`absolute bottom-3 left-3 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+              CATEGORY_STYLES[video.category as VideoCategory] ?? "bg-white/10 text-body-text border-white/20"
+            }`}
+          >
+            {video.category}
+          </span>
+        )}
+        {duration && (
           <span className="absolute bottom-3 right-3 bg-background/90 text-body-text text-[11px] font-medium px-1.5 py-0.5 rounded">
-            {video.duration}
+            {duration}
           </span>
         )}
       </div>
       <div className="p-4 flex flex-col gap-1">
         <h3 className="font-semibold text-body-text leading-snug line-clamp-2">{video.title}</h3>
-        <p className="text-xs text-muted-text">{video.completions} completions</p>
+        <p className="text-xs text-muted-text">{video.completionCount} completions</p>
       </div>
     </div>
   );
@@ -119,7 +132,6 @@ function SessionRow({
 export default function SupplierTutorialsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("videos");
   const [activeFilter, setActiveFilter] = useState<VideoFilter>("All");
-  const [videos, setVideos] = useState<TutorialVideo[]>(MOCK_TUTORIAL_VIDEOS);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
   const [namelistSessionId, setNamelistSessionId] = useState<string | null>(null);
@@ -128,11 +140,8 @@ export default function SupplierTutorialsPage() {
   const { data: sessions } = useSupplierTrainingSessions();
   const namelistSession = sessions?.find((s) => s.id === namelistSessionId) ?? null;
 
-  const filteredVideos = activeFilter === "All" ? videos : videos.filter((v) => v.category === activeFilter);
-
-  function handleVideoCreated(video: TutorialVideo) {
-    setVideos((prev) => [video, ...prev]);
-  }
+  const { data: videos } = useTrainingVideos(activeFilter === "All" ? undefined : { category: activeFilter });
+  const filteredVideos = videos ?? [];
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -233,7 +242,7 @@ export default function SupplierTutorialsPage() {
         </>
       )}
 
-      <UploadVideoModal open={uploadOpen} onClose={() => setUploadOpen(false)} onCreated={handleVideoCreated} />
+      <UploadVideoModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
       <CreateSessionModal
         open={sessionModalOpen}
         onClose={() => setSessionModalOpen(false)}

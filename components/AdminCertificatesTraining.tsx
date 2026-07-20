@@ -7,12 +7,7 @@ import Button from "@/components/Button";
 import Input from "@/components/Input";
 import Modal from "@/components/Modal";
 import TrainingVideoModal, { type VideoFormRenderProps } from "@/components/TrainingVideoModal";
-import {
-  VIDEO_CATEGORIES,
-  MOCK_ADMIN_TRAINING_VIDEOS,
-  type VideoCategory,
-  type AdminTrainingVideo,
-} from "@/lib/mockTutorials";
+import { VIDEO_CATEGORIES, type VideoCategory, type QuizQuestion } from "@/lib/mockTutorials";
 import {
   useAdminCertificates,
   useApproveCertificate,
@@ -21,6 +16,14 @@ import {
   type AdminCertificate,
   type CertificateStatus,
 } from "@/lib/hooks/useAdminCertificates";
+import {
+  useAdminTrainingVideos,
+  useAdminCreateTrainingVideo,
+  useAdminUpdateTrainingVideo,
+  useAdminDeleteTrainingVideo,
+  useAdminSaveTrainingVideoQuiz,
+  type AdminTrainingVideo,
+} from "@/lib/hooks/useAdminTrainingVideos";
 import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "certificates" | "training";
@@ -386,49 +389,69 @@ function AdminVideoFields({ values, updateField, onSubmit, saving, error, isEdit
   );
 }
 
-interface SavedAdminVideo {
-  id: number;
-  title: string;
-  category: VideoCategory;
-  duration: string;
-  thumbnailUrl: string;
-  videoUrl: string;
-  description: string;
+// MM:SS <-> seconds — the form stays a friendly "12:45" text field, the API
+// stores durationSeconds. Invalid/empty input maps to null rather than 0, so
+// a blank field doesn't silently save a zero-length duration.
+function parseDurationToSeconds(value: string): number | null {
+  const match = value.trim().match(/^(\d+):([0-5]?\d)$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function formatSecondsToDuration(seconds: number | null): string {
+  if (seconds === null || seconds < 0) return "";
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function VideoModal({
   open,
   onClose,
   initialVideo,
-  onVideoSaved,
-  onQuizSaved,
 }: {
   open: boolean;
   onClose: () => void;
   initialVideo: AdminTrainingVideo | null;
-  onVideoSaved: (video: SavedAdminVideo) => void;
-  onQuizSaved: (videoId: number, questions: import("@/lib/mockTutorials").QuizQuestion[]) => void;
 }) {
+  const createVideo = useAdminCreateTrainingVideo();
+  const updateVideo = useAdminUpdateTrainingVideo();
+  const saveQuizMutation = useAdminSaveTrainingVideoQuiz();
+
   const initialFormValues: AdminVideoFormValues = initialVideo
     ? {
         title: initialVideo.title,
-        category: initialVideo.category,
-        duration: initialVideo.duration,
-        thumbnailUrl: initialVideo.thumbnailUrl,
-        videoUrl: initialVideo.videoUrl,
-        description: initialVideo.description,
+        category: (initialVideo.category as VideoCategory) ?? VIDEO_CATEGORIES[0],
+        duration: formatSecondsToDuration(initialVideo.durationSeconds),
+        thumbnailUrl: initialVideo.thumbnailUrl ?? "",
+        videoUrl: initialVideo.videoUrl ?? "",
+        description: initialVideo.description ?? "",
       }
     : EMPTY_ADMIN_VIDEO_FORM;
 
-  // TODO: still on mock data — waiting on this stack's port of the old
-  // TrainingVideoController (POST/PATCH /admin/training-videos[/:id]).
-  async function saveVideo(values: AdminVideoFormValues, videoId: number | null): Promise<SavedAdminVideo> {
-    return { id: videoId ?? Date.now(), ...values };
+  async function saveVideo(values: AdminVideoFormValues, videoId: string | null): Promise<AdminTrainingVideo> {
+    const input = {
+      title: values.title.trim(),
+      category: values.category,
+      description: values.description.trim() || null,
+      durationSeconds: parseDurationToSeconds(values.duration),
+      thumbnailUrl: values.thumbnailUrl.trim() || null,
+      videoUrl: values.videoUrl.trim() || null,
+    };
+    const result = videoId
+      ? await updateVideo.mutateAsync({ id: videoId, ...input })
+      : await createVideo.mutateAsync(input);
+    return result.trainingVideo;
   }
 
-  // TODO: still on mock data — waiting on this stack's port of the old
-  // QuizQuestionController (POST /admin/training-videos/:id/quiz-questions).
-  async function saveQuiz(): Promise<void> {}
+  async function saveQuiz(trainingVideoId: string, questions: QuizQuestion[]): Promise<void> {
+    await saveQuizMutation.mutateAsync({
+      trainingVideoId,
+      questions: questions.map((q) => ({
+        question: q.question,
+        options: q.answers.map((a) => a.text),
+        correctIndex: q.answers.findIndex((a) => a.is_correct),
+      })),
+    });
+  }
 
   return (
     <TrainingVideoModal
@@ -438,8 +461,6 @@ function VideoModal({
       initialFormValues={initialFormValues}
       saveVideo={saveVideo}
       saveQuiz={saveQuiz}
-      onVideoSaved={onVideoSaved}
-      onQuizSaved={onQuizSaved}
       renderVideoForm={(props) => <AdminVideoFields {...props} />}
       modalClassName="w-full max-w-[560px]"
       accentClassName="accent-admin-red-start"
@@ -470,6 +491,7 @@ function DeleteVideoModal({ video, onCancel, onConfirm }: { video: AdminTraining
 }
 
 function VideoCard({ video, onEdit, onDelete }: { video: AdminTrainingVideo; onEdit: (video: AdminTrainingVideo) => void; onDelete: (video: AdminTrainingVideo) => void }) {
+  const duration = formatSecondsToDuration(video.durationSeconds);
   return (
     <div className="bg-card border border-border/10 rounded-card overflow-hidden group">
       <div className="relative h-40 bg-background flex items-center justify-center">
@@ -479,11 +501,13 @@ function VideoCard({ video, onEdit, onDelete }: { video: AdminTrainingVideo; onE
         ) : (
           <PlayCircle size={28} className="text-muted-text" />
         )}
-        <span className="absolute bottom-3 left-3 bg-background/90 border border-border/60 text-muted-text rounded-full px-2.5 py-1 text-[11px] font-medium">
-          {video.category}
-        </span>
-        {video.duration && (
-          <span className="absolute bottom-3 right-3 bg-background/90 text-body-text text-[11px] font-medium px-1.5 py-0.5 rounded">{video.duration}</span>
+        {video.category && (
+          <span className="absolute bottom-3 left-3 bg-background/90 border border-border/60 text-muted-text rounded-full px-2.5 py-1 text-[11px] font-medium">
+            {video.category}
+          </span>
+        )}
+        {duration && (
+          <span className="absolute bottom-3 right-3 bg-background/90 text-body-text text-[11px] font-medium px-1.5 py-0.5 rounded">{duration}</span>
         )}
         <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
@@ -509,28 +533,23 @@ function VideoCard({ video, onEdit, onDelete }: { video: AdminTrainingVideo; onE
   );
 }
 
-function TrainingVideosTab({
-  videos,
-  onVideoSaved,
-  onQuizSaved,
-  onDelete,
-}: {
-  videos: AdminTrainingVideo[];
-  onVideoSaved: (video: SavedAdminVideo) => void;
-  onQuizSaved: (videoId: number, questions: import("@/lib/mockTutorials").QuizQuestion[]) => void;
-  onDelete: (id: number) => void;
-}) {
+function TrainingVideosTab() {
   const [modalState, setModalState] = useState<{ open: boolean; video: AdminTrainingVideo | null }>({ open: false, video: null });
   const [deleteTarget, setDeleteTarget] = useState<AdminTrainingVideo | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<"all" | VideoCategory>("all");
 
+  const { data, isLoading, isError } = useAdminTrainingVideos({
+    category: categoryFilter === "all" ? undefined : categoryFilter,
+  });
+  const deleteVideo = useAdminDeleteTrainingVideo();
+
   function handleConfirmDelete() {
     if (!deleteTarget) return;
-    onDelete(deleteTarget.id);
+    deleteVideo.mutate(deleteTarget.id);
     setDeleteTarget(null);
   }
 
-  const filteredVideos = videos.filter((v) => categoryFilter === "all" || v.category === categoryFilter);
+  const videos = data ?? [];
 
   return (
     <Card>
@@ -557,23 +576,21 @@ function TrainingVideosTab({
         ))}
       </div>
 
-      {filteredVideos.length === 0 ? (
+      {isLoading ? (
+        <p className="text-sm text-muted-text text-center py-12">Loading…</p>
+      ) : isError ? (
+        <p className="text-sm text-error-red text-center py-12">Failed to load training videos.</p>
+      ) : videos.length === 0 ? (
         <p className="text-sm text-muted-text text-center py-12">No videos found</p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          {filteredVideos.map((video) => (
+          {videos.map((video) => (
             <VideoCard key={video.id} video={video} onEdit={(v) => setModalState({ open: true, video: v })} onDelete={(v) => setDeleteTarget(v)} />
           ))}
         </div>
       )}
 
-      <VideoModal
-        open={modalState.open}
-        initialVideo={modalState.video}
-        onClose={() => setModalState({ open: false, video: null })}
-        onVideoSaved={onVideoSaved}
-        onQuizSaved={onQuizSaved}
-      />
+      <VideoModal open={modalState.open} initialVideo={modalState.video} onClose={() => setModalState({ open: false, video: null })} />
 
       <DeleteVideoModal video={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={handleConfirmDelete} />
     </Card>
@@ -582,24 +599,6 @@ function TrainingVideosTab({
 
 export default function AdminCertificatesTraining() {
   const [activeTab, setActiveTab] = useState<MainTab>("certificates");
-  const [videos, setVideos] = useState<AdminTrainingVideo[]>(MOCK_ADMIN_TRAINING_VIDEOS);
-
-  function handleVideoSaved(video: SavedAdminVideo) {
-    setVideos((prev) => {
-      const exists = prev.some((v) => v.id === video.id);
-      return exists ? prev.map((v) => (v.id === video.id ? { ...v, ...video } : v)) : [{ ...video, quiz: undefined }, ...prev];
-    });
-  }
-
-  function handleQuizSaved(videoId: number, questions: import("@/lib/mockTutorials").QuizQuestion[]) {
-    setVideos((prev) => prev.map((v) => (v.id === videoId ? { ...v, quiz: questions } : v)));
-  }
-
-  // TODO: still on mock data — waiting on this stack's port of the old
-  // TrainingVideoController (DELETE /admin/training-videos/{id}).
-  function handleDeleteVideo(id: number) {
-    setVideos((prev) => prev.filter((v) => v.id !== id));
-  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -625,11 +624,7 @@ export default function AdminCertificatesTraining() {
         ))}
       </div>
 
-      {activeTab === "certificates" ? (
-        <CertificatesTab />
-      ) : (
-        <TrainingVideosTab videos={videos} onVideoSaved={handleVideoSaved} onQuizSaved={handleQuizSaved} onDelete={handleDeleteVideo} />
-      )}
+      {activeTab === "certificates" ? <CertificatesTab /> : <TrainingVideosTab />}
     </div>
   );
 }

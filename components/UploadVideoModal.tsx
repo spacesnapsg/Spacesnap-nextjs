@@ -1,13 +1,12 @@
 "use client";
 
-// TODO: still on mock data (lib/mockTutorials.ts) — waiting on this stack's port of
-// the old TrainingVideoController (supplier upload endpoint).
-import { useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Video, Image as ImageIcon } from "lucide-react";
 import TrainingVideoModal, { type VideoFormRenderProps } from "./TrainingVideoModal";
 import Button from "./Button";
 import Input from "./Input";
-import { VIDEO_CATEGORIES, type VideoCategory, type QuizQuestion, type TutorialVideo } from "@/lib/mockTutorials";
+import { VIDEO_CATEGORIES, type VideoCategory, type QuizQuestion } from "@/lib/mockTutorials";
+import { useCreateTrainingVideo, useSaveTrainingVideoQuiz } from "@/lib/hooks/useSupplierTrainingVideos";
 
 interface SupplierVideoFormValues {
   title: string;
@@ -119,45 +118,36 @@ function SupplierVideoFields({
 }
 
 interface SavedVideo {
-  id: number;
-  title: string;
-  category: VideoCategory;
-  description: string;
+  id: string;
 }
 
 interface UploadVideoModalProps {
   open: boolean;
   onClose: () => void;
-  onCreated?: (video: TutorialVideo) => void;
+  onCreated?: () => void;
 }
 
 export default function UploadVideoModal({ open, onClose, onCreated }: UploadVideoModalProps) {
-  const lastSavedVideo = useRef<SavedVideo | null>(null);
+  const createVideo = useCreateTrainingVideo();
+  const saveQuiz = useSaveTrainingVideoQuiz();
 
-  async function saveVideo(values: SupplierVideoFormValues, videoId: number | null): Promise<SavedVideo> {
-    const saved: SavedVideo = {
-      id: videoId ?? Date.now(),
+  async function handleSaveVideo(values: SupplierVideoFormValues): Promise<SavedVideo> {
+    const result = await createVideo.mutateAsync({
       title: values.title.trim(),
       category: values.category,
-      description: values.description.trim(),
-    };
-    lastSavedVideo.current = saved;
-    return saved;
+      description: values.description.trim() || null,
+    });
+    return { id: result.trainingVideo.id };
   }
 
-  // Mock only — Sprint 3 wires this to POST /supplier/training-videos/:id/quiz-questions.
-  async function saveQuiz(): Promise<void> {}
-
-  function handleQuizSaved(videoId: number, questions: QuizQuestion[]) {
-    const saved = lastSavedVideo.current;
-    if (!saved || saved.id !== videoId) return;
-    onCreated?.({
-      id: saved.id,
-      title: saved.title,
-      category: saved.category,
-      duration: "",
-      completions: 0,
-      quiz: questions,
+  async function handleSaveQuiz(trainingVideoId: string, questions: QuizQuestion[]): Promise<void> {
+    await saveQuiz.mutateAsync({
+      trainingVideoId,
+      questions: questions.map((q) => ({
+        question: q.question,
+        options: q.answers.map((a) => a.text),
+        correctIndex: q.answers.findIndex((a) => a.is_correct),
+      })),
     });
   }
 
@@ -167,9 +157,9 @@ export default function UploadVideoModal({ open, onClose, onCreated }: UploadVid
       onClose={onClose}
       initialVideo={null}
       initialFormValues={EMPTY_FORM}
-      saveVideo={saveVideo}
-      saveQuiz={saveQuiz}
-      onQuizSaved={handleQuizSaved}
+      saveVideo={handleSaveVideo}
+      saveQuiz={handleSaveQuiz}
+      onQuizSaved={onCreated}
       renderVideoForm={(props) => <SupplierVideoFields {...props} />}
       modalClassName="max-w-[560px]"
       accentClassName="accent-supplier-purple-start"

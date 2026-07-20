@@ -1,7 +1,5 @@
 "use client";
 
-// TODO: still on mock data (lib/mockTutorials.ts) — waiting on this stack's port of
-// the old TrainingVideoController (shared by admin + supplier video CRUD).
 import { useState, type FormEvent, type ReactNode } from "react";
 import Modal from "./Modal";
 import QuizBuilderStep from "./QuizBuilderStep";
@@ -16,15 +14,15 @@ export interface VideoFormRenderProps<TValues> {
   isEdit: boolean;
 }
 
-interface TrainingVideoModalProps<TValues, TSaved extends { id: number }> {
+interface TrainingVideoModalProps<TValues, TSaved extends { id: string }> {
   open: boolean;
   onClose: () => void;
-  initialVideo?: { id: number } | null;
+  initialVideo?: { id: string } | null;
   initialFormValues: TValues;
-  saveVideo: (values: TValues, videoId: number | null) => Promise<TSaved>;
-  saveQuiz: (videoId: number, questions: QuizQuestion[]) => Promise<void>;
+  saveVideo: (values: TValues, videoId: string | null) => Promise<TSaved>;
+  saveQuiz: (videoId: string, questions: QuizQuestion[]) => Promise<void>;
   onVideoSaved?: (saved: TSaved) => void;
-  onQuizSaved?: (videoId: number, questions: QuizQuestion[]) => void;
+  onQuizSaved?: (videoId: string, questions: QuizQuestion[]) => void;
   renderVideoForm: (props: VideoFormRenderProps<TValues>) => ReactNode;
   modalClassName?: string;
   accentClassName?: string;
@@ -37,7 +35,7 @@ interface TrainingVideoModalProps<TValues, TSaved extends { id: number }> {
  * QuizBuilderStep. Callers own the actual save calls and field layouts,
  * since those differ between supplier and admin.
  */
-export default function TrainingVideoModal<TValues, TSaved extends { id: number }>({
+export default function TrainingVideoModal<TValues, TSaved extends { id: string }>({
   open,
   onClose,
   initialVideo = null,
@@ -54,7 +52,7 @@ export default function TrainingVideoModal<TValues, TSaved extends { id: number 
   const isEdit = !!initialVideo;
   const [step, setStep] = useState<"video" | "quiz">("video");
   const [values, setValues] = useState<TValues>(initialFormValues);
-  const [videoId, setVideoId] = useState<number | null>(initialVideo?.id ?? null);
+  const [videoId, setVideoId] = useState<string | null>(initialVideo?.id ?? null);
   const [videoSaving, setVideoSaving] = useState(false);
   const [videoError, setVideoError] = useState("");
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);

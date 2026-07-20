@@ -2395,3 +2395,151 @@ real non-booking feed example).
 side was already correct and complete from Sprint 3.5 onward); the
 "Currently Active" card's own gap (no GET for active check-ins) is untouched
 and separately tracked; Video Tutorials mock-data gap untouched.
+
+---
+
+## Video Tutorials — TrainingVideo/Quiz Backend + Supplier/Admin/User UI (2026-07-20)
+
+Closed the Video Tutorials mock-data gap tracked since Sprint 3 Session 4
+("supplier Tutorials page and the admin Certificates & Training 'Training
+Videos' tab... both intentionally left on mock data"). Confirmed the
+"Currently Active" check-ins gap is a *different*, still-blocked item (Trust
+Architecture: `CheckIn` rows are only ever supposed to be written by the
+kiosk Pi, Sprint 5 — not something to build a web UI for now), not this one.
+
+**Schema was already fully built**, ahead of this session — `TrainingVideo`,
+`VideoCompletion`, `QuizQuestion`, `QuizAnswer` all existed from earlier
+Sprint 4 work (the tier1_video_quiz earning path, `lib/quiz-attempts.ts`),
+just with no CRUD routes exposing them beyond the single existing
+`POST /api/training-videos/[id]/quiz-attempts`. No migration needed.
+
+**What was built:**
+- `lib/training-videos.ts` — `serializeTrainingVideo` (conditional company/
+  counts/viewer sections, same idiom as `serializeCertificate`),
+  `parseTrainingVideoFields` (mirrors old `TrainingVideoController::rules()`:
+  title/category required on create, "sometimes" on update), CRUD functions
+  (`createTrainingVideo`, `updateTrainingVideoAsSupplier` — company-ownership
+  checked, `updateTrainingVideoAsAdmin`, `deleteTrainingVideoAsAdmin`),
+  `TrainingVideoNotFoundError`/`TrainingVideoNotOwnedError`. `deriveViewerState`
+  is the one genuinely new rule: a quiz-backed video counts as "completed"
+  only via a *passing* `QuizAttempt`, never via `VideoCompletion` — the two
+  completion mechanisms are for different video shapes (informational vs.
+  quiz-gated), not redundant paths to the same state.
+- `lib/quiz-questions.ts` — `parseQuizQuestionsSubmission` (min 15 questions,
+  exactly 4 options each, `correctIndex` 0-3, mirrors old
+  `QuizQuestionController`'s validation exactly, confirmed against
+  `TrainingVideoQuizTest.php` in `spacesnap-api`) and replace-all
+  `saveQuizQuestionsAsSupplier`/`AsAdmin` (delete-then-recreate in one
+  transaction, same semantics as the old backend — a video's quiz has no
+  incremental-edit affordance anywhere in this app).
+- Routes: public `GET /api/training-videos` (catalog, viewer-merged
+  completedByMe/myLatestQuizAttempt — requires auth, a deliberate deviation
+  from the old backend's unauthenticated `index()`, since every page that
+  reaches this in this app already sits behind route protection, and it lets
+  one request carry the viewer's own state instead of a second round trip),
+  `GET /api/training-videos/[id]` (detail + taker-safe quiz questions, no
+  `isCorrect`), `POST .../complete` (VideoCompletion upsert), supplier
+  `POST/PATCH /api/supplier/training-videos[/[id]]` +
+  `POST .../[id]/quiz-questions`, admin `GET/POST /api/admin/training-videos`
+  + `PATCH/DELETE [id]` + `POST [id]/quiz-questions` (first `DELETE` route in
+  this codebase — admin-only, matching the old backend, suppliers never had
+  delete even for their own uploads).
+- Frontend: `lib/hooks/useTrainingVideos.ts` (public list/detail/complete/
+  quiz-attempt-submit), `useSupplierTrainingVideos.ts`, `useAdminTrainingVideos.ts`.
+  `UploadVideoModal.tsx` and `AdminCertificatesTraining.tsx`'s video tab
+  rewired from local mock state to these hooks — no UI redesign, the
+  existing two-step `TrainingVideoModal`/`QuizBuilderStep` flow (built during
+  the Sprint 3 correction) needed only its `saveVideo`/`saveQuiz` stubs
+  replaced with real mutations. `TrainingVideoModal`'s generic id type
+  switched from `number` (mock `Date.now()` ids) to `string` (real
+  BigInt-backed ids) — the one non-cosmetic change to that shared component.
+  Supplier Tutorials page's Video Tutorials tab now reads
+  `useTrainingVideos()` directly (no supplier-scoped "my videos" list exists
+  in this app, matching the old backend — suppliers browse the same
+  platform-wide catalog everyone sees, same as admin's read side).
+- **New, not a port** — the Digital Passport page's "Training Tutorials" card
+  was a stub with no mock data at all (explicitly flagged as not-even-mocked
+  in Sprint 3 Session 5). Built the real quiz-taking flow: `TutorialCard`
+  grid + `TutorialDetailModal` (two-step: "watch" — video placeholder +
+  either "Mark as Watched" for informational videos or "Take the Quiz" for
+  quiz-backed ones; "quiz" — radio-button questions sourced from the detail
+  endpoint, submits to the existing `POST .../quiz-attempts`, shows pass/
+  fail + credential-issued messaging). Modeled on the old
+  `spacesnap-web/src/pages/DigitalPassport.jsx` `TutorialModal`/`QuizModal`
+  mock shape (product owner's established reference pattern for this page,
+  per the earlier Training Sessions session), now against real data.
+
+**Real bug found and fixed during live verification, not just in new code:**
+`useCompleteTrainingVideo`/`useSubmitQuizAttempt` only invalidated the
+`["training-videos"]` list query on success, not `["training-video-detail",
+id]` — the *open modal* reads from the detail query, so after marking a
+video watched (or passing its quiz), the modal's own button stayed on "I've
+Understood the Contents" until closed and reopened, even though the list
+behind it had already updated. Caught by actually watching the button after
+a real mutation, not just checking the network tab returned 200. Fixed by
+invalidating both query keys.
+
+**Second real bug found live:** the category filter pills (`?category=`)
+did an exact-match `where: { category }` — the upload form's
+`VIDEO_CATEGORIES` dropdown submits capitalized values ("Safety") but seeded
+`TrainingVideo` rows use lowercase ("safety"), so clicking the "Safety"
+filter pill hid every seeded safety video and showed only videos created
+through the new form. Fixed both `GET /api/training-videos` and
+`GET /api/admin/training-videos` to use `{ equals: category, mode:
+"insensitive" }`, matching the case-insensitive search pattern already used
+in `GET /api/admin/certificates`.
+
+**Cleanup:** `lib/mockTutorials.ts` trimmed to just the still-live
+quiz-authoring types/helpers (`QuizQuestion`, `QuizAnswer`,
+`makeBlankQuizQuestion`, `VideoCategory`, `VIDEO_CATEGORIES` — still used by
+`QuizBuilderStep`/`TrainingVideoModal`/both upload flows). Deleted
+`MOCK_TUTORIAL_VIDEOS`, `MOCK_ADMIN_TRAINING_VIDEOS`, and the already-dead
+`MOCK_TRAINING_SESSIONS`/`SESSION_LISTING_OPTIONS`/`SESSION_CERTIFICATE_OPTIONS`
+(superseded by the real API, confirmed zero remaining imports via grep first
+— valid per this repo's standing "only delete on real supersession" rule,
+not the "no backend exists yet" reasoning that rule was written to forbid).
+
+**Tests:** `lib/training-videos.test.ts` (parse validation, supplier/admin
+CRUD ownership rules, `deriveViewerState`) and `lib/quiz-questions.test.ts`
+(submission validation matching the old backend's matrix, replace-all save
+semantics including the resave-replaces-everything case), both against the
+real test DB, added to `npm test`. All 171 tests pass (27 new, 0
+regressions). `npx tsc --noEmit`, `npx eslint .` (only the pre-existing,
+unrelated `passport/page.tsx` cert-filter-effect finding, confirmed
+untouched by this session), and `next build` all clean.
+
+**Verified live**, full loop, real cookie-jar sessions for all three roles
+against the dev server/DB — not just unit tests:
+- `ethan@example.com`: watched "Chemical Storage Guidelines" (no quiz) →
+  modal correctly flipped to "Completed"/"Already Watched" after the fix
+  above; passed "Forklift Operation Basics"' real 4-question seeded quiz
+  (looked up the actual answer key via a scratch script, not guessed) →
+  "Passed! Scored 4/4."; card grid showed both as Completed on next render.
+- `ben@acmecoworking.sg` (supplier): Upload Video → 201, video appeared in
+  the grid immediately (no reload) with 0 completions.
+- `alice.admin@spacesnap.sg`: Add Video → Build a real 15-question quiz (hit
+  the exact minimum, one correct answer each) → Save Quiz → 201; Edit →
+  title change → 200; Delete → confirm modal showed the right title → 204,
+  cascade-deleted the quiz questions/answers, video gone from the grid.
+- Category filter re-verified after the case-insensitive fix: clicking
+  "Safety" now correctly shows all 3 seeded safety-category videos
+  regardless of casing.
+
+All scratch state cleaned up afterward: the `VideoCompletion`/`QuizAttempt`/
+`ActivityLog` rows from Ethan's test run deleted via a scratch script,
+Ethan's original seeded `VideoCompletion` row (Workplace Safety 101,
+2026-01-14 — an inert row given `deriveViewerState`'s rule above, since that
+video has a quiz, but still part of the canonical seed fixture) restored
+after an over-broad first cleanup pass deleted it alongside the actual test
+artifact; the admin-created 15-question test video deleted via the UI's own
+Delete flow (204, cascade). Final DB check: `training_videos` 3,
+`quiz_questions` 8, `quiz_answers` 32, `quiz_attempts` 0, `video_completions`
+3 — byte-identical counts to the pre-session seeded state.
+
+**Not touched:** Video upload itself (`Video upload coming soon` /
+`Thumbnail upload coming soon` dropzones stay disabled placeholders — R2
+file upload is separate, unbuilt scope, not something this session invented
+a workaround for); no changes to `lib/quiz-attempts.ts`'s grading logic
+(already correct from Sprint 4 Item 4); "Currently Active" check-ins gap
+remains blocked on Sprint 5 kiosk hardware, not something this session's
+scope covered.

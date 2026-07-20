@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useSearchParams } from "next/navigation";
-import { Award, Building2, Calendar, Camera, Check, Lock, Mail, MapPin, Trophy, User, Users } from "lucide-react";
+import { Award, Building2, Calendar, Camera, Check, CheckCircle2, Lock, Mail, MapPin, PlayCircle, Trophy, User, Users } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
@@ -12,6 +12,13 @@ import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 import { useCertificateCatalog, type Certificate } from "@/lib/hooks/useCertificates";
 import { useCredentials, isCredentialHeld } from "@/lib/hooks/useCredentials";
 import { useTrainingSessions, useEnrollInTrainingSession, type TrainingSession } from "@/lib/hooks/useTrainingSessions";
+import {
+  useTrainingVideos,
+  useTrainingVideoDetail,
+  useCompleteTrainingVideo,
+  useSubmitQuizAttempt,
+  type TrainingVideo,
+} from "@/lib/hooks/useTrainingVideos";
 import { ApiRequestError } from "@/lib/api-client";
 
 const SESSION_BADGE: Record<string, { label: string; className: string }> = {
@@ -202,6 +209,214 @@ function SessionDetailModal({ session, onClose }: { session: TrainingSession | n
   );
 }
 
+function formatVideoDuration(seconds: number | null): string | null {
+  if (seconds === null || seconds < 0) return null;
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function TutorialCard({ video, onSelect }: { video: TrainingVideo; onSelect: (video: TrainingVideo) => void }) {
+  const duration = formatVideoDuration(video.durationSeconds);
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(video)}
+      className="text-left bg-background border border-border/60 rounded p-4 flex flex-col gap-3 hover:border-user-teal-start/50 transition-colors"
+    >
+      <div className="relative h-28 rounded bg-card flex items-center justify-center">
+        <PlayCircle size={24} className="text-muted-text" />
+        {duration && (
+          <span className="absolute bottom-2 right-2 bg-background/90 text-body-text text-[11px] font-medium px-1.5 py-0.5 rounded">
+            {duration}
+          </span>
+        )}
+        {video.completedByMe && (
+          <span className="absolute top-2 left-2 flex items-center gap-1 bg-success-green/15 text-success-green border border-success-green/30 rounded-full px-2 py-0.5 text-[11px] font-medium">
+            <CheckCircle2 size={10} />
+            Completed
+          </span>
+        )}
+      </div>
+      <div>
+        <h3 className="text-sm font-semibold text-body-text leading-snug line-clamp-2">{video.title}</h3>
+        <p className="text-xs text-muted-text mt-0.5">
+          {video.category ?? "General"}
+          {video.hasQuiz ? " · Quiz required" : ""}
+        </p>
+      </div>
+    </button>
+  );
+}
+
+// Two-step flow: "watch" (video placeholder + either a plain "mark as
+// watched" completion for informational videos, or a launch into "quiz" for
+// videos backing a tier1_video_quiz certificate — see the TrainingVideo
+// model comment in schema.prisma for why most videos have no quiz at all).
+// Mirrors the old spacesnap-web mockup's TutorialModal/QuizModal split
+// (DigitalPassport.jsx), now against real data.
+function TutorialDetailModal({ videoId, onClose }: { videoId: string | null; onClose: () => void }) {
+  const { data, isLoading } = useTrainingVideoDetail(videoId);
+  const [step, setStep] = useState<"watch" | "quiz">("watch");
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const completeVideo = useCompleteTrainingVideo();
+  const submitAttempt = useSubmitQuizAttempt();
+
+  // Reset step/answers/mutation state whenever a different video (or none)
+  // is selected — same during-render reset idiom as TrainingVideoModal.
+  const resetKey = videoId ?? "closed";
+  const [prevResetKey, setPrevResetKey] = useState(resetKey);
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey);
+    setStep("watch");
+    setAnswers({});
+    completeVideo.reset();
+    submitAttempt.reset();
+  }
+
+  const video = data?.trainingVideo;
+  const quizQuestions = data?.quizQuestions ?? [];
+  const allAnswered = quizQuestions.length > 0 && quizQuestions.every((q) => answers[q.id]);
+
+  function handleSubmitQuiz() {
+    if (!videoId) return;
+    submitAttempt.mutate({
+      trainingVideoId: videoId,
+      answers: quizQuestions.map((q) => ({ questionId: q.id, answerId: answers[q.id] })),
+    });
+  }
+
+  return (
+    <Modal open={!!videoId} onClose={onClose} className="w-full max-w-[560px]">
+      {isLoading || !video ? (
+        <p className="text-sm text-muted-text text-center py-12">Loading…</p>
+      ) : step === "watch" ? (
+        <div className="flex flex-col gap-4 pr-4">
+          <div>
+            <h3 className="font-semibold text-body-text text-lg leading-snug">{video.title}</h3>
+            <div className="flex items-center gap-2 mt-2">
+              {video.category && (
+                <span className="bg-background border border-border/60 text-muted-text rounded-full px-2.5 py-1 text-xs">
+                  {video.category}
+                </span>
+              )}
+              {video.completedByMe && (
+                <span className="flex items-center gap-1 bg-success-green/15 text-success-green border border-success-green/30 rounded-full px-2.5 py-1 text-xs font-medium">
+                  <CheckCircle2 size={12} />
+                  Completed
+                </span>
+              )}
+            </div>
+          </div>
+
+          {video.description && <p className="text-sm text-muted-text">{video.description}</p>}
+
+          <div className="relative aspect-video rounded bg-background border border-border/40 flex flex-col items-center justify-center gap-2 overflow-hidden">
+            <PlayCircle size={40} className="text-muted-text" />
+            <span className="text-xs text-muted-text">Video placeholder</span>
+          </div>
+
+          <div className="border-t border-border/40 pt-4 flex flex-col gap-2">
+            {video.hasQuiz ? (
+              <Button
+                type="button"
+                className="w-full !bg-gradient-to-r !from-user-teal-start !to-user-teal-end"
+                onClick={() => setStep("quiz")}
+              >
+                {video.myLatestQuizAttempt ? "Retake Quiz" : "Take the Quiz"}
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                disabled={video.completedByMe || completeVideo.isPending}
+                className={`w-full ${
+                  video.completedByMe
+                    ? "!bg-none !bg-white/10 !text-muted-text cursor-not-allowed"
+                    : "!bg-gradient-to-r !from-user-teal-start !to-user-teal-end"
+                }`}
+                onClick={() => videoId && completeVideo.mutate(videoId)}
+              >
+                {video.completedByMe ? "Already Watched" : completeVideo.isPending ? "Saving…" : "I've Understood the Contents"}
+              </Button>
+            )}
+            {video.myLatestQuizAttempt && (
+              <p className="text-xs text-center text-muted-text">
+                Last attempt: {video.myLatestQuizAttempt.score}/{video.myLatestQuizAttempt.totalQuestions}
+                {video.myLatestQuizAttempt.passed ? " — passed" : " — not yet passed"}
+              </p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4 pr-4">
+          <div>
+            <h3 className="font-semibold text-body-text text-lg leading-snug">Quiz: {video.title}</h3>
+            <p className="text-sm text-muted-text mt-1">Answer all questions to complete this tutorial</p>
+          </div>
+
+          <div className="border-t border-border/40 pt-4 flex flex-col gap-5 max-h-[420px] overflow-y-auto">
+            {quizQuestions.map((q, index) => (
+              <div key={q.id}>
+                <p className="text-sm font-medium text-body-text mb-2">
+                  {index + 1}. {q.question}
+                </p>
+                <div className="flex flex-col gap-2">
+                  {q.answers.map((a) => (
+                    <label
+                      key={a.id}
+                      className="flex items-center gap-2.5 bg-background border border-border/60 rounded px-3 py-2 text-sm text-muted-text hover:text-body-text cursor-pointer"
+                    >
+                      <input
+                        type="radio"
+                        name={`quiz-question-${q.id}`}
+                        checked={answers[q.id] === a.id}
+                        onChange={() => setAnswers((prev) => ({ ...prev, [q.id]: a.id }))}
+                        className="accent-user-teal-start"
+                      />
+                      {a.text}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {submitAttempt.isError && (
+            <p className="text-xs text-error-red">
+              {submitAttempt.error instanceof ApiRequestError ? submitAttempt.error.message : "Something went wrong — please try again."}
+            </p>
+          )}
+
+          {submitAttempt.isSuccess ? (
+            <div className="border-t border-border/40 pt-4 flex flex-col gap-2">
+              <p className={`text-sm font-medium ${submitAttempt.data.quizAttempt.passed ? "text-success-green" : "text-error-red"}`}>
+                {submitAttempt.data.quizAttempt.passed
+                  ? `Passed! Scored ${submitAttempt.data.quizAttempt.score}/${submitAttempt.data.quizAttempt.totalQuestions}.`
+                  : `Not quite — scored ${submitAttempt.data.quizAttempt.score}/${submitAttempt.data.quizAttempt.totalQuestions}. Every question must be correct to pass.`}
+              </p>
+              {submitAttempt.data.credentialIssued && (
+                <p className="text-xs text-success-green">Certificate earned — check your Proficiency Badges above.</p>
+              )}
+              <Button type="button" className="w-full !bg-gradient-to-r !from-user-teal-start !to-user-teal-end" onClick={onClose}>
+                Done
+              </Button>
+            </div>
+          ) : (
+            <div className="border-t border-border/40 pt-4">
+              <Button
+                type="button"
+                disabled={!allAnswered || submitAttempt.isPending}
+                className="w-full !bg-gradient-to-r !from-user-teal-start !to-user-teal-end"
+                onClick={handleSubmitQuiz}
+              >
+                {submitAttempt.isPending ? "Submitting…" : "Submit Quiz"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function CertBadge({
   certificate,
   earned,
@@ -253,12 +468,14 @@ export default function DigitalPassportPage() {
 
   const [selectedCertId, setSelectedCertId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
 
   const { data: user, isLoading: userLoading } = useCurrentUser();
   const { data: catalog, isLoading: catalogLoading } = useCertificateCatalog();
   const { data: credentials } = useCredentials();
   const { data: trainingSessions } = useTrainingSessions();
+  const { data: trainingVideos } = useTrainingVideos();
   const selectedSession = trainingSessions?.find((s) => s.id === selectedSessionId) ?? null;
 
   const hasHandledFilterRef = useRef(false);
@@ -456,11 +673,17 @@ export default function DigitalPassportPage() {
           </Card>
 
           <Card>
-            <h2 className="text-lg font-semibold text-body-text mb-2">Training Tutorials</h2>
-            <p className="text-sm text-muted-text">
-              Not wired to real data yet — there&apos;s no GET endpoint exposing the training video
-              catalog or video-completion tracking. Tracked as a backend gap.
-            </p>
+            <h2 className="text-lg font-semibold text-body-text mb-1">Training Tutorials</h2>
+            <p className="text-sm text-muted-text mb-6">Watch a video or pass its quiz to earn the credential it backs</p>
+            {trainingVideos && trainingVideos.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {trainingVideos.map((video) => (
+                  <TutorialCard key={video.id} video={video} onSelect={(v) => setSelectedVideoId(v.id)} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-text">No training videos available yet.</p>
+            )}
           </Card>
 
           <Card>
@@ -487,6 +710,7 @@ export default function DigitalPassportPage() {
         onClose={() => setSelectedCertId(null)}
       />
       <SessionDetailModal session={selectedSession} onClose={() => setSelectedSessionId(null)} />
+      <TutorialDetailModal videoId={selectedVideoId} onClose={() => setSelectedVideoId(null)} />
     </div>
   );
 }
