@@ -67,6 +67,12 @@ interface EnrollUserParams {
   trainingSessionId: bigint;
 }
 
+// 2026-07-20 product owner decision: enrolling never rejects for being full —
+// once active enrollment (enrolled/awaiting_signoff/completed — i.e. anyone
+// currently holding a slot) reaches capacity, new enrollments land as
+// `waitlisted` instead. A supplier later promotes a waitlisted row to
+// `enrolled` via updateEnrollmentStatus below.
+//
 // Wraps the insert in a try/catch so a P2002 raised by the @@unique index
 // (the race-condition case that slips past hasExistingEnrollment's
 // pre-check) comes out as the same clean AlreadyEnrolledError as the
@@ -75,21 +81,54 @@ interface EnrollUserParams {
 // model, so that violation passes through raw via `error.cause.code`),
 // `@@unique` is a constraint shape Prisma understands natively, so it's
 // translated into its own typed P2002 error instead.
+//
+// The capacity count is read under a row lock on the training_sessions row
+// (raw SQL — Prisma has no lockForUpdate primitive), mirroring the old
+// TrainingSessionController::enroll's lockForUpdate(): without it, two
+// concurrent enrollments racing this count could both read "under capacity"
+// and both land as `enrolled`, overfilling the session.
 export async function enrollUser(params: EnrollUserParams): Promise<TrainingEnrollment> {
   try {
     return await prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ id: bigint; capacity: number }[]>`
+        SELECT id, capacity FROM training_sessions WHERE id = ${params.trainingSessionId} FOR UPDATE
+      `;
+      const session = locked[0];
+      if (!session) {
+        throw new TrainingSessionNotFoundError();
+      }
+
+      const activeCount = await tx.trainingEnrollment.count({
+        where: {
+          trainingSessionId: params.trainingSessionId,
+          status: {
+            in: [
+              TrainingEnrollmentStatus.enrolled,
+              TrainingEnrollmentStatus.awaiting_signoff,
+              TrainingEnrollmentStatus.completed,
+            ],
+          },
+        },
+      });
+
+      const isFull = activeCount >= session.capacity;
+      const status = isFull ? TrainingEnrollmentStatus.waitlisted : TrainingEnrollmentStatus.enrolled;
+
       const enrollment = await tx.trainingEnrollment.create({
         data: {
           userId: params.userId,
           trainingSessionId: params.trainingSessionId,
+          status,
         },
       });
 
       await tx.activityLog.create({
         data: {
           userId: params.userId,
-          actionType: ActivityActionType.training_enrolled,
-          description: `Enrolled in training session #${params.trainingSessionId}.`,
+          actionType: isFull ? ActivityActionType.training_waitlisted : ActivityActionType.training_enrolled,
+          description: isFull
+            ? `Waitlisted for training session #${params.trainingSessionId} (session at capacity).`
+            : `Enrolled in training session #${params.trainingSessionId}.`,
         },
       });
 
@@ -103,13 +142,29 @@ export async function enrollUser(params: EnrollUserParams): Promise<TrainingEnro
   }
 }
 
-// Thrown from updateEnrollmentStatus when the target status is "enrolled" —
-// that value is only ever set at creation time (TrainingEnrollment's
-// @default(enrolled)); there's no supported path back to it once a supplier
-// has moved an enrollment forward or cancelled it.
+export class TrainingSessionNotFoundError extends Error {
+  constructor() {
+    super("Training session not found.");
+  }
+}
+
+// Thrown from updateEnrollmentStatus for an unsupported target status:
+// "waitlisted" is only ever set by enrollUser at creation time based on
+// capacity, never via a status update; "enrolled" is reachable only as a
+// promotion from an existing "waitlisted" row (the supplier "Approve"
+// action) — every other attempt to set "enrolled" (from awaiting_signoff,
+// completed, cancelled, or a fresh row) is rejected, since those have no
+// supported path back to it.
 export class InvalidEnrollmentStatusTransitionError extends Error {
-  constructor(public readonly status: TrainingEnrollmentStatus) {
-    super(`Cannot set enrollment status to ${status}.`);
+  constructor(
+    public readonly status: TrainingEnrollmentStatus,
+    public readonly fromStatus?: TrainingEnrollmentStatus
+  ) {
+    super(
+      status === TrainingEnrollmentStatus.enrolled
+        ? `Cannot set enrollment status to enrolled from ${fromStatus ?? "its current status"} — only a waitlisted enrollment can be approved into enrolled.`
+        : `Cannot set enrollment status to ${status}.`
+    );
   }
 }
 
@@ -129,7 +184,7 @@ export async function updateEnrollmentStatus(
   enrollmentId: bigint,
   status: TrainingEnrollmentStatus
 ): Promise<TrainingEnrollment> {
-  if (status === TrainingEnrollmentStatus.enrolled) {
+  if (status === TrainingEnrollmentStatus.waitlisted) {
     throw new InvalidEnrollmentStatusTransitionError(status);
   }
 
@@ -139,10 +194,24 @@ export async function updateEnrollmentStatus(
       include: { trainingSession: true },
     });
 
+    if (status === TrainingEnrollmentStatus.enrolled && existing.status !== TrainingEnrollmentStatus.waitlisted) {
+      throw new InvalidEnrollmentStatusTransitionError(status, existing.status);
+    }
+
     const updated = await tx.trainingEnrollment.update({
       where: { id: enrollmentId },
       data: { status },
     });
+
+    if (status === TrainingEnrollmentStatus.enrolled) {
+      await tx.activityLog.create({
+        data: {
+          userId: existing.userId,
+          actionType: ActivityActionType.training_waitlist_approved,
+          description: `Approved off the waitlist into training session #${existing.trainingSessionId}.`,
+        },
+      });
+    }
 
     const isNewlyCompleted = status === TrainingEnrollmentStatus.completed && existing.status !== status;
     if (isNewlyCompleted && existing.trainingSession.certificateId !== null) {

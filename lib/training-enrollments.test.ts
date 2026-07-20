@@ -39,7 +39,7 @@ async function createUser() {
   });
 }
 
-function createTrainingSession(companyId: bigint, certificateId?: bigint) {
+function createTrainingSession(companyId: bigint, certificateId?: bigint, capacity = 10) {
   return prisma.trainingSession.create({
     data: {
       companyId,
@@ -47,7 +47,7 @@ function createTrainingSession(companyId: bigint, certificateId?: bigint) {
       title: "Test Training Session",
       smeName: "Test SME",
       sessionDatetime: new Date("2027-12-01T09:00:00Z"),
-      capacity: 10,
+      capacity,
     },
   });
 }
@@ -283,6 +283,112 @@ describe("updateEnrollmentStatus credential issuance (Sprint 4, Item 4)", () => 
       await prisma.userCertificate.deleteMany({ where: { userId: user.id } });
       await prisma.trainingSession.deleteMany({ where: { companyId: company.id } });
       await prisma.certificate.delete({ where: { id: certificate.id } });
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// 2026-07-20 product owner decision: enrolling never rejects for being full
+// — it waitlists instead, and only a supplier PATCH can promote a waitlisted
+// row to enrolled.
+describe("enrollUser capacity / waitlist (2026-07-20 product owner decision)", () => {
+  test("enrolling past capacity waitlists instead of rejecting", async () => {
+    const company = await createCompany();
+    const userA = await createUser();
+    const userB = await createUser();
+    try {
+      const trainingSession = await createTrainingSession(company.id, undefined, 1);
+
+      const enrollmentA = await enrollUser({ userId: userA.id, trainingSessionId: trainingSession.id });
+      assert.equal(enrollmentA.status, TrainingEnrollmentStatus.enrolled);
+
+      const enrollmentB = await enrollUser({ userId: userB.id, trainingSessionId: trainingSession.id });
+      assert.equal(enrollmentB.status, TrainingEnrollmentStatus.waitlisted);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [userA.id, userB.id]);
+    }
+  });
+
+  test("awaiting_signoff counts toward capacity; cancelled frees it up for the next enrollment", async () => {
+    const company = await createCompany();
+    const userA = await createUser();
+    const userB = await createUser();
+    const userC = await createUser();
+    try {
+      const trainingSession = await createTrainingSession(company.id, undefined, 1);
+
+      const enrollmentA = await enrollUser({ userId: userA.id, trainingSessionId: trainingSession.id });
+      await updateEnrollmentStatus(enrollmentA.id, TrainingEnrollmentStatus.awaiting_signoff);
+
+      const enrollmentB = await enrollUser({ userId: userB.id, trainingSessionId: trainingSession.id });
+      assert.equal(enrollmentB.status, TrainingEnrollmentStatus.waitlisted, "A is awaiting_signoff, still holds the slot");
+
+      await updateEnrollmentStatus(enrollmentA.id, TrainingEnrollmentStatus.cancelled);
+
+      const enrollmentC = await enrollUser({ userId: userC.id, trainingSessionId: trainingSession.id });
+      assert.equal(
+        enrollmentC.status,
+        TrainingEnrollmentStatus.enrolled,
+        "cancelling A freed the slot; B stays waitlisted since promotion is a manual supplier action, not automatic"
+      );
+
+      const bRow = await prisma.trainingEnrollment.findUnique({ where: { id: enrollmentB.id } });
+      assert.equal(bRow!.status, TrainingEnrollmentStatus.waitlisted);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [userA.id, userB.id, userC.id]);
+    }
+  });
+
+  test("a supplier can promote a waitlisted enrollment to enrolled", async () => {
+    const company = await createCompany();
+    const userA = await createUser();
+    const userB = await createUser();
+    try {
+      const trainingSession = await createTrainingSession(company.id, undefined, 1);
+
+      await enrollUser({ userId: userA.id, trainingSessionId: trainingSession.id });
+      const enrollmentB = await enrollUser({ userId: userB.id, trainingSessionId: trainingSession.id });
+      assert.equal(enrollmentB.status, TrainingEnrollmentStatus.waitlisted);
+
+      const promoted = await updateEnrollmentStatus(enrollmentB.id, TrainingEnrollmentStatus.enrolled);
+      assert.equal(promoted.status, TrainingEnrollmentStatus.enrolled);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [userA.id, userB.id]);
+    }
+  });
+
+  test("promoting to enrolled from any status other than waitlisted is rejected", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const trainingSession = await createTrainingSession(company.id, undefined, 10);
+      const enrollment = await enrollUser({ userId: user.id, trainingSessionId: trainingSession.id });
+      assert.equal(enrollment.status, TrainingEnrollmentStatus.enrolled);
+
+      await assert.rejects(
+        () => updateEnrollmentStatus(enrollment.id, TrainingEnrollmentStatus.enrolled),
+        InvalidEnrollmentStatusTransitionError
+      );
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("setting status to waitlisted directly via updateEnrollmentStatus is rejected", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const trainingSession = await createTrainingSession(company.id, undefined, 10);
+      const enrollment = await enrollUser({ userId: user.id, trainingSessionId: trainingSession.id });
+
+      await assert.rejects(
+        () => updateEnrollmentStatus(enrollment.id, TrainingEnrollmentStatus.waitlisted),
+        InvalidEnrollmentStatusTransitionError
+      );
+
+      const row = await prisma.trainingEnrollment.findUnique({ where: { id: enrollment.id } });
+      assert.equal(row!.status, TrainingEnrollmentStatus.enrolled);
+    } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });

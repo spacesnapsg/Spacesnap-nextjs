@@ -125,12 +125,21 @@ enum ActivityActionType {
   signoff_requested
   signoff_reviewed
   instant_purchase_completed
+  training_waitlisted
+  training_waitlist_approved
+  training_session_created
 
   @@map("activity_action_type")
 }
 
+// waitlisted (2026-07-20 product owner decision): enrollUser never rejects
+// once a session is at capacity — it enrolls into this status instead. Only
+// a supplier PATCH (updateEnrollmentStatus) can promote waitlisted -> enrolled;
+// there is no other path back to "enrolled" (see the InvalidEnrollmentStatusTransitionError
+// guard in lib/training-enrollments.ts), same as before this status existed.
 enum TrainingEnrollmentStatus {
   enrolled
+  waitlisted
   awaiting_signoff
   completed
   cancelled

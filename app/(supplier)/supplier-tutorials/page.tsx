@@ -1,20 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, PlayCircle, X, Users } from "lucide-react";
+import { Plus, PlayCircle, Users, Calendar, MapPin, X } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import UploadVideoModal from "@/components/UploadVideoModal";
 import CreateSessionModal from "@/components/CreateSessionModal";
 import ViewNamelistModal from "@/components/ViewNamelistModal";
-import {
-  MOCK_TUTORIAL_VIDEOS,
-  MOCK_TRAINING_SESSIONS,
-  VIDEO_CATEGORIES,
-  type TutorialVideo,
-  type TrainingSession,
-  type VideoCategory,
-} from "@/lib/mockTutorials";
+import { MOCK_TUTORIAL_VIDEOS, VIDEO_CATEGORIES, type TutorialVideo, type VideoCategory } from "@/lib/mockTutorials";
+import { useSupplierTrainingSessions, type SupplierTrainingSession } from "@/lib/hooks/useSupplierTrainingSessions";
 
 type Tab = "videos" | "sessions";
 
@@ -34,11 +28,14 @@ const CATEGORY_STYLES: Record<VideoCategory, string> = {
   Techniques: "bg-success-green/15 text-success-green border-success-green/30",
 };
 
-const STATUS_STYLES: Record<TrainingSession["status"], string> = {
+// TrainingSession has no stored status column — "open/full/past" is always
+// derived server-side (deriveSessionStatus, lib/training-sessions.ts), never
+// a state a supplier sets directly. No "cancelled" here — there's no
+// cancel-session feature (the old Laravel backend never had one either).
+const DERIVED_STATUS_STYLES: Record<SupplierTrainingSession["derivedStatus"], string> = {
   open: "bg-supplier-purple-start/15 text-supplier-purple-end border-supplier-purple-start/30",
   full: "bg-amber/15 text-amber border-amber/30",
-  completed: "bg-success-green/15 text-success-green border-success-green/30",
-  cancelled: "bg-error-red/15 text-error-red border-error-red/30",
+  past: "bg-white/10 text-body-text border-white/20",
 };
 
 function VideoCard({ video }: { video: TutorialVideo }) {
@@ -65,48 +62,55 @@ function VideoCard({ video }: { video: TutorialVideo }) {
   );
 }
 
+function formatSessionDate(iso: string) {
+  return new Date(iso).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function SessionRow({
   session,
   onViewNamelist,
 }: {
-  session: TrainingSession;
-  onViewNamelist: (session: TrainingSession) => void;
+  session: SupplierTrainingSession;
+  onViewNamelist: (session: SupplierTrainingSession) => void;
 }) {
   return (
     <Card className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div className="min-w-0">
-        <h3 className="font-semibold text-body-text leading-snug truncate">{session.certificate}</h3>
-        <p className="text-sm text-muted-text mt-0.5 truncate">
-          {session.listing} &middot; {session.date} &middot; {session.location}
+        <h3 className="font-semibold text-body-text leading-snug truncate">{session.title}</h3>
+        <p className="text-sm text-muted-text mt-0.5 truncate flex items-center gap-3 flex-wrap">
+          <span className="flex items-center gap-1">
+            <Calendar size={12} />
+            {formatSessionDate(session.sessionDatetime)}
+          </span>
+          {session.location && (
+            <span className="flex items-center gap-1">
+              <MapPin size={12} />
+              {session.location}
+            </span>
+          )}
         </p>
       </div>
 
       <div className="flex items-center gap-2 text-sm text-body-text font-medium shrink-0 sm:justify-center sm:w-20">
         <Users size={14} className="text-muted-text" />
-        {session.enrolled} / {session.capacity}
+        {session.enrolledCount} / {session.capacity}
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
         <span
-          className={`rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${STATUS_STYLES[session.status]}`}
+          className={`rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${DERIVED_STATUS_STYLES[session.derivedStatus]}`}
         >
-          {session.status}
+          {session.derivedStatus}
         </span>
         <Button variant="ghost" onClick={() => onViewNamelist(session)} className="h-9 px-4 text-sm">
           View Namelist
         </Button>
-        {session.smeSignedOff ? (
-          <span className="rounded-full border bg-success-green/15 text-success-green border-success-green/30 px-3 py-1.5 text-xs font-medium whitespace-nowrap">
-            SME Signed Off &#10003;
-          </span>
-        ) : (
-          <Button
-            variant="ghost"
-            className="h-9 px-4 text-sm !border-supplier-purple-start !text-supplier-purple-end whitespace-nowrap"
-          >
-            Copy SME Link
-          </Button>
-        )}
       </div>
     </Card>
   );
@@ -118,8 +122,11 @@ export default function SupplierTutorialsPage() {
   const [videos, setVideos] = useState<TutorialVideo[]>(MOCK_TUTORIAL_VIDEOS);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
-  const [namelistSession, setNamelistSession] = useState<TrainingSession | null>(null);
+  const [namelistSessionId, setNamelistSessionId] = useState<string | null>(null);
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+
+  const { data: sessions } = useSupplierTrainingSessions();
+  const namelistSession = sessions?.find((s) => s.id === namelistSessionId) ?? null;
 
   const filteredVideos = activeFilter === "All" ? videos : videos.filter((v) => v.category === activeFilter);
 
@@ -202,7 +209,7 @@ export default function SupplierTutorialsPage() {
         <>
           {showSuccessBanner && (
             <div className="flex items-center justify-between gap-4 bg-success-green/15 border border-success-green/30 text-success-green rounded px-4 py-3 mb-6">
-              <p className="text-sm font-medium">Session created — copy the SME link from the row below</p>
+              <p className="text-sm font-medium">Session created</p>
               <button
                 type="button"
                 onClick={() => setShowSuccessBanner(false)}
@@ -214,11 +221,15 @@ export default function SupplierTutorialsPage() {
             </div>
           )}
 
-          <div className="flex flex-col gap-4">
-            {MOCK_TRAINING_SESSIONS.map((session) => (
-              <SessionRow key={session.id} session={session} onViewNamelist={setNamelistSession} />
-            ))}
-          </div>
+          {sessions && sessions.length > 0 ? (
+            <div className="flex flex-col gap-4">
+              {sessions.map((session) => (
+                <SessionRow key={session.id} session={session} onViewNamelist={(s) => setNamelistSessionId(s.id)} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-text">No training sessions yet — create one to get started.</p>
+          )}
         </>
       )}
 
@@ -228,7 +239,7 @@ export default function SupplierTutorialsPage() {
         onClose={() => setSessionModalOpen(false)}
         onCreated={() => setShowSuccessBanner(true)}
       />
-      <ViewNamelistModal session={namelistSession} onClose={() => setNamelistSession(null)} />
+      <ViewNamelistModal session={namelistSession} onClose={() => setNamelistSessionId(null)} />
     </div>
   );
 }

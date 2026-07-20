@@ -177,7 +177,7 @@ function BookingRow({
               onClick={() => onDecline(booking.id, booking.userName ?? "this requester")}
               className="h-9 px-4 text-sm"
             >
-              Decline
+              Cancel
             </Button>
           </div>
         )}

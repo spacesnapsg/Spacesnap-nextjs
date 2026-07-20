@@ -10,8 +10,13 @@ import {
   updateEnrollmentStatus,
 } from "@/lib/training-enrollments";
 
+// "waitlisted" is excluded — it's only ever assigned by enrollUser at
+// creation time based on capacity, never set via this route. "enrolled" is
+// included as a target (the supplier "Approve off waitlist" action), but
+// updateEnrollmentStatus itself still rejects it unless the enrollment is
+// currently waitlisted.
 const UPDATABLE_STATUSES = new Set<string>(
-  Object.values(TrainingEnrollmentStatus).filter((s) => s !== TrainingEnrollmentStatus.enrolled)
+  Object.values(TrainingEnrollmentStatus).filter((s) => s !== TrainingEnrollmentStatus.waitlisted)
 );
 
 // PATCH: update an enrollment's status. Restricted to the supplier that owns
@@ -39,7 +44,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   const status = (body && typeof body === "object" ? (body as Record<string, unknown>).status : undefined) as unknown;
   if (typeof status !== "string" || !UPDATABLE_STATUSES.has(status)) {
     return validationErrorResponse(
-      new ApiValidationError({ status: ["status must be one of awaiting_signoff, completed, cancelled."] })
+      new ApiValidationError({ status: ["status must be one of enrolled, awaiting_signoff, completed, cancelled."] })
     );
   }
 

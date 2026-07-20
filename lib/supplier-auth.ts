@@ -18,5 +18,5 @@ export async function requireSupplier() {
     return { error: forbiddenResponse("Your account is not associated with a company.") } as const;
   }
 
-  return { companyId: BigInt(session.user.companyId) } as const;
+  return { companyId: BigInt(session.user.companyId), userId: session.user.id } as const;
 }

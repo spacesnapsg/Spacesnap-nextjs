@@ -2074,3 +2074,202 @@ one-off script; Ethan's balance reconfirmed at `80`.
 **Not touched:** the credit-hold mechanism (explicitly deferred, see above);
 no changes to `fulfillBulkOrderWithDebit`'s debit-at-fulfillment behavior
 from the prior session.
+
+---
+
+## Sprint 4.5 — Training Sessions: Enroll/Waitlist + Supplier Session Create/Namelist (2026-07-20)
+
+Task brief was the sprint plan's "Build UI for training-enrollments (enroll
+button + supplier-side status update)" item — `POST /api/training-enrollments`
+and `PATCH /api/training-enrollments/[id]` existed with zero callers.
+
+**Scope was bigger than the brief before any UI could be wired, confirmed by
+reading the code first, not guessed:** there was no route to list training
+sessions at all, no route for a user's own enrollments, and no route for a
+session's participant list. The supplier Tutorials page's "Training Sessions"
+tab (`CreateSessionModal`, `ViewNamelistModal`, session list) was already
+built against mock data (`lib/mockTutorials.ts`) from the Sprint 3 correction
+that restored these components rather than deleting them — but checking the
+old Laravel backend directly (`TrainingSessionController.php`), it never had
+supplier-side create/namelist routes either; only `GET /training-sessions`
+(public list), `POST .../enroll`, and `GET /me/training-enrollments` existed.
+So the mock UI's shape (a "listing" dropdown, an SME-email field) wasn't
+something to port — it didn't map to `schema.prisma`'s actual `TrainingSession`
+columns (no `listingId` relation exists at all; `endorsementName` was an
+existing, previously-unused column that turned out to be exactly the old
+`spacesnap-web` mockup's "endorsement" concept once cross-referenced).
+
+**Asked the product owner three scope questions before building** (session
+create/namelist backend or just the minimal enroll wiring; where the
+user-facing enroll UI should live, since no page had ever shown a session to
+a user; whether to reject enrollment once a session hits capacity):
+- **Full build**, not minimal — also build supplier session create + a real
+  participant namelist, so `CreateSessionModal`/`ViewNamelistModal` go live
+  instead of staying mocked.
+- **Digital Passport page** — the existing "Training Tutorials & Sessions"
+  stub card there, per the old `spacesnap-web/src/pages/DigitalPassport.jsx`
+  mockup the product owner pointed at directly for the intended shape
+  (session cards, a detail modal with a Sign Up button, endorsement text,
+  spots remaining).
+- **Waitlist instead of reject.** Enrolling never fails for being full —
+  once a session is at capacity it lands as `waitlisted` instead of
+  `enrolled`; the supplier reviews the waitlist and approves manually. This
+  is new product behavior, not a port (the old Laravel `enroll()` did reject
+  with a 409 "session is full").
+
+### Schema: `waitlisted` status + three new activity types
+
+Migration `20260720012917_add_training_waitlist_status`: `TrainingEnrollmentStatus`
+gained `waitlisted` (between `enrolled` and `awaiting_signoff`); `ActivityActionType`
+gained `training_waitlisted`, `training_waitlist_approved`, `training_session_created`
+— one value per hooked write-path, matching this project's existing
+one-enum-value-per-event convention (see the comment above
+`ActivityActionType` in `schema.prisma`). Applied to both `spacesnap_dev` and
+the isolated `spacesnap_nextjs_test` DB (`npm run test:db:migrate`); dev
+server restarted afterward (the standing "Prisma client doesn't hot-reload
+into an already-running `next dev` process" gotcha, noted again this
+session — first live PATCH attempt threw before the restart).
+
+### `lib/training-enrollments.ts`: capacity-aware enroll + waitlist promotion
+
+- `enrollUser` now locks the `training_sessions` row (`SELECT ... FOR UPDATE`
+  raw SQL — Prisma has no `lockForUpdate` primitive) and counts "active"
+  enrollments (`enrolled`/`awaiting_signoff`/`completed` — i.e. anyone
+  currently holding a slot; `waitlisted` and `cancelled` don't count) before
+  deciding `enrolled` vs. `waitlisted`. Mirrors old
+  `TrainingSessionController::enroll`'s `lockForUpdate()` — without it, two
+  concurrent enrollments racing the count could both read "under capacity"
+  and both land as `enrolled`, overfilling the session. Never rejects.
+- `updateEnrollmentStatus`: `enrolled` is now a valid PATCH target, but only
+  as a promotion from an existing `waitlisted` row (the supplier "Approve"
+  action) — every other attempt to set `enrolled` (fresh row, from
+  `awaiting_signoff`, `completed`, `cancelled`) is still rejected, same as
+  before this feature existed. Setting `waitlisted` directly via PATCH is
+  also rejected — it's only ever assigned by `enrollUser` at creation time.
+  Promoting logs `training_waitlist_approved`; no re-check against capacity
+  on promotion — approving off the waitlist is a manual supplier override,
+  not re-gated (confirmed acceptable live: a session can end up showing
+  more enrolled than its stated capacity if a supplier chooses to approve
+  anyway, e.g. "2 / 1" — read as an honest count, not a bug).
+
+### New `lib/training-sessions.ts`
+
+- `serializePublicTrainingSession` — counts only (`enrolledCount`,
+  `waitlistCount`), never the raw participant list or other users' ids, so
+  browsing sessions can't double as a way to enumerate who's enrolled where.
+  Merges `myEnrollmentStatus` when a viewer id is passed.
+- `serializeSupplierTrainingSession` — the real namelist (`enrollmentId`,
+  `userName`, `userEmail`, `status`) for the caller's own company only.
+- Both derive `past`/`full`/`open` from `sessionDatetime`/`capacity` vs. the
+  active count — `TrainingSession` has no stored status column (confirmed by
+  grep) and no cancel-session feature exists (the old backend never had one
+  either), so this is always computed, never a field a supplier sets.
+- `createTrainingSession` — gates `certificateId` to certificates with
+  `earningMethod: tier2b_operator_or_sme_signoff` (`CertificateNotEligibleForSessionError`
+  otherwise). tier1 is auto-graded (no session involved) and tier2a is a
+  per-user on-demand review (`CertificateSignoffRequest`), neither is a
+  scheduled multi-participant session — see "Sprint 4, Item 4, Correction"
+  above for why these three paths are kept distinct. Logs
+  `training_session_created` under the creating supplier's own `userId`
+  (the closest precedent, `POST /api/certificates`, doesn't log at all; this
+  one does, since it's a real state-changing write worth an audit trail,
+  same reasoning as every other create/confirm/decline action in this app).
+
+### New routes
+
+`GET /api/training-sessions` (public, no auth required — mirrors the old
+unauthenticated `index()`; merges the caller's own status when a session
+exists). `GET`+`POST /api/supplier/training-sessions` (company-scoped via
+`requireSupplier()`, which now also returns `userId` alongside `companyId` —
+a small, backward-compatible addition to the shared helper, needed here for
+the activity-log `createdByUserId`). `PATCH /api/training-enrollments/[id]`'s
+`UPDATABLE_STATUSES` changed from "all except `enrolled`" to "all except
+`waitlisted`" — `updateEnrollmentStatus` itself still enforces that
+`enrolled` is only reachable from `waitlisted`.
+
+### Frontend
+
+`lib/hooks/useTrainingSessions.ts` (public list + enroll mutation) and
+`lib/hooks/useSupplierTrainingSessions.ts` (supplier list + create +
+status-update mutations) — same `apiFetch`/React Query
+invalidate-on-success shape as `useSupplierBulkOrders.ts`.
+
+**Digital Passport page** (`app/(user)/passport/page.tsx`): split the old
+stub card into two — "Training Tutorials" stays stubbed (the video-catalog
+gap is untouched, separate scope) and a new real "Training Sessions" card:
+a session grid (`SessionCard`) and a detail modal (`SessionDetailModal`)
+with a status-aware action button — "Sign Up for this Session" (open, not
+enrolled), "Join Waitlist" (full, not enrolled), or a disabled label
+matching whatever the caller's own status already is (`Already Enrolled`,
+`On Waitlist`, `Awaiting Sign-off`, `Completed`, `Enrollment Cancelled`,
+or `Session Has Passed` once `sessionDatetime` is in the past). Modelled on
+`spacesnap-web/src/pages/DigitalPassport.jsx`'s `SessionCard`/
+`SessionDetailModal` shape per the product owner's pointer, not copied
+verbatim (real data, real endorsement/certificate fields, no `expert`/host
+fields that don't exist here — SME name and host company name are used
+instead).
+
+**Supplier Tutorials page** (`app/(supplier)/supplier-tutorials/page.tsx`):
+the "Training Sessions" tab now reads `useSupplierTrainingSessions()`
+instead of `MOCK_TRAINING_SESSIONS`. Rewrote `CreateSessionModal` (dropped
+the "Equipment / Listing" dropdown — no `listingId` column exists — and the
+"SME Email" field — no email-dispatch capability in this codebase; added a
+free-text `title` field and the "Endorsement Name" field, both real
+columns; the certificate dropdown is filtered client-side to
+`tier2b_operator_or_sme_signoff` certs from the existing
+`useCertificateCatalog()` hook) and `ViewNamelistModal` (real participants,
+a `Waitlisted` status badge, and per-status action buttons: `Approve`/
+`Reject` for waitlisted rows, `Awaiting Sign-off`/`Pass`/`Fail` for
+enrolled/awaiting_signoff rows, nothing for terminal `completed`/`cancelled`
+rows). Dropped the old mock UI's "SME Signed Off / Copy SME Link" toggle
+entirely — no session-level signoff flag or link-generation capability
+exists in this schema, and inventing one wasn't asked for. Video Tutorials
+tab is untouched, still mock-wired (separate, already-tracked gap).
+
+### Tests
+
+`lib/training-enrollments.test.ts` — 5 new cases: waitlists past capacity
+instead of rejecting; `awaiting_signoff` counts toward capacity while
+`cancelled` frees it (and a freed slot does *not* auto-promote the
+waitlisted row — promotion stays a manual supplier action); a supplier can
+promote waitlisted → enrolled; promoting to `enrolled` from any other status
+is rejected; setting `waitlisted` directly via `updateEnrollmentStatus` is
+rejected. New `lib/training-sessions.test.ts` — field validation
+(`parseCreateSessionFields`) plus `createTrainingSession` happy path,
+ineligible-certificate rejection, and nonexistent-certificate rejection,
+each confirming nothing is written on rejection. Both added to `npm test`.
+All 144 tests pass (13 new, 0 regressions). `npx tsc --noEmit`, `npx eslint`,
+and `next build` all clean (the one pre-existing lint error in
+`passport/page.tsx`, a `react-hooks/set-state-in-effect` finding on the
+unrelated `filterCertId` deep-link effect, was confirmed pre-existing via
+`git stash` before/after — not introduced or touched this session).
+
+**Verified live**, full loop, real cookie-jar sessions in the browser (not
+just unit tests) — `gabriel@greenpack.sg` (GreenPack, a company with zero
+prior sessions, confirmed via the empty state "No training sessions yet")
+created "GreenPack Fire Marshal Workshop" against the seeded Fire Safety
+Marshal cert (the only seeded `tier2b_operator_or_sme_signoff` certificate)
+with `capacity: 1` → session appeared with `0 / 1`, `Open`. As
+`ethan@example.com`: opened the session on `/passport`, clicked "Sign Up for
+this Session" → card flipped to `Enrolled`, `1 / 1`, modal showed "Already
+Enrolled" (disabled) and "You're enrolled!". As `farah@example.com`: same
+session now showed `Full`; clicked "Join Waitlist" (not blocked) → card
+showed `Waitlisted`, `1 / 1 enrolled · 1 waitlisted`, modal confirmed "You're
+on the waitlist — the supplier will approve you if a spot opens up." Back as
+Gabriel on `/supplier-tutorials`: namelist showed both Ethan (`Enrolled`,
+with Awaiting Sign-off/Pass/Fail buttons) and Farah (`Waitlisted`, with
+Approve/Reject) → clicked Approve on Farah → she flipped to `Enrolled`
+immediately (row now reads `2 / 1`, the intentional-overbook case noted
+above) → clicked Pass on Ethan → he flipped to `Passed` (terminal, no more
+buttons); confirmed via direct DB query that Ethan's `Fire Safety Marshal`
+`user_certificates` row was renewed (`earned_date` moved to today), same
+`issueCredential` upsert path as every other sign-off completion. All
+scratch state (the test session, both enrollments, the 5 activity_log rows,
+Ethan's credential dates) deleted/restored afterward via direct SQL; DB
+confirmed back to seeded state (`ethan`'s Fire Safety Marshal credential
+back to `earned_date 2025-01-10` / `expiry_date 2026-01-10`, zero leftover
+`training_sessions` rows for GreenPack).
+
+**Not touched:** Video Tutorials (both pages, still mock — separate,
+already-tracked gap); no changes to the tier1 (`quiz-attempts.ts`) or tier2a
+(`certificate-signoffs.ts`) earning paths.
