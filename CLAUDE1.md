@@ -2273,3 +2273,125 @@ back to `earned_date 2025-01-10` / `expiry_date 2026-01-10`, zero leftover
 **Not touched:** Video Tutorials (both pages, still mock — separate,
 already-tracked gap); no changes to the tier1 (`quiz-attempts.ts`) or tier2a
 (`certificate-signoffs.ts`) earning paths.
+
+---
+
+## Sprint 4.5 — Activity Log Read Endpoint + Recent Activity Feed UI (2026-07-20)
+
+Task brief was the sprint plan's two remaining Sprint 4.5 items: add an
+`activity_log` GET endpoint, and decide/build a feed UI for it. `ActivityLog`
+had been write-only since Sprint 3.5 — every credit/booking/training/
+certificate-affecting action already writes a row (`lib/bookings.ts`,
+`lib/bulk-orders.ts`, `lib/wallet.ts`, `lib/check-ins.ts`,
+`lib/training-enrollments.ts`, `lib/training-sessions.ts`,
+`lib/certificate-signoffs.ts`, `lib/quiz-attempts.ts`, `lib/purchases.ts`,
+`lib/training-credentials.ts`) — with nothing to read them back.
+
+**Scope correction from the user mid-session, twice:** the first plan treated
+the dashboard's existing "Recent Activity" card (bookings-only, with inline
+rating) as basically fine and the new feed as a separate concept. Corrected:
+"Recent Activity" should show *all* activity types (top-ups, training
+sign-ups, etc.), not just bookings — booking rows just happen to carry the
+rating control when applicable. Second correction: added a requirement for
+category filter pills and a date-range filter (7 days / 30 days / quarter)
+so the merged, all-types feed doesn't grow unbounded. Both folded into the
+one card rather than building two.
+
+### Backend: `GET /api/activity`
+
+`lib/activity.ts` — `parseActivityQuery` validates `?types=` (CSV against
+the real `ActivityActionType` enum, 422 on an unknown value),
+`?days=` (positive integer → `createdAt >= now - days`), `?limit=` (default
+100, capped 200); all three optional (omitting `types`/`days` means every
+type / all time, matching how the frontend's "All" and "All time" pills
+work). `getUserActivity` is a straight `findMany` scoped to the caller's own
+`userId`, join `listing.name` (many action types carry `relatedListingId`)
+so the UI doesn't have to do a second round-trip just to show a listing
+name next to a description. `app/api/activity/route.ts` is the same
+auth-then-delegate shape as every other GET route in this codebase (`/api/
+wallet`, `/api/bookings`).
+
+**Deliberately not done:** no schema change. `ActivityLog` has no
+`bookingId` column (only `relatedListingId`, shared across many action
+types) — adding one to link feed rows straight to a booking was considered
+and rejected as more invasive than the ask warranted. Instead, the rating
+merge (below) reads the booking id out of the description text this
+codebase already writes (`Booking #${id} ...`, see `lib/bookings.ts`'s three
+`activityLog.create` calls) via a regex, cross-referenced against
+`GET /api/bookings` (already fetched on this page for the "Total Bookings"
+stat). If the description format ever changes, `matchBookingId` in
+`app/(user)/user/page.tsx` needs to change with it — a real coupling, judged
+acceptable since both live in this codebase and the format is old/stable
+(Sprint 3.5).
+
+### Frontend: category + date-range pills, rating still inline on booking rows
+
+`lib/hooks/useActivity.ts` — mirrors the Prisma `ActivityActionType` enum as
+a hand-kept string union (same convention as `BookingStatus` in
+`useUserBookings.ts`; frontend code doesn't import the generated Prisma
+client). `ACTIVITY_CATEGORIES` groups the 23 action types into 7
+user-facing buckets (Bookings, Bulk Orders, Purchases, Wallet, Check-ins,
+Training, Certificates) — pure display/filter data, not sent to the API as
+a concept; the hook expands a category into its raw `types` list before
+building the querystring, so adding a category later never needs a backend
+change. `ACTIVITY_DATE_RANGES` is the 7/30/90-day + all-time set the user
+asked for.
+
+`app/(user)/user/page.tsx`'s "Recent Activity" card: `Pills` (a small
+generic component, same pattern as `FilterPills` in
+`app/(supplier)/supplier-requests/page.tsx`, restyled to this page's teal
+accent) renders both filter rows. Default date range is **30 days** (not
+"all time") — the reason the date filter was asked for in the first place.
+`ActivityRow` renders a per-type icon (`ACTIVITY_ICONS`, all in the page's
+existing teal-circle style — icon shape varies, color doesn't, matching how
+the old bookings/bulk-order rows already looked), the listing name when
+present (falling back to the raw description as the headline if there's no
+related listing, e.g. wallet top-ups), and the full description as a
+secondary line. For `booking_created`/`booking_confirmed`/`booking_declined`
+rows specifically, it looks up the matched booking in a `bookingsById` map
+and — if found — shows the booking's status badge plus, when `completed`
+and not a consumables listing, the same rating control the old
+`BookingActivityRow` had (read-only stars if already rated, an interactive
+`RatingStars` + `useSubmitRating` mutation if not).
+
+### Verified live, full loop, not just typechecked
+
+Real cookie-jar session as `ethan@example.com` against the dev server/DB:
+confirmed the existing single leftover `credential_issued` row (a residual
+from an earlier session's certificate-signoff testing, correctly excluded
+from seed data — `prisma/seed.ts` never writes `ActivityLog`, confirmed by
+grep) showed up correctly with its icon and fell out of the "Bookings"
+category filter. Then generated fresh activity end-to-end: `POST /api/wallet/
+topup` (10 cr) → `POST /api/bookings` on listing 165 (Power Drill Set, no
+cert requirement) → confirmed as `divya@toolshare.sg` (a plain booking
+confirm — `estimatedDeliveryDate` is bulk-order-only, doesn't apply here)
+→ checked in and checked out as Ethan to reach `completed`. Reloaded
+`/user`: all 6 rows appeared in the right order (check_out, check_in,
+booking_confirmed, booking_created, wallet_topup, the older credential_issued
+row), each with the correct icon/listing name. The two booking-family rows
+both correctly resolved to booking #157, both showed a `Completed` badge and
+an interactive rating control. Clicked 4 stars on one — both rows updated to
+the same read-only 4-star display simultaneously (confirms both derive from
+the one `useUserBookings` query, not independent state). Switched the
+category pill to "Bookings" — list correctly narrowed to just the two
+booking rows, everything else (check-ins, top-up, credential) dropped out.
+Also verified the API directly: `?types=bogus_type` → clean `422
+{"errors":{"types":["Unknown activity type(s): bogus_type."]}}`, not a raw
+error; `?days=7` correctly excluded the older credential row while including
+everything from this session's test run.
+
+All scratch state deleted afterward via a one-off `tsx` script (booking 157,
+its rating, check-in, the two `transactions` rows, and every `activity_log`
+row this session generated) — confirmed zero remaining `activity_log` rows
+referencing "Booking #157" and Ethan's ledger balance back to the seeded
+`80`. The pre-existing `credential_issued` leftover from an earlier session
+was left alone (not this session's mess to clean up, and still useful as a
+real non-booking feed example).
+
+`npx tsc --noEmit`, `npx eslint`, `npm test` (144/144, 0 regressions), and
+`next build` all clean.
+
+**Not touched:** no changes to any `activityLog.create` call site (the write
+side was already correct and complete from Sprint 3.5 onward); the
+"Currently Active" card's own gap (no GET for active check-ins) is untouched
+and separately tracked; Video Tutorials mock-data gap untouched.
