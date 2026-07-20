@@ -1,15 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
+import { BulkOrderStatus } from "@/app/generated/prisma/client";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError, unauthorizedResponse, validationErrorResponse } from "@/lib/api-errors";
-import { InsufficientCreditBalanceError } from "@/lib/credits";
-import { createBulkOrderWithDebit, parseBulkOrderCreateFields, serializeBulkOrderRequest } from "@/lib/bulk-orders";
+import {
+  bulkOrderRequestWithRelationsArgs,
+  createBulkOrder,
+  parseBulkOrderCreateFields,
+  serializeBulkOrderRequest,
+} from "@/lib/bulk-orders";
+
+const BULK_ORDER_STATUSES = new Set<string>(Object.values(BulkOrderStatus));
+
+// GET: the caller's own bulk order requests (not company-scoped like
+// /api/supplier/bulk-order-requests) — needed for the user-side "my orders"
+// list, same shape as GET /api/bookings.
+export async function GET(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user) return unauthorizedResponse();
+
+  const status = new URL(request.url).searchParams.get("status");
+  if (status && !BULK_ORDER_STATUSES.has(status)) {
+    return NextResponse.json(
+      { message: "status must be one of pending, confirmed, fulfilled, cancelled." },
+      { status: 422 }
+    );
+  }
+
+  const bulkOrderRequests = await prisma.bulkOrderRequest.findMany({
+    where: {
+      userId: session.user.id,
+      ...(status ? { status: status as BulkOrderStatus } : {}),
+    },
+    ...bulkOrderRequestWithRelationsArgs,
+    orderBy: { createdAt: "desc" },
+  });
+
+  return NextResponse.json({ bulkOrderRequests: bulkOrderRequests.map(serializeBulkOrderRequest) });
+}
 
 // POST: create a bulk order request. Mirrors old BulkOrderRequestController::store's
-// shape (consumables-only, quantity min:1), plus Sprint 3.5 known-gap #4: the
-// credit_balance check, BulkOrderRequest insert, and debit Transaction row all
-// happen inside a single DB transaction via createBulkOrderWithDebit
-// (lib/bulk-orders.ts) — the same pattern createBookingWithDebit already uses.
+// shape (consumables-only, quantity min:1) exactly, including that no balance
+// check or debit happens here — credits are only checked/debited when the
+// supplier fulfills the request (see fulfillBulkOrderWithDebit,
+// lib/bulk-orders.ts, and PATCH /api/supplier/bulk-order-requests/[id]/fulfill).
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return unauthorizedResponse();
@@ -46,19 +80,12 @@ export async function POST(request: NextRequest) {
 
   const cost = listing.pricePerUnit.mul(fields.quantity);
 
-  try {
-    const bulkOrderRequest = await createBulkOrderWithDebit({
-      userId: session.user.id,
-      listingId: fields.listingId,
-      quantity: fields.quantity,
-      cost,
-    });
+  const bulkOrderRequest = await createBulkOrder({
+    userId: session.user.id,
+    listingId: fields.listingId,
+    quantity: fields.quantity,
+    cost,
+  });
 
-    return NextResponse.json({ bulkOrderRequest: serializeBulkOrderRequest(bulkOrderRequest) }, { status: 201 });
-  } catch (error) {
-    if (error instanceof InsufficientCreditBalanceError) {
-      return validationErrorResponse(new ApiValidationError({ credits: [error.message] }));
-    }
-    throw error;
-  }
+  return NextResponse.json({ bulkOrderRequest: serializeBulkOrderRequest(bulkOrderRequest) }, { status: 201 });
 }

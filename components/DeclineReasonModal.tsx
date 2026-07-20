@@ -31,8 +31,8 @@ export default function DeclineReasonModal({ open, onClose, onConfirm, requestNa
       <p className="text-sm text-muted-text mb-6">
         {requestName ? (
           <>
-            Let <span className="text-body-text font-medium">{requestName}</span> know why this request is being
-            declined.
+            Let <span className="text-body-text font-medium">{requestName}</span>{" "}
+            know why this request is being declined.
           </>
         ) : (
           "Let the requestor know why this request is being declined."

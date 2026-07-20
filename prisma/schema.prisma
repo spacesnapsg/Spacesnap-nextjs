@@ -109,6 +109,13 @@ enum ActivityActionType {
   booking_confirmed
   booking_declined
   bulk_order_created
+  bulk_order_confirmed
+  bulk_order_declined
+  bulk_order_fulfilled
+  bulk_order_cancelled
+  bulk_order_cancellation_requested
+  bulk_order_cancellation_approved
+  bulk_order_cancellation_rejected
   wallet_topup
   check_in
   check_out
@@ -567,6 +574,20 @@ model BulkOrderRequest {
   quantity  Int
   credits   Decimal         @db.Decimal(10, 2)
   status    BulkOrderStatus @default(pending)
+  // Required at confirm time (2026-07-20 product owner request) — the
+  // supplier's estimate of when the order will ship, shown to the buyer.
+  // Nullable at the DB level only because pre-existing rows predate this
+  // column; app-layer validation requires it on every confirm going forward.
+  estimatedDeliveryDate DateTime? @map("estimated_delivery_date")
+  // Cancellation-request pair, set together and cleared together — 2026-07-20
+  // product owner request. Only meaningful while status is `confirmed`: a
+  // `pending` request can be cancelled directly by the buyer (no review
+  // needed, see cancelBulkOrderByUser in lib/bulk-orders.ts), but a
+  // `confirmed` one has already had supplier attention, so the buyer can only
+  // ask — the supplier approves (→ cancelled) or rejects (both fields
+  // cleared, status stays confirmed).
+  cancellationRequestedAt DateTime? @map("cancellation_requested_at")
+  cancellationReason      String?   @map("cancellation_reason")
   createdAt DateTime        @default(now()) @map("created_at")
   updatedAt DateTime        @updatedAt @map("updated_at")
 

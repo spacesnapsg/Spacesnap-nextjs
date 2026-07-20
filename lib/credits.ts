@@ -34,8 +34,9 @@ export async function getCreditBalance(
 // InsufficientCreditBalanceError if it's short of `cost`. Callers run this
 // first inside their own $transaction, then create the row being paid for
 // and its debit Transaction — see createBookingWithDebit (lib/bookings.ts)
-// and createBulkOrderWithDebit (lib/bulk-orders.ts) for the two current call
-// sites of this same "check balance, debit, create Transaction" pattern.
+// and fulfillBulkOrderWithDebit (lib/bulk-orders.ts, checked at fulfillment
+// time, not at request creation) for the current call sites of this same
+// "check balance, debit, create Transaction" pattern.
 export async function assertSufficientBalance(
   tx: Prisma.TransactionClient,
   userId: string,

@@ -1771,3 +1771,306 @@ re-confirmed back to `80`, listing 166's stock back to `400`.
 **Not touched:** out-of-stock consumables' single "Request Purchase" button
 (still the bulk-order-request flow, unaffected), and no Stripe code of any
 kind — the product owner was explicit this is for-context-only future scope.
+
+---
+
+## Sprint 4.5 — Check-Ins UI Deferred, Not Built (2026-07-20)
+
+Before starting the check-ins UI item, read two files the product owner
+provided for context on the physical kiosk system: `Handshake_17 May
+2026.pdf` (the kiosk-to-cloud handshake diagram — user scans → cloud does
+auth/passport/credential match → proprietary middleware (the Pi) does the
+API bridge + liability bind → hardware dispenses the RFID/NFC card *and*
+writes the `CheckIn` in the same step) and `SpaceSnap_Trust_Architecture_
+Levels_1-5.docx` (ranks candidate trust architectures for the access-decision
+split; Level 2, "facts in, Pi decides locally," is the actual POC build
+target — Next.js supplies raw facts only, the Pi evaluates the match locally
+and fires the dispenser itself, then writes the CheckIn with an idempotency
+key; Level 1, "Next.js sends a yes/no verdict," is explicitly rejected as
+forgeable and as contradicting the submitted grant claim that the cloud
+platform doesn't make the access decision).
+
+**Conclusion (confirmed with product owner): this item can't be built as a
+web UI at all right now, and isn't just a UI gap to close.** A browser
+"Check In" button would fabricate a credential-verification event that's
+only ever supposed to happen at the physical kiosk — there's no card, no
+physical-presence check, and no Pi in a browser session, so Next.js has no
+legitimate basis to write a `CheckIn` row on a user's say-so. Same logic
+kills a browser "Check Out" button (presumably the card being tapped back at
+the kiosk, not a click). This is blocked on Sprint 5 (kiosk/middleware), not
+something to stand in for with a web mockup — marking it deferred in
+`SPRINT_PLAN_NEXTJS_REWRITE.md` with this reasoning rather than building
+anything.
+
+---
+
+## Sprint 4.5 — Bulk Order Requests: Supplier UI + Backend (2026-07-20)
+
+Built the supplier-facing bulk order request management the sprint plan's
+`supplier-requests` page had a stub for ("Not wired yet — there's no
+supplier-facing GET endpoint... no confirm/decline/fulfill routes").
+
+**Correction made before writing any of this, per the product owner:**
+credits are **not** debited at bulk-order-request creation. An earlier
+session (Sprint 3.5 Known Gap #4) had built `createBulkOrderWithDebit` to
+debit at creation — explicitly reasoned at the time as "unlike the old build,
+this rewrite debits at request creation." That reasoning was wrong. Checked
+the actual old Laravel controllers
+(`spacesnap-api/app/Http/Controllers/BulkOrderRequestController.php` and
+`SupplierBulkOrderController.php`): `store()` does no balance check and no
+debit at all — just inserts the row; `update()`'s `fulfilled` branch is the
+*only* place that checks balance and creates a debit `Transaction`. Reverted
+`lib/bulk-orders.ts` to match: `createBulkOrder` (renamed from
+`createBulkOrderWithDebit`) now just inserts the row and logs
+`bulk_order_created`, no balance check, no `Transaction`. Rewrote
+`lib/bulk-orders.test.ts` to match (was asserting the old, wrong behavior).
+Updated the stale comments in `lib/credits.ts` and `lib/wallet.ts` that
+pointed at `createBulkOrderWithDebit` as a call site.
+
+**What was built:**
+- `lib/bulk-orders.ts` — three new status-transition functions, mirroring
+  `confirmBookingWithAudit`/`declineBookingWithRefund` (`lib/bookings.ts`)
+  in shape but not in ledger behavior, since (unlike a booking) nothing has
+  been debited yet at confirm/decline time for a bulk order:
+  - `confirmBulkOrder` — `pending→confirmed`, activity log only, no
+    Transaction (nothing to audit yet).
+  - `declineBulkOrder` — `pending/confirmed→cancelled`, activity log only,
+    no refund Transaction (nothing was ever debited).
+  - `fulfillBulkOrderWithDebit` — `pending/confirmed→fulfilled`, this is
+    where credits actually move: `assertSufficientBalance` against the
+    request's stored `credits` snapshot, one debit `Transaction`
+    (`type: purchase`, matching what `createPurchaseWithDebit`/"Buy Now"
+    already uses for the same kind of event), activity log. Mirrors old
+    `SupplierBulkOrderController::update`'s `fulfilled` branch.
+  - Three new `BulkOrderNot*Error` classes, same pattern as
+    `BookingNotConfirmableError`/`BookingNotDeclinableError`.
+- `ActivityActionType` gained `bulk_order_confirmed`, `bulk_order_declined`,
+  `bulk_order_fulfilled` (migration
+  `20260720032828_activity_action_type_add_bulk_order_transitions`, same
+  `ALTER TYPE ... ADD VALUE` pattern as the earlier `training_enrolled`
+  addition). Applied to both the dev DB and the isolated test DB
+  (`npm run test:db:migrate`) — the two are separate Postgres databases and
+  each needs migrations applied independently.
+- `serializeBulkOrderRequest` extended to optionally include `listingName`/
+  `userName`/`userEmail` when the caller included those relations (mirrors
+  `serializeBooking`'s conditional-spread pattern) — needed for the
+  supplier list view, matching old `SupplierBulkOrderController::transform`'s
+  shape.
+- New routes: `GET /api/supplier/bulk-order-requests` (company-scoped via
+  the listing's `companyId`, optional `status` filter, same shape as
+  `GET /api/supplier/bookings`), `PATCH .../[id]/confirm`,
+  `.../[id]/decline`, `.../[id]/fulfill` — each does the same
+  `requireSupplier()` + listing-company-ownership check as the existing
+  booking confirm/decline routes.
+- `lib/hooks/useSupplierBulkOrders.ts` — new React Query hook, mirrors
+  `useSupplierBookings.ts` exactly (list query + three mutations, shared
+  `["supplier-bulk-orders"]` invalidation).
+- `app/(supplier)/supplier-requests/page.tsx` — replaced the placeholder
+  "Bulk Orders" tab card with a real filtered list (`BulkOrderRow`,
+  mirroring `BookingRow`) showing Confirm/Fulfill/Decline actions by status,
+  reusing `DeclineReasonModal` (a second instance, separate state, same as
+  the existing booking-decline modal).
+- `components/RequestPurchaseModal.tsx` — fixed now-inaccurate copy: "X
+  credits have been reserved" (implied a hold that no longer happens) →
+  "X credits will be charged once the supplier fulfills it."
+
+**Tests:** rewrote `lib/bulk-orders.test.ts` for the corrected design — 15
+cases across `createBulkOrder` (no balance check, no Transaction, even at
+zero balance), `confirmBulkOrder`, `declineBulkOrder` (no refund), and
+`fulfillBulkOrderWithDebit` (insufficient balance rejected cleanly and
+writes nothing, exact-balance success, confirmed-then-fulfilled, double-
+fulfill rejected, fulfilling a cancelled request rejected). All 120 tests in
+`npm test` pass. `npx tsc --noEmit`, `npx eslint`, and `next build` all
+clean.
+
+**Verified live** against the dev server/DB (not just unit tests) — real
+cookie-jar sessions for both `ethan@example.com` (buyer, seeded balance 80)
+and `gabriel@greenpack.sg` (GreenPack's supplier admin): submitted a
+"Request Bulk Purchase" for 4 units of listing 166 (74 cr) as Ethan through
+the actual browser UI → balance confirmed still `80` immediately after
+(no debit at creation, as intended) → as Gabriel, the request showed up on
+`/supplier-requests`'s Bulk Orders tab with the real requester name/email/
+listing/quantity/cost → clicked Confirm → status flipped to `confirmed` →
+clicked Fulfill → status flipped to `fulfilled`, and Ethan's balance dropped
+to exactly `6` (`80 - 74`), confirming the debit happens only at fulfillment.
+Separately tested the rejection path: created a second request (1 unit,
+18.5 cr) against Ethan's now-6-credit balance, clicked Fulfill directly
+(skipping confirm) → clean `422` "Requester has insufficient credit balance
+to fulfill this order." rendered in the UI, request correctly stayed
+`pending`, no partial state. Then tested Decline on that same request → the
+existing `DeclineReasonModal` opened correctly, submit flipped status to
+`cancelled`, no refund Transaction (correct, since nothing was ever debited).
+
+One dev-environment gotcha hit again (same one Sprint 4 Item 4 and the
+"Bulk Purchase Option" session both already noted): the running `next dev`
+process had the pre-migration Prisma client loaded in memory, so the first
+live Confirm attempt threw `PrismaClientValidationError: Invalid value for
+argument actionType` even though `npx prisma generate` had already run —
+restarting the dev server (not just regenerating the client) picked up the
+new enum values. Worth remembering as a standing gotcha: an enum-adding
+migration always needs a dev-server restart, not just `prisma generate`, if
+the server was already running when the migration landed.
+
+All scratch rows from live verification (`bulk_order_requests` 8 and 9, the
+one `transactions` row from the fulfillment debit, and the five
+`activity_log` rows the flow generated) deleted afterward via a one-off
+script; `ethan`'s balance re-confirmed back to `80`, zero bulk order
+requests remaining for that user.
+
+**Not touched:** the "Certificate Requests" tab and the "Bookings" tab
+(already wired, out of scope here); no changes to the user-side
+`POST /api/bulk-order-requests` validation shape beyond removing the debit
+call.
+
+---
+
+## Sprint 4.5 — Bulk Order Cancellation Flow + Delivery Estimate (2026-07-20)
+
+Same-day follow-up to the bulk-order supplier UI/backend session above,
+product owner requests: (1) the Fulfill button was clickable before Confirm
+had ever been clicked — fixed to grey-out/disable until `confirmed`; (2)
+asked whether credit holds on confirmation were feasible — answered
+(new architecture, not built now, deferred as its own sprint-plan item, see
+SPRINT_PLAN_NEXTJS_REWRITE.md Sprint 4.5); (3) buyers had no way to cancel a
+bulk order at all — built; (4) suppliers should give an estimated delivery
+week on confirm — built.
+
+**Fulfill-button fix, first attempt failed silently:** the first pass styled
+the disabled state by appending grey Tailwind classes to the existing
+`className` string, but `Button`'s `primary` variant's teal gradient classes
+were still present ahead of them via `variants[variant]`, and Tailwind
+resolves conflicting same-specificity utilities by CSS declaration order in
+the stylesheet, not by string position — the button kept rendering teal.
+Confirmed via `getComputedStyle(...).backgroundImage` in the live browser
+before assuming the visual fix had landed. Fixed by switching to `Button`'s
+existing `variant="ghost"` prop for the disabled state instead of fighting
+the gradient with more classes — `pending` → grey/disabled (`title="Confirm
+the request before fulfilling it."`), `confirmed` → purple gradient/enabled.
+
+**Design decisions, both confirmed with the product owner before building:**
+- **Credit hold — deferred, not built.** Approved in principle ("add it to
+  the sprint plan under 4.5"), explicitly not started. Real scope: balance
+  today is always a live `SUM` of `Transaction` rows, no "reserved" concept
+  anywhere; adding one means `assertSufficientBalance` and every balance
+  check needs to account for held amounts, plus release-on-decline/cancel
+  logic and a stale-hold policy. Not guessed at here.
+- **Cancellation, two different paths depending on status** (buyer's own
+  words): "If the supplier has not confirmed the order, the user can
+  immediately cancel the order and its just closed. But if the supplier has
+  confirmed the order, then the user will have to send a request to the
+  supplier and the supplier will then have to review... an exclamation mark
+  on the bulk order request on the request overview page... a modal that the
+  user requested for cancellation (reasons included), and supplier CTA."
+  Built exactly that.
+- **Delivery estimate — required on Confirm**, not optional/deferred.
+
+**Schema (migration `20260719200725_bulk_order_delivery_estimate_and_cancellation`,
+generated via `prisma migrate dev --create-only` rather than hand-written, to
+avoid subtly-wrong raw SQL):** `BulkOrderRequest` gained
+`estimatedDeliveryDate` (nullable — pre-existing rows predate it; required by
+app-layer validation on every confirm going forward) and
+`cancellationRequestedAt`/`cancellationReason` (set together, cleared
+together). `ActivityActionType` gained `bulk_order_cancelled` (buyer cancels
+a still-pending request directly), `bulk_order_cancellation_requested`,
+`bulk_order_cancellation_approved`, `bulk_order_cancellation_rejected` — one
+value per event, same taxonomy convention as every other activity-log
+addition this project has made. Applied to both dev and test DBs.
+
+**`lib/bulk-orders.ts` additions:**
+- `confirmBulkOrder(id, estimatedDeliveryDate)` — signature changed, now
+  requires and stores the date; `parseEstimatedDeliveryDate` validates
+  `YYYY-MM-DD` at the route layer.
+- `cancelBulkOrderByUser(id, userId)` — buyer-initiated, immediate, only
+  while `pending`. No refund logic (mirrors `declineBulkOrder`): nothing was
+  ever debited pre-fulfillment.
+- `requestBulkOrderCancellation(id, userId, reason)` — buyer-initiated, only
+  while `confirmed`, rejects a second request while one's already pending
+  review.
+- `approveBulkOrderCancellation(id)` / `rejectBulkOrderCancellation(id)` —
+  supplier-initiated; approve moves to `cancelled` and clears both fields,
+  reject just clears both fields and leaves it `confirmed`.
+- New `BulkOrderNotOwnedError` — deliberately covers both "doesn't exist" and
+  "belongs to someone else" in one branch, mirroring `BookingNotOwnedError`
+  (`lib/ratings.ts`) exactly, so a route can map it straight to a 404 without
+  leaking whether the id exists for another user.
+- `serializeBulkOrderRequest` extended with the three new fields (always
+  present, not conditional — they're plain columns, unlike the
+  relation-dependent `listingName`/`userName`).
+
+**Routes:** `GET /api/bulk-order-requests` (buyer's own list, new — didn't
+exist before this session, same shape as `GET /api/bookings`), `PATCH
+/api/bulk-order-requests/[id]/cancel`, `POST
+/api/bulk-order-requests/[id]/request-cancellation`, `PATCH
+/api/supplier/bulk-order-requests/[id]/{approve,reject}-cancellation`.
+`PATCH .../confirm` now requires `estimatedDeliveryDate` in the body.
+
+**New components:** `ConfirmBulkOrderModal` (date input, gates the Confirm
+action), `CancellationReviewModal` (supplier-side: shows the buyer's reason,
+Approve/Reject CTAs), `RequestCancellationModal` (buyer-side: reason
+textarea, mirrors `DeclineReasonModal`). New `lib/hooks/useMyBulkOrders.ts`
+(buyer list + cancel + request-cancellation mutations) — first buyer-facing
+bulk-order hook; extended `useSupplierBulkOrders.ts` with the two
+cancellation-review mutations and changed `useConfirmBulkOrder`'s mutate
+signature from `id` to `{id, estimatedDeliveryDate}`.
+
+**User dashboard (`app/(user)/user/page.tsx`) gained a "Bulk Orders" card** —
+didn't exist before this session; per an earlier Explore-agent check there
+was no buyer-facing bulk-order list anywhere in the app, only the supplier
+side. Shows status, estimated delivery once set, and the appropriate action
+per status (`pending` → inline Cancel button, `confirmed` with no open
+request → Request Cancellation button, `confirmed` with one pending →
+"Cancellation requested" text, no button).
+
+**Real bug found and fixed, not just in new code — a JSX whitespace gotcha:**
+all three new modals (plus the pre-existing `DeclineReasonModal`, copied as
+the template) wrote text like:
+```jsx
+Let <span>{name}</span> know why this request is being
+declined.
+```
+Visually this rendered as "**GreenPack**know why..." — no space after the
+name. Cause: when a JSX text node spans multiple source lines, Babel trims
+*each line's* leading/trailing whitespace independently before joining with
+single spaces, so the space that's visually "attached to the closing tag" on
+the first line gets stripped along with normal line-start indentation, same
+as any other line. This only manifests when text continues on a new source
+line immediately after an inline element — a single-line adjacent tag+text
+(`<b>x</b> y`) is unaffected. Confirmed via `element.innerHTML` in the live
+browser (`get_page_text`/screenshots alone made it easy to misread as a font-
+rendering illusion). Fixed all four components by inserting an explicit
+`{" "}` after the closing tag rather than relying on line-wrap collapsing.
+`DeclineReasonModal` is used by both the existing booking-decline and
+bulk-order-decline flows, so this fixes a real, already-shipped user-facing
+bug, not just the new modals.
+
+**Tests:** `lib/bulk-orders.test.ts` — added `estimatedDeliveryDate` to every
+`confirmBulkOrder` call (signature change) plus new coverage for
+`cancelBulkOrderByUser` (success, wrong-owner rejected, confirmed-order
+rejected), `requestBulkOrderCancellation` (success with reason stored,
+pending-order rejected, duplicate-request rejected, wrong-owner rejected),
+and `approveBulkOrderCancellation`/`rejectBulkOrderCancellation` (both happy
+paths, both "no pending request" rejections). All 131 tests in `npm test`
+pass (13 new, 0 regressions). `npx tsc --noEmit`, `npx eslint`, and `next
+build` all clean.
+
+**Verified live**, full loop, real cookie-jar sessions for both
+`ethan@example.com` and `gabriel@greenpack.sg`: created two pending bulk
+orders as Ethan (18.50 cr, 37.00 cr) → clicked the dashboard's inline
+"Cancel" on the 37 cr one → moved to `cancelled` immediately, no supplier
+involvement → as Gabriel, clicked Confirm on the 18.50 cr one → the new date-
+picker modal opened addressed to "Ethan Goh" → submitted `2026-08-10` → row
+updated to `confirmed` with "Est. delivery week of Aug 10, 2026" shown on
+both the supplier and buyer sides → as Ethan, the dashboard now showed
+"Request Cancellation" (not "Cancel") for the confirmed order → submitted a
+reason → buyer side flipped to "Cancellation requested" → as Gabriel, the
+amber warning-triangle indicator appeared next to the row's status badge →
+clicked it → review modal showed "Ethan Goh has asked to cancel..." (space
+confirmed present after the JSX fix) and the exact reason text → clicked
+"Approve Cancellation" → row moved to `cancelled` on both sides. All scratch
+rows (2 `bulk_order_requests`, 6 `activity_log` entries; zero `transactions`
+since nothing was ever debited pre-fulfillment) deleted afterward via a
+one-off script; Ethan's balance reconfirmed at `80`.
+
+**Not touched:** the credit-hold mechanism (explicitly deferred, see above);
+no changes to `fulfillBulkOrderWithDebit`'s debit-at-fulfillment behavior
+from the prior session.

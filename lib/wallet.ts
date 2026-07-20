@@ -4,9 +4,10 @@ import { ApiValidationError } from "@/lib/api-errors";
 import { getCreditBalance } from "@/lib/credits";
 
 // Sprint 3.5 known-gap #5, corrected scope: the sprint plan's checklist item
-// says "type: purchase transactions actually created by app code" — but that
-// was already closed by createBulkOrderWithDebit (lib/bulk-orders.ts, known
-// gap #4). Per the Transaction model's own schema comment, topup/refund are
+// says "type: purchase transactions actually created by app code" — that's
+// closed by fulfillBulkOrderWithDebit (lib/bulk-orders.ts, debits on
+// fulfillment) and createPurchaseWithDebit (lib/purchases.ts, "Buy Now").
+// Per the Transaction model's own schema comment, topup/refund are
 // credit-direction and booking/purchase are debit-direction, so a wallet
 // top-up (money in) belongs on `type: topup`, not `purchase`. Grepping the
 // app code confirmed TransactionType.topup was, until this file, only ever

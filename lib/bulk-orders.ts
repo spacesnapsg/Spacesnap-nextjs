@@ -1,9 +1,18 @@
-import { TransactionType, ActivityActionType, type BulkOrderRequest, Prisma } from "@/app/generated/prisma/client";
+import { TransactionType, ActivityActionType, BulkOrderStatus, type BulkOrderRequest, type Listing, type User, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientBalance } from "@/lib/credits";
 
-export function serializeBulkOrderRequest(request: BulkOrderRequest) {
+export const bulkOrderRequestWithRelationsArgs = {
+  include: { listing: true, user: true },
+} satisfies Prisma.BulkOrderRequestDefaultArgs;
+
+export type BulkOrderRequestWithRelations = BulkOrderRequest & { listing: Listing; user: User };
+
+// Mirrors old SupplierBulkOrderController::transform's shape (listing_name,
+// requester_name, requester_email) for the supplier-facing list — the
+// `listing`/`user` relations are only present when the caller included them.
+export function serializeBulkOrderRequest(request: BulkOrderRequest | BulkOrderRequestWithRelations) {
   return {
     id: request.id.toString(),
     userId: request.userId,
@@ -11,8 +20,13 @@ export function serializeBulkOrderRequest(request: BulkOrderRequest) {
     quantity: request.quantity,
     credits: Number(request.credits),
     status: request.status,
+    estimatedDeliveryDate: request.estimatedDeliveryDate ? request.estimatedDeliveryDate.toISOString().slice(0, 10) : null,
+    cancellationRequestedAt: request.cancellationRequestedAt ? request.cancellationRequestedAt.toISOString() : null,
+    cancellationReason: request.cancellationReason,
     createdAt: request.createdAt.toISOString(),
     updatedAt: request.updatedAt.toISOString(),
+    ...("listing" in request ? { listingName: request.listing.name } : {}),
+    ...("user" in request ? { userName: request.user.name, userEmail: request.user.email } : {}),
   };
 }
 
@@ -49,27 +63,60 @@ export function parseBulkOrderCreateFields(body: unknown): ParsedBulkOrderFields
   };
 }
 
-interface CreateBulkOrderWithDebitParams {
+// Required on every confirm (2026-07-20 product owner request) — plain
+// YYYY-MM-DD, stored as a UTC midnight Date. No "week" type on either side;
+// the supplier picks any date and the UI labels/formats it as a week.
+export function parseEstimatedDeliveryDate(body: unknown): Date {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const raw = b.estimatedDeliveryDate;
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new ApiValidationError({ estimatedDeliveryDate: ["estimatedDeliveryDate is required (YYYY-MM-DD)."] });
+  }
+  const date = new Date(`${raw}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    throw new ApiValidationError({ estimatedDeliveryDate: ["estimatedDeliveryDate must be a valid date."] });
+  }
+  return date;
+}
+
+interface ParsedCancellationRequestFields {
+  reason: string;
+}
+
+export function parseCancellationRequestFields(body: unknown): ParsedCancellationRequestFields {
+  const errors: Record<string, string[]> = {};
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+
+  let reason = "";
+  if (typeof b.reason !== "string" || b.reason.trim().length === 0) {
+    errors.reason = ["reason is required."];
+  } else {
+    reason = b.reason.trim();
+  }
+
+  if (Object.keys(errors).length > 0) {
+    throw new ApiValidationError(errors);
+  }
+
+  return { reason };
+}
+
+interface CreateBulkOrderParams {
   userId: string;
   listingId: bigint;
   quantity: number;
   cost: Prisma.Decimal;
 }
 
-// Sprint 3.5 known-gap #4: same "check balance, debit, create Transaction"
-// pattern as createBookingWithDebit (lib/bookings.ts), reusing the shared
-// assertSufficientBalance helper (lib/credits.ts) instead of reimplementing
-// the check inline. Unlike the old build (SupplierBulkOrderController only
-// deducted credits on transition to `fulfilled`), this rewrite debits at
-// request creation — the same point bookings debit at — so the balance
-// check, BulkOrderRequest insert, and debit Transaction all land atomically
-// in one DB transaction here too. `type: purchase` on the Transaction row
-// also closes the separate "type: purchase never created by real app code"
-// gap noted in CODEBASEAPI_SUMMARY.md §6.
-export async function createBulkOrderWithDebit(params: CreateBulkOrderWithDebitParams): Promise<BulkOrderRequest> {
+// Corrected 2026-07-20 (product owner): credits are NOT debited at request
+// creation. This matches the old BulkOrderRequestController::store exactly —
+// no balance check, no Transaction, just the row. Credits only move when the
+// supplier fulfills the order (fulfillBulkOrderWithDebit below). An earlier
+// session had this debiting at creation on the assumption that was an
+// improvement over the old build; that assumption was wrong and has been
+// reverted. See CLAUDE1.md correction note, same date.
+export async function createBulkOrder(params: CreateBulkOrderParams): Promise<BulkOrderRequest> {
   return prisma.$transaction(async (tx) => {
-    await assertSufficientBalance(tx, params.userId, params.cost);
-
     const bulkOrderRequest = await tx.bulkOrderRequest.create({
       data: {
         userId: params.userId,
@@ -79,24 +126,292 @@ export async function createBulkOrderWithDebit(params: CreateBulkOrderWithDebitP
       },
     });
 
-    await tx.transaction.create({
-      data: {
-        userId: params.userId,
-        bulkOrderRequestId: bulkOrderRequest.id,
-        type: TransactionType.purchase,
-        amount: params.cost.negated(),
-      },
-    });
-
     await tx.activityLog.create({
       data: {
         userId: params.userId,
         actionType: ActivityActionType.bulk_order_created,
-        description: `Bulk order #${bulkOrderRequest.id} created for ${params.quantity} unit(s) (${params.cost} credits debited).`,
+        description: `Bulk order #${bulkOrderRequest.id} requested for ${params.quantity} unit(s) (${params.cost} credits, due on fulfillment).`,
         relatedListingId: params.listingId,
       },
     });
 
     return bulkOrderRequest;
+  });
+}
+
+export class BulkOrderNotConfirmableError extends Error {
+  constructor(public readonly status: BulkOrderStatus) {
+    super(`Bulk order is already ${status} and cannot be confirmed.`);
+  }
+}
+
+// Status-only transition — no credit movement, since none has happened yet
+// at this point. Unlike confirmBookingWithAudit (lib/bookings.ts), there's
+// no zero-amount audit Transaction to write here: that pattern exists there
+// because booking credits are already debited at creation, so there's a
+// ledger event to annotate. Nothing has moved yet for a bulk order.
+// `estimatedDeliveryDate` is required (2026-07-20 product owner request) —
+// enforced by parseEstimatedDeliveryDate at the route layer, not re-validated
+// here.
+export async function confirmBulkOrder(bulkOrderRequestId: bigint, estimatedDeliveryDate: Date): Promise<BulkOrderRequest> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
+    if (request.status !== BulkOrderStatus.pending) {
+      throw new BulkOrderNotConfirmableError(request.status);
+    }
+
+    const updated = await tx.bulkOrderRequest.update({
+      where: { id: bulkOrderRequestId },
+      data: { status: BulkOrderStatus.confirmed, estimatedDeliveryDate },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.bulk_order_confirmed,
+        description: `Bulk order #${updated.id} confirmed by supplier (estimated delivery ${estimatedDeliveryDate.toISOString().slice(0, 10)}).`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export class BulkOrderNotDeclinableError extends Error {
+  constructor(public readonly status: BulkOrderStatus) {
+    super(`Bulk order is already ${status} and cannot be declined.`);
+  }
+}
+
+// No refund path needed (unlike declineBookingWithRefund) — nothing was ever
+// debited for a pending/confirmed bulk order.
+export async function declineBulkOrder(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
+    if (request.status !== BulkOrderStatus.pending && request.status !== BulkOrderStatus.confirmed) {
+      throw new BulkOrderNotDeclinableError(request.status);
+    }
+
+    const updated = await tx.bulkOrderRequest.update({
+      where: { id: bulkOrderRequestId },
+      data: { status: BulkOrderStatus.cancelled },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.bulk_order_declined,
+        description: `Bulk order #${updated.id} declined by supplier (no credits were debited, nothing to refund).`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export class BulkOrderNotFulfillableError extends Error {
+  constructor(public readonly status: BulkOrderStatus) {
+    super(`Bulk order is already ${status} and cannot be fulfilled.`);
+  }
+}
+
+// This is where credits actually move. Mirrors old
+// SupplierBulkOrderController::update's `fulfilled` branch: balance is
+// checked against the request's stored `credits` (the price snapshot taken
+// at creation, not the listing's possibly-changed current price), a single
+// debit Transaction is created, and status flips to fulfilled — all atomic.
+// `type: purchase` on the Transaction row matches the type
+// createPurchaseWithDebit ("Buy Now") already uses for the same kind of
+// debit event.
+export async function fulfillBulkOrderWithDebit(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
+    if (request.status !== BulkOrderStatus.pending && request.status !== BulkOrderStatus.confirmed) {
+      throw new BulkOrderNotFulfillableError(request.status);
+    }
+
+    await assertSufficientBalance(tx, request.userId, request.credits);
+
+    const updated = await tx.bulkOrderRequest.update({
+      where: { id: bulkOrderRequestId },
+      data: { status: BulkOrderStatus.fulfilled },
+    });
+
+    await tx.transaction.create({
+      data: {
+        userId: updated.userId,
+        bulkOrderRequestId: updated.id,
+        type: TransactionType.purchase,
+        amount: updated.credits.negated(),
+        description: `Bulk order #${updated.id} fulfilled — ${updated.credits} credits debited.`,
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.bulk_order_fulfilled,
+        description: `Bulk order #${updated.id} fulfilled (${updated.credits} credits debited).`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
+  });
+}
+
+// Thrown by every buyer-initiated action below when the request doesn't
+// belong to the caller — deliberately also covers "doesn't exist" (mirrors
+// BookingNotOwnedError, lib/ratings.ts) so a route can map it straight to a
+// 404 without leaking whether the id exists for someone else.
+export class BulkOrderNotOwnedError extends Error {
+  constructor() {
+    super("This bulk order request does not belong to you.");
+  }
+}
+
+export class BulkOrderNotCancellableError extends Error {
+  constructor(public readonly status: BulkOrderStatus) {
+    super(
+      status === BulkOrderStatus.confirmed
+        ? "This order has already been confirmed — request cancellation instead so the supplier can review it."
+        : `Bulk order is already ${status} and cannot be cancelled.`
+    );
+  }
+}
+
+// Buyer-initiated, immediate — only while still `pending`. 2026-07-20 product
+// owner decision: a request the supplier hasn't acted on yet can be pulled
+// by the buyer with no review step (mirrors declineBulkOrder's "no refund
+// needed, nothing was ever debited" shape); once `confirmed`, the supplier
+// has already committed to it, so the buyer can only
+// requestBulkOrderCancellation below.
+export async function cancelBulkOrderByUser(bulkOrderRequestId: bigint, userId: string): Promise<BulkOrderRequest> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.bulkOrderRequest.findUnique({ where: { id: bulkOrderRequestId } });
+    if (!request || request.userId !== userId) {
+      throw new BulkOrderNotOwnedError();
+    }
+    if (request.status !== BulkOrderStatus.pending) {
+      throw new BulkOrderNotCancellableError(request.status);
+    }
+
+    const updated = await tx.bulkOrderRequest.update({
+      where: { id: bulkOrderRequestId },
+      data: { status: BulkOrderStatus.cancelled },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.bulk_order_cancelled,
+        description: `Bulk order #${updated.id} cancelled by the requester before supplier confirmation (no credits were debited, nothing to refund).`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export class BulkOrderCancellationNotRequestableError extends Error {}
+
+// Buyer-initiated, requires supplier review — only while `confirmed`, and
+// only one open request at a time. 2026-07-20 product owner decision.
+export async function requestBulkOrderCancellation(
+  bulkOrderRequestId: bigint,
+  userId: string,
+  reason: string
+): Promise<BulkOrderRequest> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.bulkOrderRequest.findUnique({ where: { id: bulkOrderRequestId } });
+    if (!request || request.userId !== userId) {
+      throw new BulkOrderNotOwnedError();
+    }
+    if (request.status === BulkOrderStatus.pending) {
+      throw new BulkOrderCancellationNotRequestableError(
+        "This request hasn't been confirmed yet — cancel it directly instead of requesting cancellation."
+      );
+    }
+    if (request.status !== BulkOrderStatus.confirmed) {
+      throw new BulkOrderCancellationNotRequestableError(`Bulk order is already ${request.status} and cannot be cancelled.`);
+    }
+    if (request.cancellationRequestedAt) {
+      throw new BulkOrderCancellationNotRequestableError("A cancellation request is already pending supplier review.");
+    }
+
+    const updated = await tx.bulkOrderRequest.update({
+      where: { id: bulkOrderRequestId },
+      data: { cancellationRequestedAt: new Date(), cancellationReason: reason },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.bulk_order_cancellation_requested,
+        description: `Cancellation requested for bulk order #${updated.id}: "${reason}"`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export class BulkOrderCancellationNotPendingError extends Error {
+  constructor() {
+    super("There is no pending cancellation request on this bulk order.");
+  }
+}
+
+export async function approveBulkOrderCancellation(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
+    if (!request.cancellationRequestedAt) {
+      throw new BulkOrderCancellationNotPendingError();
+    }
+
+    const updated = await tx.bulkOrderRequest.update({
+      where: { id: bulkOrderRequestId },
+      data: { status: BulkOrderStatus.cancelled, cancellationRequestedAt: null, cancellationReason: null },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.bulk_order_cancellation_approved,
+        description: `Supplier approved the cancellation request for bulk order #${updated.id} (no credits were debited, nothing to refund).`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
+  });
+}
+
+export async function rejectBulkOrderCancellation(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
+  return prisma.$transaction(async (tx) => {
+    const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
+    if (!request.cancellationRequestedAt) {
+      throw new BulkOrderCancellationNotPendingError();
+    }
+
+    const updated = await tx.bulkOrderRequest.update({
+      where: { id: bulkOrderRequestId },
+      data: { cancellationRequestedAt: null, cancellationReason: null },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: ActivityActionType.bulk_order_cancellation_rejected,
+        description: `Supplier rejected the cancellation request for bulk order #${updated.id}; the order remains confirmed.`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
   });
 }
