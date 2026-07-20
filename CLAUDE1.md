@@ -2543,3 +2543,174 @@ a workaround for); no changes to `lib/quiz-attempts.ts`'s grading logic
 (already correct from Sprint 4 Item 4); "Currently Active" check-ins gap
 remains blocked on Sprint 5 kiosk hardware, not something this session's
 scope covered.
+
+## Backend CRUD Pass — Admin Companies, Promotions, Revenue Aggregation, Business Details (2026-07-20)
+
+Closed four of the "deliberately left unwired" backend gaps tracked in
+`SPRINT_PLAN_NEXTJS_REWRITE.md` since Sprint 3 Session 4, done as four
+sequential sub-sessions (each typechecked/linted/tested/verified live before
+moving to the next), per product owner direction. Admin-level booking
+approval (the fifth item in that list) was explicitly **rejected** by the
+product owner this session — bookings stay supplier-owned, confirmed as a
+non-feature rather than left unwired.
+
+### 1. `GET /api/admin/companies` + Companies tab
+
+`lib/admin-companies.ts` (`serializeAdminCompany`/`serializeAdminCompanyMember`,
+reusing `deriveRole` from `lib/admin-users.ts`) + `app/api/admin/companies/route.ts`
+(`requireSystemAdmin`, optional `?search=` on name/businessName) +
+`lib/hooks/useAdminCompanies.ts`. `AdminUsersCompanies.tsx`'s `CompaniesTab`
+rewritten from a gap-note stub to an expandable table (company row → nested
+member roster with role/status badges), same interaction pattern as the
+existing Users tab. Verified live: 401 unauthenticated, search narrows
+correctly, expand shows Acme's real 2 members (Ben/Company Admin,
+Chandra/Supplier) with no console errors.
+
+### 2. Promotion request loop
+
+`lib/promotions.ts` (`requestPromotion`/`getPendingPromotions`/
+`approvePromotion`/`rejectPromotion`, three typed errors —
+`AlreadyCompanyAdminError`/`PromotionAlreadyRequestedError`/
+`PromotionNotPendingError`) + `POST /api/promotion-request` (self-service,
+`requireSupplier`) + `GET /api/admin/promotions/pending` +
+`PATCH .../[id]/approve` + `.../reject` (`requireSystemAdmin`). Approve sets
+`isCompanyAdmin: true` and clears the flag; reject only clears the flag.
+`GET /api/me` now also returns `promotionRequested` so the supplier-profile
+button's state survives a reload, not just local mutation state.
+
+Wired into all three touch points: Supplier Profile's
+`CompanyAdminAccessCard` (button → "Request Pending" → gone once resolved),
+Admin Approvals' new `PromotionsTab` (mirrors the existing `CertificatesTab`
+approve/reject pattern), and the Admin Overview dashboard's "Company Admin
+Promotion Requests" row (was hardcoded `count={null}`/"not wired yet").
+
+**Verified live, full loop, not just unit-level**: reset Chandra
+(`chandra@acmecoworking.sg`, the one seeded plain-supplier account — every
+other seeded supplier is already a company admin) to a clean pre-request
+state via a one-off script, then drove the actual UI: logged in as Chandra,
+clicked "Request Promotion to Company Admin" → button flipped to "Request
+Pending", persisted across reload (confirms real DB read, not local state).
+Logged in as admin, saw "Promotions 1" badge on Approvals, approved via the
+UI → Chandra's session (`/api/auth/session`) confirmed `isCompanyAdmin: true`
+on next read (the `jwt` callback's per-read DB check picked it up
+automatically, no re-login needed). Re-ran the same flow and rejected
+instead this time (via API, since approve already proved the UI path) —
+confirmed role stayed `supplier` and the flag cleared. Edge cases exercised
+directly: non-supplier requesting → 403, already-company-admin requesting →
+422, requesting twice → 422, non-admin hitting the admin routes → 403,
+approving/rejecting a non-pending user → 422, a nonexistent user id → 404,
+unauthenticated → 401. Chandra ended the session back at her original
+seeded state (`isCompanyAdmin: false`, `promotionRequested: false`) via the
+reject call itself, no manual DB cleanup needed.
+
+### 3. Revenue/booking aggregation
+
+`lib/revenue.ts` — "revenue" is defined as `type IN (booking, purchase,
+refund)` transactions, negated and summed (`topup` excluded — that's money
+entering a user's own wallet, not operator revenue). Company attribution
+resolves through whichever of `Transaction.booking`/`bulkOrderRequest`/
+`purchase` is set, down to that record's `listing.companyId` — there's no
+`companyId` column on `Transaction` itself, so this can't be a Prisma
+`groupBy`; it's a fetch-all-then-reduce-in-JS given the current (dev/demo)
+data volume, same idiom as other pure-JS aggregation in this codebase.
+Three exports: `getPlatformRevenueSummary` (companies/bookings/revenue
+counts), `getRevenueByCompany` (every company, zero-revenue ones included),
+`getRevenueTransactionFeed` (recent non-zero revenue transactions with
+company attribution), `getCompanyRevenueByMonth` (single company, last 6
+calendar months, zero-filled).
+
+Routes: `GET /api/admin/financials` (all three admin-facing shapes in one
+call — backs both the Overview stat cards and the Financials page) and
+`GET /api/supplier/revenue` (`requireSupplier`, scoped to caller's own
+company). Frontend: `useAdminFinancials`/`useSupplierRevenue` hooks; Admin
+Overview's three "—" stat cards now show real numbers; Admin Financials page
+rebuilt from a single gap-note into a revenue-by-operator table + a
+cross-company transaction feed table; Supplier Dashboard's "Revenue Over
+Time" gap note replaced with a `recharts` `BarChart` (recharts was already a
+listed dependency, unused until now).
+
+**Real bug found and fixed during live verification**: the bar chart
+rendered with axis/gridlines but no visible bar on first load. Traced via
+direct SVG-coordinate inspection (grid line `y` attributes vs. the bar
+rect's `y`/`height`) to Recharts' default mount animation depending on
+`requestAnimationFrame` — which stalls in this automated browser tool,
+leaving the bar stuck mid-animation or at zero height depending on timing.
+Fixed with `isAnimationActive={false}` on the `<Bar>` (also just better for
+a dashboard chart — no reason to animate in on every load). Re-verified:
+bar renders at full height immediately, correctly proportioned against the
+600-unit axis for Acme's 420cr July total.
+
+**Real data quirk found, not a bug**: one seeded demo `Transaction`
+(`"Bulk order: Compostable Packaging Boxes x20 packs"`, -370, Farah's user)
+has no linked `Purchase`/`BulkOrderRequest` row at all — predates those
+tables, kept in `prisma/seed.ts` as decorative ledger noise. It correctly
+shows `companyId: null` / "—" in the transaction feed and is included in
+platform-total revenue but not in any per-operator row — meaning the
+platform total can legitimately exceed the sum of the by-company table.
+Not fixed (not this session's data to clean up, and the aggregation code is
+behaving correctly given what the row actually links to) — flagged here so
+a future session doesn't mistake the discrepancy for a bug.
+
+Verified live: Admin Overview → Total Companies 3, Total Bookings 5,
+Platform Revenue 1740.00 cr. Admin Financials → Acme 420.00 cr, GreenPack
+0.00 cr, ToolShare 950.00 cr (420+0+950=1370, the 370cr gap being the
+orphaned row above), transaction feed showing per-row company attribution
+correctly. Supplier Dashboard (`ben@acmecoworking.sg`) → bar chart showing
+Jul 420cr, Feb–Jun at 0.
+
+### 4. Business Details edit
+
+New migration `20260720105222_add_company_finance_fields` — added
+`registrationNumber`/`financeContactEmail`/`financeContactPerson` to
+`Company` (all nullable `String?`, `businessLocation`/`yearsOperating`
+deliberately excluded from this pass per product owner call, even though the
+old gap note bundled them together). Applied to both `spacesnap_dev` and
+`spacesnap_nextjs_test` (`npm run test:db:migrate`), `prisma generate` rerun.
+
+New `requireCompanyAdmin()` in `lib/supplier-auth.ts` (stricter than the
+existing `requireSupplier()` — same company-scoping, plus `isCompanyAdmin`)
+since editing a company's business/finance details is a company-admin action,
+not a plain-supplier one — but *viewing* them isn't restricted, any supplier
+at the company can read. `lib/company.ts`
+(`serializeCompanyDetails`/`parseBusinessDetailsFields`/
+`updateCompanyBusinessDetails`) + `GET`+`PATCH /api/supplier/company`.
+Supplier Profile's `BusinessDetailsCard` replaces the old gap-note Card:
+read-only list for any supplier, an "Edit" button + form (only the 5 target
+fields) for company admins, with a "only your company admin can edit" hint
+for everyone else.
+
+**Real bug found and fixed during live verification**: first PATCH attempt
+(as `ben@acmecoworking.sg`, a real company admin) 500'd —
+`PrismaClientValidationError: Unknown argument registrationNumber`. Not a
+code bug: the already-running dev server's Node process had the *old*
+generated Prisma Client loaded in memory from before this session's
+migration/`prisma generate`, and Next's dev-server module cache doesn't pick
+up a regenerated client without a process restart (unlike a normal HMR
+source edit). Fixed by stopping and restarting the preview server; re-ran
+the identical PATCH and it succeeded.
+
+Verified live, full loop: as Ben, edited all three new fields
+(`UEN-2019-0042` / `finance@acmecoworking.sg` / `Priya Nathan`) via the real
+UI form → saved → persisted across a page reload (confirms real DB write).
+As Chandra (plain supplier, same company): `GET` succeeds and shows Ben's
+saved values (read access isn't admin-gated), `PATCH` → clean `403 "This
+action requires company admin access."` Unauthenticated `GET` → `401`.
+Reverted Acme's three new fields back to `null` via the same PATCH endpoint
+afterward (the app's own clear-a-field-with-null path), confirmed by the
+response — DB back to its pre-session seeded state, no manual SQL needed.
+
+### Wrap-up
+
+`npx tsc --noEmit`, `npx eslint .` (only pre-existing findings in untouched
+files — `passport/page.tsx`, `prisma/seed.ts`, `prisma/tests/db-constraints.test.ts`
+— confirmed unrelated to this session), `npm test` (171/171, zero
+regressions across all four sub-sessions), and `next build` all clean.
+
+**Not touched, flagged rather than silently skipped:** the Invoice/Receipt/
+payout gap (Sprint 6, Stripe, genuinely unbuilt) is the only item left in
+the Sprint 3 "backend gaps" list — a candidate for that sprint, not before.
+The `businessLocation`/`yearsOperating` Company columns still exist but
+aren't exposed by the new edit form (product owner's explicit scope call,
+not an oversight). The supplier-profile "Average Rating: No rating system
+built yet" line is now stale — ratings shipped in Sprint 4.5 — noticed in
+passing but out of this session's scope to fix.

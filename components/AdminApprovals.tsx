@@ -8,6 +8,7 @@ import {
   useApproveCertificate,
   useRejectCertificate,
 } from "@/lib/hooks/useAdminCertificates";
+import { usePendingPromotions, useApprovePromotion, useRejectPromotion } from "@/lib/hooks/usePromotions";
 import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "bookings" | "promotions" | "certificates";
@@ -101,13 +102,67 @@ function CertificatesTab() {
   );
 }
 
+function PromotionsTab() {
+  const { data: promotions, isLoading, isError } = usePendingPromotions();
+  const approvePromotion = useApprovePromotion();
+  const rejectPromotion = useRejectPromotion();
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  function handleApprove(id: string) {
+    setActionError(null);
+    approvePromotion.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  function handleReject(id: string) {
+    setActionError(null);
+    rejectPromotion.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  if (isLoading) return <p className="text-sm text-muted-text text-center py-12">Loading…</p>;
+  if (isError) return <p className="text-sm text-error-red text-center py-12">Failed to load.</p>;
+  if (!promotions || promotions.length === 0) return <EmptyState label="promotions" />;
+
+  return (
+    <div>
+      {actionError && <p className="text-sm text-error-red mb-4">{actionError}</p>}
+      {promotions.map((p) => (
+        <div key={p.id} className="py-4 border-b border-border/60 last:border-0">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-body-text font-bold">{p.name}</p>
+              <p className="text-xs text-muted-text mt-1">
+                {p.email} · {p.companyName ?? "No company"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <ApproveButton
+                disabled={approvePromotion.isPending && approvePromotion.variables === p.id}
+                onClick={() => handleApprove(p.id)}
+              />
+              <RejectButton
+                disabled={rejectPromotion.isPending && rejectPromotion.variables === p.id}
+                onClick={() => handleReject(p.id)}
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminApprovals() {
   const [activeTab, setActiveTab] = useState<MainTab>("bookings");
   const { data: pendingCertificates } = usePendingCertificates();
+  const { data: pendingPromotions } = usePendingPromotions();
 
   const MAIN_TABS: { id: MainTab; label: string; count: number; icon: typeof CalendarCheck }[] = [
     { id: "bookings", label: "Bookings", count: 0, icon: CalendarCheck },
-    { id: "promotions", label: "Promotions", count: 0, icon: Building2 },
+    { id: "promotions", label: "Promotions", count: pendingPromotions?.length ?? 0, icon: Building2 },
     { id: "certificates", label: "Certificates", count: pendingCertificates?.length ?? 0, icon: Award },
   ];
 
@@ -159,13 +214,7 @@ export default function AdminApprovals() {
             by a system admin. Tracked as a backend gap in case an admin-override flow is wanted.
           </GapNote>
         )}
-        {activeTab === "promotions" && (
-          <GapNote>
-            Not wired yet — there&apos;s no <code>GET /api/admin/promotions/pending</code> or
-            approve/reject route. The <code>promotionRequested</code> column exists on{" "}
-            <code>users</code> but nothing reads or writes it yet. Tracked as a backend gap.
-          </GapNote>
-        )}
+        {activeTab === "promotions" && <PromotionsTab />}
         {activeTab === "certificates" && <CertificatesTab />}
       </Card>
     </div>

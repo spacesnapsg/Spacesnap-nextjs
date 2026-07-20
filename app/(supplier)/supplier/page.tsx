@@ -1,9 +1,16 @@
 "use client";
 
 import { CalendarCheck, Package } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Card from "@/components/Card";
 import { useSupplierBookings, type BookingStatus } from "@/lib/hooks/useSupplierBookings";
 import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
+import { useSupplierRevenue } from "@/lib/hooks/useSupplierRevenue";
+
+function formatMonthLabel(month: string) {
+  const [year, m] = month.split("-").map(Number);
+  return new Date(year, m - 1, 1).toLocaleDateString("en-US", { month: "short" });
+}
 
 const STATUS_STYLES: Record<BookingStatus, string> = {
   pending: "bg-amber/15 text-amber border-amber/30",
@@ -30,6 +37,7 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: string; 
 export default function SupplierAnalyticsPage() {
   const { data: bookings, isLoading: bookingsLoading } = useSupplierBookings();
   const { data: listings, isLoading: listingsLoading } = useSupplierListings();
+  const { data: revenueMonths, isLoading: revenueLoading } = useSupplierRevenue();
 
   const activeBookings = (bookings ?? []).filter((b) => b.status === "active" || b.status === "confirmed").length;
   const recentBookings = [...(bookings ?? [])]
@@ -59,12 +67,36 @@ export default function SupplierAnalyticsPage() {
       </div>
 
       <Card className="mb-8">
-        <h2 className="text-lg font-semibold text-body-text mb-2">Revenue Over Time</h2>
-        <p className="text-sm text-muted-text">
-          Not wired yet — there&apos;s no revenue-by-supplier aggregation endpoint (the transaction
-          ledger is keyed by user, not by company). Tracked as a backend gap, same bucket as
-          admin financials.
-        </p>
+        <h2 className="text-lg font-semibold text-body-text mb-6">Revenue Over Time</h2>
+        {revenueLoading ? (
+          <p className="text-sm text-muted-text">Loading…</p>
+        ) : (
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={(revenueMonths ?? []).map((m) => ({
+                  label: formatMonthLabel(m.month),
+                  revenue: Number(m.revenue),
+                }))}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                <XAxis dataKey="label" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} />
+                <Tooltip
+                  formatter={(value) => [`${value} cr`, "Revenue"]}
+                  contentStyle={{
+                    backgroundColor: "#151a23",
+                    border: "1px solid #1f2937",
+                    borderRadius: 8,
+                    fontSize: 13,
+                  }}
+                  labelStyle={{ color: "#e5e7eb" }}
+                />
+                <Bar dataKey="revenue" fill="#9333ea" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
       </Card>
 
       <Card>

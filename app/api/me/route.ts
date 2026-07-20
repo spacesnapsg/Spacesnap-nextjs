@@ -25,5 +25,6 @@ export async function GET() {
     avatarUrl: user.avatarUrl,
     companyName: user.company?.name ?? null,
     memberSince: user.createdAt.toISOString(),
+    promotionRequested: user.promotionRequested,
   });
 }

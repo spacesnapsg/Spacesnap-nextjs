@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
-import { Search } from "lucide-react";
+import { Search, ChevronDown, ChevronRight } from "lucide-react";
 import Card from "@/components/Card";
 import {
   useAdminUsers,
@@ -11,6 +11,7 @@ import {
   type UserRole,
   type AccountStatus,
 } from "@/lib/hooks/useAdminUsers";
+import { useAdminCompanies } from "@/lib/hooks/useAdminCompanies";
 import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "users" | "companies";
@@ -215,13 +216,115 @@ function UsersTab() {
 }
 
 function CompaniesTab() {
+  const [search, setSearch] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { data, isLoading, isError } = useAdminCompanies(search.trim() || undefined);
+
+  const companies = data?.companies ?? [];
+
   return (
     <Card>
-      <h2 className="text-lg font-semibold text-body-text mb-2">All Companies</h2>
-      <p className="text-sm text-muted-text">
-        Not wired yet — there&apos;s no <code>GET /api/admin/companies</code> endpoint (with nested
-        supplier data) in the backend. Tracked as a backend gap.
-      </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <h2 className="text-lg font-semibold text-body-text">All Companies</h2>
+
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-text pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by company or business name..."
+            className="w-full sm:w-64 bg-background border border-border/40 rounded py-3 pr-4 pl-10 text-sm text-body-text placeholder:text-muted-text focus:outline-none focus:border-admin-red-start transition-colors"
+          />
+        </div>
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-text text-center py-12">Loading companies…</p>
+      ) : isError ? (
+        <p className="text-sm text-error-red text-center py-12">Failed to load companies.</p>
+      ) : companies.length === 0 ? (
+        <p className="text-sm text-muted-text text-center py-12">No companies found</p>
+      ) : (
+        <div className="mt-6 flex flex-col">
+          {companies.map((company) => {
+            const expanded = expandedId === company.id;
+            return (
+              <div key={company.id} className="border-b border-border/60 last:border-0">
+                <button
+                  type="button"
+                  onClick={() => setExpandedId(expanded ? null : company.id)}
+                  className="w-full flex items-center justify-between gap-4 py-4 text-left"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {expanded ? (
+                      <ChevronDown size={16} className="text-muted-text shrink-0" />
+                    ) : (
+                      <ChevronRight size={16} className="text-muted-text shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-body-text truncate">{company.name}</p>
+                      <p className="text-xs text-muted-text truncate">
+                        {company.businessName ?? "—"}
+                        {company.contactEmail ? ` · ${company.contactEmail}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-6 shrink-0 text-right">
+                    <div>
+                      <p className="text-xs text-muted-text">Members</p>
+                      <p className="text-sm font-semibold text-body-text">{company.members.length}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-text">Listings</p>
+                      <p className="text-sm font-semibold text-body-text">{company.listingCount}</p>
+                    </div>
+                    <div className="hidden sm:block">
+                      <p className="text-xs text-muted-text">Since</p>
+                      <p className="text-sm text-body-text">
+                        {new Date(company.createdAt).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+
+                {expanded && (
+                  <div className="pb-4 pl-7">
+                    {company.members.length === 0 ? (
+                      <p className="text-sm text-muted-text py-2">No members.</p>
+                    ) : (
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-border/40">
+                            <th className="py-2 px-3 text-xs font-medium uppercase tracking-wide text-muted-text">Name</th>
+                            <th className="py-2 px-3 text-xs font-medium uppercase tracking-wide text-muted-text">Email</th>
+                            <th className="py-2 px-3 text-xs font-medium uppercase tracking-wide text-muted-text">Role</th>
+                            <th className="py-2 px-3 text-xs font-medium uppercase tracking-wide text-muted-text">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {company.members.map((member) => (
+                            <tr key={member.id} className="border-b border-border/20 last:border-0">
+                              <td className="py-2 px-3 text-sm text-body-text whitespace-nowrap">{member.name}</td>
+                              <td className="py-2 px-3 text-sm text-muted-text whitespace-nowrap">{member.email}</td>
+                              <td className="py-2 px-3">
+                                <RoleBadge role={member.role} />
+                              </td>
+                              <td className="py-2 px-3">
+                                <StatusBadge status={member.status} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </Card>
   );
 }

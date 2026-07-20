@@ -13,6 +13,8 @@ import {
   useRejectCertificate,
   type AdminCertificate,
 } from "@/lib/hooks/useAdminCertificates";
+import { usePendingPromotions } from "@/lib/hooks/usePromotions";
+import { useAdminFinancials } from "@/lib/hooks/useAdminFinancials";
 import { ApiRequestError } from "@/lib/api-client";
 
 function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Users }) {
@@ -139,9 +141,12 @@ export default function AdminOverviewPage() {
   const [certModalOpen, setCertModalOpen] = useState(false);
   const { data: usersData } = useAdminUsers();
   const { data: pendingCertificates } = usePendingCertificates();
+  const { data: pendingPromotions } = usePendingPromotions();
+  const { data: financials } = useAdminFinancials();
 
   const totalUsers = usersData?.meta.total;
   const certCount = pendingCertificates?.length ?? 0;
+  const promotionCount = pendingPromotions?.length ?? 0;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -154,15 +159,22 @@ export default function AdminOverviewPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatCard label="Total Users" value={totalUsers === undefined ? "…" : String(totalUsers)} icon={Users} />
-        <StatCard label="Total Companies" value="—" icon={Building2} />
-        <StatCard label="Total Bookings" value="—" icon={CalendarCheck} />
-        <StatCard label="Platform Revenue" value="—" icon={DollarSign} />
+        <StatCard
+          label="Total Companies"
+          value={financials ? String(financials.summary.totalCompanies) : "…"}
+          icon={Building2}
+        />
+        <StatCard
+          label="Total Bookings"
+          value={financials ? String(financials.summary.totalBookings) : "…"}
+          icon={CalendarCheck}
+        />
+        <StatCard
+          label="Platform Revenue"
+          value={financials ? `${financials.summary.totalRevenue} cr` : "…"}
+          icon={DollarSign}
+        />
       </div>
-      <p className="text-xs text-muted-text -mt-4 mb-8">
-        Total Companies, Total Bookings, and Platform Revenue aren&apos;t wired yet — there&apos;s no
-        admin-wide aggregation endpoint for companies, cross-supplier bookings, or platform revenue.
-        Tracked as a backend gap.
-      </p>
 
       <Card>
         <div className="flex items-center gap-2 mb-2">
@@ -182,7 +194,7 @@ export default function AdminOverviewPage() {
           <ApprovalRow
             icon={Building2}
             label="Company Admin Promotion Requests"
-            count={null}
+            count={promotionCount}
             onReview={() => router.push("/admin-approvals")}
           />
           <ApprovalRow

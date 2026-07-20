@@ -9,6 +9,7 @@ export interface CurrentUser {
   avatarUrl: string | null;
   companyName: string | null;
   memberSince: string;
+  promotionRequested: boolean;
 }
 
 export function useCurrentUser() {

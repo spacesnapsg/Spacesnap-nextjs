@@ -228,15 +228,22 @@ model VerificationToken {
 // ---------------------------------------------------------------------------
 
 model Company {
-  id                  BigInt   @id @default(autoincrement())
-  name                String
-  businessName        String?  @map("business_name")
-  businessDescription String?  @map("business_description")
-  contactEmail        String?  @map("contact_email")
-  businessLocation    String?  @map("business_location")
-  yearsOperating      Int?     @map("years_operating")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  id                   BigInt   @id @default(autoincrement())
+  name                 String
+  businessName         String?  @map("business_name")
+  businessDescription  String?  @map("business_description")
+  contactEmail         String?  @map("contact_email")
+  businessLocation     String?  @map("business_location")
+  yearsOperating       Int?     @map("years_operating")
+  // Added for the supplier profile "Business Details" edit form — the
+  // registration number and finance contact fields the old CODEBASE_SUMMARY.md
+  // gap note said had no backing columns at all (distinct from contactEmail,
+  // which is the company's general contact address, not accounts/finance).
+  registrationNumber   String?  @map("registration_number")
+  financeContactEmail  String?  @map("finance_contact_email")
+  financeContactPerson String?  @map("finance_contact_person")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
   users            User[]
   listings         Listing[]
@@ -578,17 +585,17 @@ model ActivityLog {
 // quantity) — the old schema only reached NOT NULL after a backfill
 // migration; this rewrite starts there directly.
 model BulkOrderRequest {
-  id        BigInt          @id @default(autoincrement())
-  userId    String          @map("user_id")
-  listingId BigInt          @map("listing_id")
-  quantity  Int
-  credits   Decimal         @db.Decimal(10, 2)
-  status    BulkOrderStatus @default(pending)
+  id                      BigInt          @id @default(autoincrement())
+  userId                  String          @map("user_id")
+  listingId               BigInt          @map("listing_id")
+  quantity                Int
+  credits                 Decimal         @db.Decimal(10, 2)
+  status                  BulkOrderStatus @default(pending)
   // Required at confirm time (2026-07-20 product owner request) — the
   // supplier's estimate of when the order will ship, shown to the buyer.
   // Nullable at the DB level only because pre-existing rows predate this
   // column; app-layer validation requires it on every confirm going forward.
-  estimatedDeliveryDate DateTime? @map("estimated_delivery_date")
+  estimatedDeliveryDate   DateTime?       @map("estimated_delivery_date")
   // Cancellation-request pair, set together and cleared together — 2026-07-20
   // product owner request. Only meaningful while status is `confirmed`: a
   // `pending` request can be cancelled directly by the buyer (no review
@@ -596,10 +603,10 @@ model BulkOrderRequest {
   // `confirmed` one has already had supplier attention, so the buyer can only
   // ask — the supplier approves (→ cancelled) or rejects (both fields
   // cleared, status stays confirmed).
-  cancellationRequestedAt DateTime? @map("cancellation_requested_at")
-  cancellationReason      String?   @map("cancellation_reason")
-  createdAt DateTime        @default(now()) @map("created_at")
-  updatedAt DateTime        @updatedAt @map("updated_at")
+  cancellationRequestedAt DateTime?       @map("cancellation_requested_at")
+  cancellationReason      String?         @map("cancellation_reason")
+  createdAt               DateTime        @default(now()) @map("created_at")
+  updatedAt               DateTime        @updatedAt @map("updated_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)

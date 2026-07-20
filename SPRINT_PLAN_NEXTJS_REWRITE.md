@@ -106,14 +106,14 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 **Backend gaps found and deliberately left unwired** (stubbed in the UI with a note, not built — flagged here per-item rather than guessed at):
 - No `GET` to list active check-ins (only `POST` create + `PATCH` check-out exist) — user dashboard's "Currently Active" card.
 - `activity_log` has no API route at all (write-only from server lib code) — same gap Sprint 4.5 already tracked; the user dashboard's "Recent Activity" card now shows real bookings instead (see the ratings feature above), not the generic activity_log feed.
-- No `GET /api/admin/companies` (nested supplier data) — admin Users & Companies page.
-- No admin-level booking-approval concept, and no `GET/PATCH /api/admin/promotions` (the `promotionRequested` column exists on `users`, nothing reads/writes it) — admin Approvals page, and the supplier profile "Request Promotion" button.
-- No admin-wide aggregation endpoint for total companies, cross-supplier bookings, or platform/per-operator revenue (`transactions` is keyed by user, not company) — admin Platform Overview + Platform Financials pages, supplier Analytics revenue chart.
+- ~~No `GET /api/admin/companies` (nested supplier data)~~ — **closed 2026-07-20**, see CLAUDE1.md "Backend CRUD Pass — Admin Companies, Promotions, Revenue Aggregation, Business Details."
+- ~~No admin-level booking-approval concept, and no `GET/PATCH /api/admin/promotions`~~ — promotions half **closed 2026-07-20** (same session as above); admin-level booking-approval explicitly **rejected by the product owner** (bookings stay supplier-owned, no admin override) — not a gap, a confirmed non-feature.
+- ~~No admin-wide aggregation endpoint for total companies, cross-supplier bookings, or platform/per-operator revenue~~ — **closed 2026-07-20**, same session. Note: platform-total revenue can exceed the sum of the per-operator table when an orphaned pre-existing seed `Transaction` (no linked `Purchase`/`BulkOrderRequest`) can't be attributed to any company — see that session's write-up.
 - ~~No route exposing `TrainingVideo` (list/create/edit/delete) or video-completion tracking~~ — **closed 2026-07-20**, see CLAUDE1.md "Video Tutorials — TrainingVideo/Quiz Backend + Supplier/Admin/User UI." `TrainingSession`s (already had routes as of the training-enrollments session) are unaffected by this note.
-- No `Invoice`/`Receipt`/payout concept in the schema (Sprint 6's Stripe integration is unbuilt) — supplier profile's Accounts Receivable / Receipts & Invoices cards.
-- No route exposing `Company` business fields (business name/location/contact email exist on the model; registration number and finance-contact-person don't exist at all) for editing — supplier profile Business Details card.
+- No `Invoice`/`Receipt`/payout concept in the schema (Sprint 6's Stripe integration is unbuilt) — supplier profile's Accounts Receivable / Receipts & Invoices cards. **Still open** — genuinely blocked on Sprint 6, not touched.
+- ~~No route exposing `Company` business fields... for editing~~ — **closed 2026-07-20**, see CLAUDE1.md "Backend CRUD Pass..." Scoped to businessName/businessDescription/registrationNumber (new column)/financeContactEmail (new column)/financeContactPerson (new column) only — businessLocation/yearsOperating deliberately excluded from the edit form per product owner call.
 
-These are candidates for a dedicated CRUD pass (new Session 3/4-style work, porting the old TrainingVideoController/QuizQuestionController/TrainingSessionController) or explicit sprint-plan tracking, at the product owner's call — not guessed at or built here.
+The Invoice/Receipt gap is the only one left in this list — a candidate for Sprint 6, not before.
 
 **⚠️ Auth note:** Sanctum's SPA cookie auth is simple because it's pure client-side. NextAuth/JWT with SSR introduces CSRF and cookie-scope edge cases that don't exist in the old stack. Don't treat this as "same auth, different library" — budget explicit review time here.
 

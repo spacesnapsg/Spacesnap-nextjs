@@ -9,6 +9,9 @@ import Input from "@/components/Input";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
 import { useSupplierBookings } from "@/lib/hooks/useSupplierBookings";
+import { useRequestPromotion } from "@/lib/hooks/usePromotions";
+import { useSupplierCompany, useUpdateSupplierCompany, type BusinessDetailsFields } from "@/lib/hooks/useSupplierCompany";
+import { ApiRequestError } from "@/lib/api-client";
 
 function getInitials(name: string) {
   return name
@@ -30,9 +33,9 @@ function InfoRow({ icon: Icon, label, value }: { icon: typeof Mail; label: strin
   );
 }
 
-function CompanyAdminAccessCard() {
+function CompanyAdminAccessCard({ promotionRequested }: { promotionRequested: boolean }) {
   const { data: session } = useSession();
-  const [requested, setRequested] = useState(false);
+  const requestPromotion = useRequestPromotion();
 
   if (session?.user?.isCompanyAdmin) {
     return (
@@ -46,6 +49,8 @@ function CompanyAdminAccessCard() {
     );
   }
 
+  const alreadyRequested = promotionRequested || requestPromotion.isSuccess;
+
   return (
     <Card className="mt-6">
       <p className="text-xs text-muted-text mb-3">Company Admin Access</p>
@@ -53,18 +58,115 @@ function CompanyAdminAccessCard() {
         Request access to manage your company&apos;s suppliers and billing
       </p>
       <Button
-        onClick={() => setRequested(true)}
-        disabled={requested}
+        onClick={() => requestPromotion.mutate()}
+        disabled={alreadyRequested || requestPromotion.isPending}
         className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end w-full disabled:opacity-50"
       >
-        Request Promotion to Company Admin
+        {alreadyRequested ? "Request Pending" : "Request Promotion to Company Admin"}
       </Button>
-      {requested && (
-        <p className="text-xs text-muted-text mt-3 text-center">
-          Not wired yet — there&apos;s no endpoint to submit this request (the
-          <code> promotionRequested</code> column exists but nothing writes to it). Tracked as a
-          backend gap.
+      {requestPromotion.isError && (
+        <p className="text-xs text-error-red mt-3 text-center">
+          {requestPromotion.error instanceof ApiRequestError
+            ? requestPromotion.error.message
+            : "Something went wrong."}
         </p>
+      )}
+      {alreadyRequested && !requestPromotion.isError && (
+        <p className="text-xs text-muted-text mt-3 text-center">
+          Awaiting system admin review.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+const BUSINESS_DETAILS_FIELDS: { key: keyof BusinessDetailsFields; label: string }[] = [
+  { key: "businessName", label: "Business Name" },
+  { key: "businessDescription", label: "Description" },
+  { key: "registrationNumber", label: "Registration Number" },
+  { key: "financeContactEmail", label: "Finance Contact Email" },
+  { key: "financeContactPerson", label: "Finance Contact Person" },
+];
+
+function BusinessDetailsCard() {
+  const { data: session } = useSession();
+  const { data: company, isLoading } = useSupplierCompany();
+  const updateCompany = useUpdateSupplierCompany();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<BusinessDetailsFields>({});
+
+  function startEditing() {
+    setDraft({
+      businessName: company?.businessName ?? "",
+      businessDescription: company?.businessDescription ?? "",
+      registrationNumber: company?.registrationNumber ?? "",
+      financeContactEmail: company?.financeContactEmail ?? "",
+      financeContactPerson: company?.financeContactPerson ?? "",
+    });
+    setEditing(true);
+  }
+
+  function handleSave() {
+    updateCompany.mutate(draft, { onSuccess: () => setEditing(false) });
+  }
+
+  const canEdit = Boolean(session?.user?.isCompanyAdmin);
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-base font-semibold text-body-text">Business Details</h3>
+        {canEdit && !editing && !isLoading && (
+          <Button variant="ghost" className="h-8 px-3 text-xs" onClick={startEditing}>
+            Edit
+          </Button>
+        )}
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-text">Loading…</p>
+      ) : editing ? (
+        <div className="flex flex-col gap-4">
+          {BUSINESS_DETAILS_FIELDS.map(({ key, label }) => (
+            <div key={key} className="flex flex-col gap-1.5">
+              <label className="text-xs text-muted-text">{label}</label>
+              <Input
+                value={draft[key] ?? ""}
+                onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                className="w-full focus:!border-supplier-purple-start"
+              />
+            </div>
+          ))}
+          {updateCompany.isError && (
+            <p className="text-xs text-error-red">
+              {updateCompany.error instanceof ApiRequestError ? updateCompany.error.message : "Something went wrong."}
+            </p>
+          )}
+          <div className="flex gap-2">
+            <Button
+              onClick={handleSave}
+              disabled={updateCompany.isPending}
+              className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end"
+            >
+              {updateCompany.isPending ? "Saving…" : "Save"}
+            </Button>
+            <Button variant="ghost" onClick={() => setEditing(false)} disabled={updateCompany.isPending}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {BUSINESS_DETAILS_FIELDS.map(({ key, label }) => (
+            <div key={key} className="flex items-center justify-between gap-4 py-1.5 border-b border-border/40 last:border-b-0">
+              <p className="text-sm text-muted-text">{label}</p>
+              <p className="text-sm text-body-text text-right truncate max-w-[60%]">{company?.[key] || "—"}</p>
+            </div>
+          ))}
+          {!canEdit && (
+            <p className="text-xs text-hint-text mt-1">Only your company admin can edit these details.</p>
+          )}
+        </div>
       )}
     </Card>
   );
@@ -189,19 +291,11 @@ export default function SupplierProfilePage() {
               </Button>
             </div>
           </Card>
-          <CompanyAdminAccessCard />
+          <CompanyAdminAccessCard promotionRequested={user?.promotionRequested ?? false} />
         </div>
 
         <div className="lg:col-span-2 flex flex-col gap-6">
-          <Card>
-            <h3 className="text-base font-semibold text-body-text mb-2">Business Details</h3>
-            <p className="text-sm text-muted-text">
-              Not wired yet — the <code>Company</code> model has some overlapping fields (business
-              name/location/contact email) but no route exposes them for editing, and fields like
-              registration number and finance contact person have no backing columns at all. Tracked
-              as a backend gap.
-            </p>
-          </Card>
+          <BusinessDetailsCard />
 
           <Card>
             <h3 className="text-base font-semibold text-body-text mb-2">Listing Stats</h3>
