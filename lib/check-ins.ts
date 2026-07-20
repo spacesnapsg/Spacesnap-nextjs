@@ -149,6 +149,24 @@ export async function checkOutCheckIn(checkInId: bigint): Promise<CheckIn> {
       },
     });
 
+    // Separate row from check_out above: check_out is the check-in/out
+    // action itself (fires for bare check-ins too), this is the booking's
+    // lifecycle transition — the "Booking #X" text matches the same
+    // matchBookingId convention booking_created/confirmed/declined use, so
+    // the frontend can tie the rating control to this row specifically
+    // (see app/(user)/user/page.tsx) rather than to the created/confirmed
+    // rows, which is why a bare check-in must not write this.
+    if (checkIn.bookingId !== null) {
+      await tx.activityLog.create({
+        data: {
+          userId: checkIn.userId,
+          actionType: ActivityActionType.booking_completed,
+          description: `Booking #${checkIn.bookingId} completed.`,
+          relatedListingId: checkIn.listingId,
+        },
+      });
+    }
+
     return updated;
   });
 }

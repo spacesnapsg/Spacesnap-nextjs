@@ -207,6 +207,52 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
     }
   });
 
+  test("checking out a booking-linked check-in writes a booking_completed activity_log row", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await prisma.booking.create({
+        data: {
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date("2027-12-06"),
+          endDate: new Date("2027-12-06"),
+          credits: "10.00",
+          status: "confirmed",
+        },
+      });
+      const checkIn = await createCheckIn({ userId: user.id, listingId: listing.id, bookingId: booking.id });
+      await checkOutCheckIn(checkIn.id);
+
+      const rows = await prisma.activityLog.findMany({
+        where: { userId: user.id, actionType: "booking_completed" },
+      });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].description, `Booking #${booking.id} completed.`);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("checking out a bare check-in (no bookingId) writes no booking_completed row", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const checkIn = await createCheckIn({ userId: user.id, listingId: listing.id, bookingId: null });
+      await checkOutCheckIn(checkIn.id);
+
+      const rows = await prisma.activityLog.findMany({
+        where: { userId: user.id, actionType: "booking_completed" },
+      });
+      assert.equal(rows.length, 0);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
   test("checking out an already-checked-out check-in rejects cleanly", async () => {
     const company = await createCompany();
     const user = await createUser();

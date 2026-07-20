@@ -9,6 +9,7 @@ export type ActivityActionType =
   | "booking_created"
   | "booking_confirmed"
   | "booking_declined"
+  | "booking_completed"
   | "bulk_order_created"
   | "bulk_order_confirmed"
   | "bulk_order_declined"
@@ -45,7 +46,10 @@ export type ActivityCategory = "bookings" | "bulk_orders" | "purchases" | "walle
 // types (?types=a,b,c). Keeping the grouping here means adding a category
 // never requires a backend change.
 export const ACTIVITY_CATEGORIES: Record<ActivityCategory, { label: string; types: ActivityActionType[] }> = {
-  bookings: { label: "Bookings", types: ["booking_created", "booking_confirmed", "booking_declined"] },
+  bookings: {
+    label: "Bookings",
+    types: ["booking_created", "booking_confirmed", "booking_declined", "booking_completed"],
+  },
   bulk_orders: {
     label: "Bulk Orders",
     types: [

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   CalendarCheck,
+  CheckCheck,
   Wallet,
   Package,
   LogIn,
@@ -68,6 +69,7 @@ const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   booking_created: CalendarCheck,
   booking_confirmed: CalendarCheck,
   booking_declined: CalendarCheck,
+  booking_completed: CheckCheck,
   bulk_order_created: Package,
   bulk_order_confirmed: Package,
   bulk_order_declined: Package,
@@ -90,14 +92,19 @@ const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   instant_purchase_completed: ShoppingBag,
 };
 
-// Only booking_created/confirmed/declined descriptions ever contain this
-// pattern (see lib/bookings.ts's activityLog.create calls) — used to tie a
-// feed row back to a real booking so completed, unrated ones can still show
-// the rating control inline. ActivityLog itself has no bookingId column
+// Only booking_created/confirmed/declined/completed descriptions ever
+// contain this pattern (see lib/bookings.ts's and lib/check-ins.ts's
+// activityLog.create calls) — used to tie a feed row back to a real booking
+// so its status badge can show. ActivityLog itself has no bookingId column
 // (only relatedListingId, shared with several other action types), so this
 // reads the id out of the description text this codebase already writes,
 // rather than adding a schema column just for this.
-const BOOKING_ACTION_TYPES = new Set<ActivityActionType>(["booking_created", "booking_confirmed", "booking_declined"]);
+const BOOKING_ACTION_TYPES = new Set<ActivityActionType>([
+  "booking_created",
+  "booking_confirmed",
+  "booking_declined",
+  "booking_completed",
+]);
 
 function matchBookingId(description: string): string | null {
   const match = description.match(/Booking #(\d+)/);
@@ -111,7 +118,17 @@ function ActivityRow({ entry, bookingsById }: { entry: ActivityEntry; bookingsBy
   const booking = BOOKING_ACTION_TYPES.has(entry.actionType)
     ? bookingsById.get(matchBookingId(entry.description) ?? "")
     : undefined;
-  const canRate = booking && booking.status === "completed" && booking.listingType !== "consumables";
+  // Gated to the booking_completed row specifically (not booking_created/
+  // confirmed, even though the same underlying booking is now `completed`
+  // by the time those older rows re-render) — the rating panel should only
+  // ever surface next to the event that represents the session actually
+  // being consumed (checked in and checked out), not the row that created
+  // or confirmed the reservation.
+  const canRate =
+    entry.actionType === "booking_completed" &&
+    booking &&
+    booking.status === "completed" &&
+    booking.listingType !== "consumables";
   const Icon = ACTIVITY_ICONS[entry.actionType];
 
   function handleRate(score: number) {
