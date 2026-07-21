@@ -3,6 +3,7 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { requireSystemAdmin } from "@/lib/admin-auth";
 import { ApiValidationError, validationErrorResponse } from "@/lib/api-errors";
 import { grantBookingCredit, serializeBookingCredit } from "@/lib/bookings";
+import { creditsToSgd } from "@/lib/credit-units";
 
 // Admin-only manual "goodwill" BookingCredit grant — the second (and only
 // other) way a BookingCredit gets issued, besides a supplier decline. No
@@ -40,10 +41,13 @@ export async function POST(request: Request) {
   }
 
   try {
+    // rawAmount is entered in "credits" (the same unit this route's own
+    // response — via serializeBookingCredit — reports the grant back in),
+    // converted to true SGD once here, at the write boundary.
     const credit = await grantBookingCredit({
       userId: userId!,
       sourceBookingId: sourceBookingId!,
-      amount: new Prisma.Decimal(rawAmount),
+      amount: new Prisma.Decimal(creditsToSgd(rawAmount)),
     });
     return NextResponse.json({ credit: serializeBookingCredit(credit) }, { status: 201 });
   } catch (error) {

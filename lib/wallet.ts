@@ -2,6 +2,7 @@ import { TransactionType, ActivityActionType, type Transaction, Prisma } from "@
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getCreditBalance } from "@/lib/credits";
+import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 
 // Sprint 3.5 known-gap #5, corrected scope: the sprint plan's checklist item
 // says "type: purchase transactions actually created by app code" — that's
@@ -37,7 +38,9 @@ export function parseTopUpFields(body: unknown): Prisma.Decimal {
   if (typeof b.amount !== "number" || !Number.isFinite(b.amount) || b.amount <= 0) {
     errors.amount = ["amount must be a positive number."];
   } else {
-    amount = new Prisma.Decimal(b.amount).toDecimalPlaces(2);
+    // Entered in "credits" — converted to true SGD once here, at the write
+    // boundary (see lib/credit-units.ts).
+    amount = new Prisma.Decimal(creditsToSgd(b.amount)).toDecimalPlaces(2);
     if (amount.lte(0)) {
       errors.amount = ["amount must be a positive number."];
     }
@@ -79,7 +82,7 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal): Promi
         userId,
         type: "credit_topup",
         title: "Credit top-up received",
-        message: `$${amount.toFixed(2)} was added to your credit wallet.`,
+        message: `${sgdToCredits(Number(amount))} credits were added to your credit wallet.`,
       },
     });
 
@@ -94,10 +97,10 @@ export function serializeTopUp({ transaction, balance }: TopUpResult) {
     transaction: {
       id: transaction.id.toString(),
       type: transaction.type,
-      amount: Number(transaction.amount),
+      amount: sgdToCredits(Number(transaction.amount)),
       description: transaction.description,
       createdAt: transaction.createdAt.toISOString(),
     },
-    balance: Number(balance),
+    balance: sgdToCredits(Number(balance)),
   };
 }

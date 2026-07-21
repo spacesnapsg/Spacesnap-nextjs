@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientBalance } from "@/lib/credits";
 import { createHold, releaseHoldForBulkOrder, getAvailableCreditBalance, InsufficientAvailableCreditError } from "@/lib/credit-holds";
+import { sgdToCredits } from "@/lib/credit-units";
 
 export const bulkOrderRequestWithRelationsArgs = {
   include: { listing: true, user: true },
@@ -19,7 +20,7 @@ export function serializeBulkOrderRequest(request: BulkOrderRequest | BulkOrderR
     userId: request.userId,
     listingId: request.listingId.toString(),
     quantity: request.quantity,
-    credits: Number(request.credits),
+    credits: sgdToCredits(Number(request.credits)),
     status: request.status,
     estimatedDeliveryDate: request.estimatedDeliveryDate ? request.estimatedDeliveryDate.toISOString().slice(0, 10) : null,
     cancellationRequestedAt: request.cancellationRequestedAt ? request.cancellationRequestedAt.toISOString() : null,

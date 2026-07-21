@@ -7,7 +7,11 @@ import Input from "@/components/Input";
 import { useTopUp } from "@/lib/hooks/useWallet";
 import { ApiRequestError } from "@/lib/api-client";
 
-const PRESET_AMOUNTS = [100, 250, 500, 1000];
+// 2026-07-21: scaled ×10 alongside the credit:SGD ratio change (1 credit =
+// S$0.10, see lib/credit-units.ts) so these presets still represent the same
+// real top-up amounts (S$10/S$25/S$50/S$100), not a tenth of what they used
+// to under the old 1:1 ratio.
+const PRESET_AMOUNTS = [1000, 2500, 5000, 10000];
 
 interface TopUpCreditsModalProps {
   open: boolean;

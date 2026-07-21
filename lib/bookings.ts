@@ -23,6 +23,7 @@ import {
   PLATFORM_COMMISSION_PERCENT_BOOKINGS,
   invoicingCadenceForSupplierTier,
 } from "@/lib/booking-payments";
+import { sgdToCredits } from "@/lib/credit-units";
 
 export { RewardGrantNotRedeemableError };
 
@@ -72,7 +73,7 @@ export function serializeBookingCredit(credit: BookingCredit) {
     id: credit.id.toString(),
     userId: credit.userId,
     sourceBookingId: credit.sourceBookingId.toString(),
-    amount: Number(credit.amount),
+    amount: sgdToCredits(Number(credit.amount)),
     status: credit.status,
     appliedToBookingId: credit.appliedToBookingId ? credit.appliedToBookingId.toString() : null,
     refundObligated: credit.refundObligated,
@@ -109,8 +110,8 @@ export function serializeBooking(booking: Booking | BookingWithRelations | Booki
     bookingType: booking.bookingType,
     startDate: booking.startDate.toISOString().slice(0, 10),
     endDate: booking.endDate.toISOString().slice(0, 10),
-    sgdAmount: Number(booking.sgdAmount),
-    earnedCreditsApplied: Number(booking.earnedCreditsApplied),
+    sgdAmount: sgdToCredits(Number(booking.sgdAmount)),
+    earnedCreditsApplied: sgdToCredits(Number(booking.earnedCreditsApplied)),
     status: booking.status,
     isModified: booking.isModified,
     originalStartDate: booking.originalStartDate ? booking.originalStartDate.toISOString().slice(0, 10) : null,

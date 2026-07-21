@@ -8,6 +8,7 @@ import {
   TrendingDown,
   ArrowDownCircle,
   ArrowUpCircle,
+  Gift,
 } from "lucide-react";
 import Card from "@/components/Card";
 import TopUpCreditsModal from "@/components/TopUpCreditsModal";
@@ -108,8 +109,11 @@ function BalanceTrendChart({ data }: { data: number[] }) {
   );
 }
 
+const EARNED_TRANSACTION_TYPES = new Set<WalletTransaction["type"]>(["earned_grant", "earned_spend"]);
+
 function TransactionRow({ transaction }: { transaction: WalletTransaction }) {
   const isCredit = isCreditType(transaction.amount);
+  const isEarned = EARNED_TRANSACTION_TYPES.has(transaction.type);
   const Icon = isCredit ? ArrowDownCircle : ArrowUpCircle;
 
   return (
@@ -123,19 +127,26 @@ function TransactionRow({ transaction }: { transaction: WalletTransaction }) {
           <Icon size={18} />
         </span>
         <div className="min-w-0">
-          <p className="text-sm text-body-text font-medium truncate">{transaction.description}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-body-text font-medium truncate">{transaction.description}</p>
+            {isEarned && (
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-user-teal-end bg-user-teal-end/10 rounded-full px-2 py-0.5">
+                Earned
+              </span>
+            )}
+          </div>
           <p className="text-xs text-muted-text">{formatDate(transaction.createdAt)}</p>
         </div>
       </div>
       <p className={`text-sm font-medium shrink-0 ${isCredit ? "text-success-green" : "text-red-400"}`}>
         {isCredit ? "+" : "-"}
-        {Math.abs(transaction.amount)} cr
+        {Math.abs(transaction.amount)} credits
       </p>
     </div>
   );
 }
 
-export default function CreditWalletPage() {
+export default function FinancialsPage() {
   const [topUpOpen, setTopUpOpen] = useState(false);
   const { data: wallet, isLoading, isError } = useWallet();
 
@@ -157,35 +168,47 @@ export default function CreditWalletPage() {
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
       <div className="mb-8">
         <h1 className="text-3xl font-extrabold bg-gradient-to-r from-user-teal-start to-user-teal-end bg-clip-text text-transparent">
-          Credit Wallet
+          Financials
         </h1>
-        <p className="text-muted-text mt-1">Manage your credits and payment methods</p>
+        <p className="text-muted-text mt-1">Your Financials at a glance</p>
       </div>
 
-      <div className="bg-gradient-to-br from-user-teal-start to-user-teal-end rounded-card p-8 mb-6">
-        <div className="flex items-center justify-between mb-6">
-          <span className="h-11 w-11 rounded-full bg-white/20 flex items-center justify-center">
-            <Wallet size={20} className="text-white" />
-          </span>
-          <span className="inline-flex items-center gap-1.5 bg-white/20 text-white rounded-full px-3 py-1 text-xs font-medium">
-            <span className="h-1.5 w-1.5 rounded-full bg-white" />
-            Active
-          </span>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
+        <div className="bg-gradient-to-br from-user-teal-start to-user-teal-end rounded-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center">
+              <Wallet size={16} className="text-white" />
+            </span>
+            <span className="text-white/80 text-sm">Purchased Credits</span>
+          </div>
+          <p className="text-white text-3xl font-extrabold">{wallet.available} Credits</p>
+          <p className="text-white/70 text-xs mt-1 mb-4">
+            {wallet.held > 0 ? `${wallet.balance} total · ${wallet.held} held on confirmed bulk orders` : `Spendable on consumables & cert fees`}
+          </p>
+          <button
+            type="button"
+            onClick={() => setTopUpOpen(true)}
+            className="w-full h-10 rounded font-medium bg-white text-user-teal-start hover:bg-white/90 transition-colors"
+          >
+            Top Up Credits
+          </button>
         </div>
-        <p className="text-white/80 text-sm">Available Balance</p>
-        <p className="text-white text-4xl font-extrabold mt-1">{wallet.available} Credits</p>
-        <p className="text-white/70 text-xs mt-1 mb-6">
-          {wallet.held > 0
-            ? `${wallet.balance} total · ${wallet.held} held on confirmed bulk orders`
-            : `${wallet.balance} total`}
-        </p>
-        <button
-          type="button"
-          onClick={() => setTopUpOpen(true)}
-          className="w-full h-11 rounded font-medium bg-white text-user-teal-start hover:bg-white/90 transition-colors"
-        >
-          Top Up Credits
-        </button>
+
+        <div className="bg-gradient-to-br from-user-teal-start to-supplier-purple-start rounded-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <span className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center">
+              <Gift size={16} className="text-white" />
+            </span>
+            <span className="text-white/80 text-sm">Earned Credits</span>
+          </div>
+          <p className="text-white text-3xl font-extrabold">{wallet.earned} Credits</p>
+          <p className="text-white/70 text-xs mt-1 mb-4">
+            Redeemable as booking discounts, consumables perks, or gig payouts — never purchasable or cashed out directly.
+          </p>
+          <div className="w-full h-10 rounded flex items-center justify-center bg-white/15 text-white/80 text-sm font-medium">
+            Earned by completing bookings & rewards
+          </div>
+        </div>
       </div>
 
       <Card className="mb-6">
@@ -202,7 +225,7 @@ export default function CreditWalletPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
         <Card>
           <p className="text-muted-text text-sm">This Month&apos;s Spend</p>
-          <p className="text-2xl font-semibold text-body-text mt-1">{stats!.monthSpend.toFixed(2)} cr</p>
+          <p className="text-2xl font-semibold text-body-text mt-1">{stats!.monthSpend.toFixed(2)} credits</p>
           <p className="flex items-center gap-1 text-xs text-success-green mt-2">
             {stats!.monthSpendChangePct >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
             {stats!.monthSpendChangePct >= 0 ? "+" : ""}
@@ -211,7 +234,7 @@ export default function CreditWalletPage() {
         </Card>
         <Card>
           <p className="text-muted-text text-sm">Avg. Monthly Spend</p>
-          <p className="text-2xl font-semibold text-body-text mt-1">{stats!.avgMonthlySpend.toFixed(2)} cr</p>
+          <p className="text-2xl font-semibold text-body-text mt-1">{stats!.avgMonthlySpend.toFixed(2)} credits</p>
           <p className="flex items-center gap-1 text-xs text-muted-text mt-2">
             <TrendingDown size={14} />
             Based on transaction history

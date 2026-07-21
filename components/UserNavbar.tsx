@@ -53,7 +53,7 @@ export default function UserNavbar() {
       <NavGroup>
         <NavItem icon={<Globe size={16} />} label="Discover" href="/marketplace" gradient="from-user-teal-start to-user-teal-end" />
         <NavItem icon={<IdCard size={16} />} label="Digital Passport" href="/passport" gradient="from-user-teal-start to-user-teal-end" />
-        <NavItem icon={<Wallet size={16} />} label="Credit Wallet" href="/wallet" gradient="from-user-teal-start to-user-teal-end" />
+        <NavItem icon={<Wallet size={16} />} label="Financials" href="/wallet" gradient="from-user-teal-start to-user-teal-end" />
         <NavItem icon={<LayoutDashboard size={16} />} label="Dashboard" href="/user" gradient="from-user-teal-start to-user-teal-end" />
       </NavGroup>
     </Navbar>

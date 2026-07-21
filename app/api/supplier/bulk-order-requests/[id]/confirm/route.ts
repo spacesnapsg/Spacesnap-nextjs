@@ -10,6 +10,7 @@ import {
   BulkOrderNotConfirmableError,
 } from "@/lib/bulk-orders";
 import { InsufficientAvailableCreditError } from "@/lib/credit-holds";
+import { sgdToCredits } from "@/lib/credit-units";
 
 // estimatedDeliveryDate is required in the body (2026-07-20 product owner
 // request) — see parseEstimatedDeliveryDate, lib/bulk-orders.ts. `override`
@@ -60,8 +61,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         {
           message: error.message,
           requiresOverride: true,
-          available: Number(error.available),
-          required: Number(error.required),
+          available: sgdToCredits(Number(error.available)),
+          required: sgdToCredits(Number(error.required)),
         },
         { status: 409 }
       );

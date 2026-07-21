@@ -1,5 +1,14 @@
 import { Prisma, type TransactionType } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { sgdToCredits } from "@/lib/credit-units";
+
+// Every revenue figure this module returns is a formatted "credits" string
+// (this app's cosmetic display unit, see lib/credit-units.ts) — the
+// underlying ledger sum stays true SGD throughout the aggregation above,
+// converted once here at the final formatting step.
+function formatAsCredits(sgd: Prisma.Decimal): string {
+  return sgdToCredits(Number(sgd)).toFixed(2);
+}
 
 // "Revenue" = money that actually moved from a user to an operator/the
 // platform. `topup` is money entering a user's own wallet, not revenue —
@@ -51,7 +60,7 @@ export async function getPlatformRevenueSummary(): Promise<PlatformRevenueSummar
     .reduce((sum, t) => sum.plus(t.amount), new Prisma.Decimal(0))
     .negated();
 
-  return { totalCompanies, totalBookings, totalRevenue: totalRevenue.toFixed(2) };
+  return { totalCompanies, totalBookings, totalRevenue: formatAsCredits(totalRevenue) };
 }
 
 export interface CompanyRevenue {
@@ -79,7 +88,7 @@ export async function getRevenueByCompany(): Promise<CompanyRevenue[]> {
   return companies.map((c) => ({
     companyId: c.id.toString(),
     companyName: c.name,
-    revenue: (totals.get(c.id.toString()) ?? new Prisma.Decimal(0)).negated().toFixed(2),
+    revenue: formatAsCredits((totals.get(c.id.toString()) ?? new Prisma.Decimal(0)).negated()),
   }));
 }
 
@@ -110,7 +119,7 @@ export async function getRevenueTransactionFeed(limit = 25): Promise<RevenueTran
       id: t.id.toString(),
       createdAt: t.createdAt.toISOString(),
       type: t.type,
-      amount: t.amount.negated().toFixed(2),
+      amount: formatAsCredits(t.amount.negated()),
       companyId: company?.companyId.toString() ?? null,
       companyName: company?.companyName ?? null,
       description: t.description,
@@ -154,7 +163,7 @@ export async function getCompanyRevenueByMonth(companyId: bigint, months = 6): P
   const cursor = new Date(since);
   for (let i = 0; i < months; i++) {
     const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-    result.push({ month: key, revenue: (buckets.get(key) ?? new Prisma.Decimal(0)).negated().toFixed(2) });
+    result.push({ month: key, revenue: formatAsCredits((buckets.get(key) ?? new Prisma.Decimal(0)).negated()) });
     cursor.setMonth(cursor.getMonth() + 1);
   }
   return result;

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientPurchasedBalance } from "@/lib/credits";
 import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
+import { sgdToCredits } from "@/lib/credit-units";
 
 export { RewardGrantNotRedeemableError };
 
@@ -12,8 +13,8 @@ export function serializePurchase(purchase: Purchase) {
     userId: purchase.userId,
     listingId: purchase.listingId.toString(),
     quantity: purchase.quantity,
-    credits: Number(purchase.credits),
-    earnedCreditsApplied: Number(purchase.earnedCreditsApplied),
+    credits: sgdToCredits(Number(purchase.credits)),
+    earnedCreditsApplied: sgdToCredits(Number(purchase.earnedCreditsApplied)),
     createdAt: purchase.createdAt.toISOString(),
   };
 }

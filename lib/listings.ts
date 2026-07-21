@@ -2,6 +2,7 @@ import { ListingType, Prisma, type Listing } from "@/app/generated/prisma/client
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import type { ListingRatingAggregate } from "@/lib/ratings";
+import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 
 // API contract uses the same field names as the Prisma model / DB columns
 // (type, priceDay, priceWeek, priceMonth, pricePerUnit, stockQuantity,
@@ -30,8 +31,11 @@ export function parseBigIntParam(value: string): bigint | null {
   }
 }
 
+// Stored value is true SGD; the client always sees/enters the cosmetic
+// "credits" unit (see lib/credit-units.ts) — converted here, once, at the
+// read boundary.
 function serializeDecimal(value: Listing["priceDay"]): number | null {
-  return value === null ? null : Number(value);
+  return value === null ? null : sgdToCredits(Number(value));
 }
 
 export function serializeListing(
@@ -183,7 +187,10 @@ export function parseListingFields(body: unknown, opts: { partial: boolean }): P
       if (!isNullableNumber(value) || (typeof value === "number" && value < 0)) {
         errors[key] = [`${key} must be a non-negative number or null.`];
       } else {
-        result[key] = value ?? null;
+        // Supplier enters/edits prices in "credits" — converted to true SGD
+        // once here, at the write boundary, before it ever reaches storage
+        // or the Stripe charge math downstream (see lib/credit-units.ts).
+        result[key] = value === null || value === undefined ? null : creditsToSgd(value);
       }
     }
   }

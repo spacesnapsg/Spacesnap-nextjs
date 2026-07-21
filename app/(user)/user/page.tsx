@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import {
   CalendarCheck,
   CheckCheck,
@@ -12,6 +11,7 @@ import {
   GraduationCap,
   Award,
   ShoppingBag,
+  Trophy,
   type LucideIcon,
 } from "lucide-react";
 import Card from "@/components/Card";
@@ -19,7 +19,7 @@ import RatingStars from "@/components/RatingStars";
 import RequestCancellationModal from "@/components/RequestCancellationModal";
 import CancelBookingModal from "@/components/CancelBookingModal";
 import ModifyBookingModal from "@/components/ModifyBookingModal";
-import { useWallet } from "@/lib/hooks/useWallet";
+import TierBenefitsModal from "@/components/TierBenefitsModal";
 import { useUserBookings, useSubmitRating, type UserBooking } from "@/lib/hooks/useUserBookings";
 import {
   useMyBulkOrders,
@@ -215,7 +215,7 @@ function BookingRow({
         <div className="min-w-0">
           <p className="text-sm text-body-text font-medium truncate">{booking.listingName ?? `Booking #${booking.id}`}</p>
           <p className="text-xs text-muted-text">
-            {formatDate(booking.startDate)} – {formatDate(booking.endDate)} &middot; {booking.sgdAmount} cr
+            {formatDate(booking.startDate)} – {formatDate(booking.endDate)} &middot; {booking.sgdAmount} credits
           </p>
           {booking.originalStartDate && (
             <p className="text-xs text-amber">Rescheduled from {formatDate(booking.originalStartDate)}</p>
@@ -303,7 +303,7 @@ function BulkOrderActivityRow({
         <div className="min-w-0">
           <p className="text-sm text-body-text font-medium truncate">{request.listingName}</p>
           <p className="text-xs text-muted-text">
-            {request.quantity} unit(s) &middot; {request.credits} cr
+            {request.quantity} unit(s) &middot; {request.credits} credits
           </p>
           {request.estimatedDeliveryDate && (
             <p className="text-xs text-muted-text">Est. delivery week of {formatDate(request.estimatedDeliveryDate)}</p>
@@ -346,7 +346,6 @@ function BulkOrderActivityRow({
 }
 
 export default function UserDashboardPage() {
-  const { data: wallet, isLoading: walletLoading } = useWallet();
   const { data: bookings, isLoading: bookingsLoading } = useUserBookings();
   const { data: bulkOrders, isLoading: bulkOrdersLoading } = useMyBulkOrders();
   const cancelBulkOrder = useCancelMyBulkOrder();
@@ -355,6 +354,7 @@ export default function UserDashboardPage() {
   const [cancellationError, setCancellationError] = useState<string | null>(null);
   const [cancelBookingTarget, setCancelBookingTarget] = useState<UserBooking | null>(null);
   const [modifyBookingTarget, setModifyBookingTarget] = useState<UserBooking | null>(null);
+  const [tierModalOpen, setTierModalOpen] = useState(false);
 
   const [activityCategory, setActivityCategory] = useState<ActivityCategory | "all">("all");
   const [activityRange, setActivityRange] = useState<ActivityDateRange>("30");
@@ -395,17 +395,32 @@ export default function UserDashboardPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
         <Card className="flex flex-col gap-4">
-          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center">
-            <Wallet size={20} className="text-white" />
+          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-supplier-purple-start flex items-center justify-center">
+            <Trophy size={20} className="text-white" />
           </div>
           <div>
-            <p className="text-muted-text text-sm">Credit Balance</p>
-            <p className="text-2xl font-semibold text-body-text mt-1">
-              {walletLoading ? "…" : `${wallet?.balance ?? 0} cr`}
-            </p>
-            <Link href="/wallet" className="text-xs text-user-teal-end hover:underline mt-2 inline-block">
-              View Wallet
-            </Link>
+            <p className="text-muted-text text-sm">User Tier</p>
+            {/* TODO: current tier is hardcoded to "Free" — no tier assignment exists yet
+                (Sprint 6.5, not started, see SPRINT_PLAN_NEXTJS_REWRITE.md). Replace once
+                a real tier field/endpoint lands. */}
+            <p className="text-2xl font-semibold text-body-text mt-1">Free</p>
+            <div className="mt-3">
+              <div className="flex items-center justify-between text-xs text-muted-text mb-1">
+                <span>Progress to Starter</span>
+                {/* TODO: placeholder progress — no booking/spend thresholds are confirmed yet */}
+                <span>Criteria TBC</span>
+              </div>
+              <div className="h-2 rounded-full bg-border/40 overflow-hidden">
+                <div className="h-full w-[35%] rounded-full bg-gradient-to-r from-user-teal-start to-supplier-purple-start" />
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTierModalOpen(true)}
+              className="text-xs text-user-teal-end hover:underline mt-3 inline-block"
+            >
+              View Tier Benefits
+            </button>
           </div>
         </Card>
 
@@ -455,6 +470,35 @@ export default function UserDashboardPage() {
       </Card>
 
       <Card className="mb-6">
+        <h2 className="text-lg font-semibold text-body-text mb-2">Bulk Orders</h2>
+        <p className="text-sm text-muted-text mb-2">
+          Requests to suppliers for consumables. Pending requests can be cancelled directly; once a supplier
+          confirms, cancelling needs their review.
+        </p>
+        {cancellationError && <p className="text-sm text-error-red mb-2">{cancellationError}</p>}
+        {bulkOrdersLoading ? (
+          <p className="text-sm text-muted-text py-4">Loading…</p>
+        ) : !bulkOrders || bulkOrders.length === 0 ? (
+          <p className="text-sm text-muted-text py-4">No bulk orders yet.</p>
+        ) : (
+          <div className="flex flex-col">
+            {bulkOrders.map((request) => (
+              <BulkOrderActivityRow
+                key={request.id}
+                request={request}
+                onCancel={handleCancelPending}
+                onRequestCancellation={(id, listingName) => setCancellationTarget({ id, listingName })}
+                isMutating={
+                  (cancelBulkOrder.isPending && cancelBulkOrder.variables === request.id) ||
+                  (requestCancellation.isPending && requestCancellation.variables?.id === request.id)
+                }
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card>
         <h2 className="text-lg font-semibold text-body-text mb-2">Recent Activity</h2>
         <p className="text-sm text-muted-text mb-3">
           Everything that&apos;s happened on your account — bookings, bulk orders, wallet top-ups, training,
@@ -503,35 +547,6 @@ export default function UserDashboardPage() {
         )}
       </Card>
 
-      <Card>
-        <h2 className="text-lg font-semibold text-body-text mb-2">Bulk Orders</h2>
-        <p className="text-sm text-muted-text mb-2">
-          Requests to suppliers for consumables. Pending requests can be cancelled directly; once a supplier
-          confirms, cancelling needs their review.
-        </p>
-        {cancellationError && <p className="text-sm text-error-red mb-2">{cancellationError}</p>}
-        {bulkOrdersLoading ? (
-          <p className="text-sm text-muted-text py-4">Loading…</p>
-        ) : !bulkOrders || bulkOrders.length === 0 ? (
-          <p className="text-sm text-muted-text py-4">No bulk orders yet.</p>
-        ) : (
-          <div className="flex flex-col">
-            {bulkOrders.map((request) => (
-              <BulkOrderActivityRow
-                key={request.id}
-                request={request}
-                onCancel={handleCancelPending}
-                onRequestCancellation={(id, listingName) => setCancellationTarget({ id, listingName })}
-                isMutating={
-                  (cancelBulkOrder.isPending && cancelBulkOrder.variables === request.id) ||
-                  (requestCancellation.isPending && requestCancellation.variables?.id === request.id)
-                }
-              />
-            ))}
-          </div>
-        )}
-      </Card>
-
       <CancelBookingModal
         open={!!cancelBookingTarget}
         onClose={() => setCancelBookingTarget(null)}
@@ -555,6 +570,8 @@ export default function UserDashboardPage() {
         isSubmitting={requestCancellation.isPending}
         errorMessage={cancellationError}
       />
+
+      <TierBenefitsModal open={tierModalOpen} onClose={() => setTierModalOpen(false)} />
     </div>
   );
 }

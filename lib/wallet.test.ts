@@ -6,6 +6,11 @@
 // 2026-07-21: switched from `topup` to `purchased_topup` (see createTopUp's
 // own comment, lib/wallet.ts) — assertions below updated to match, balance
 // math is unaffected since getCreditBalance's SUM has no type filter.
+//
+// 2026-07-21 (later same day): credit:SGD ratio changed from 1:1 to 1:10
+// (1 credit = S$0.10, lib/credit-units.ts) — parseTopUpFields now converts
+// its input (entered in "credits") to true SGD before storage, so every
+// amount asserted below is the input divided by 10, not the input itself.
 import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -46,7 +51,7 @@ describe("parseTopUpFields (Sprint 3.5, known gap #5)", () => {
 
   test("accepts a positive amount", () => {
     const amount = parseTopUpFields({ amount: 100 });
-    assert.equal(amount.toString(), "100");
+    assert.equal(amount.toString(), "10");
   });
 });
 
@@ -61,16 +66,16 @@ describe("createTopUp (Sprint 3.5, known gap #5)", () => {
       const { transaction, balance } = await createTopUp(user.id, amount);
 
       assert.equal(transaction.type, TransactionType.purchased_topup);
-      assert.equal(transaction.amount.toString(), "150");
+      assert.equal(transaction.amount.toString(), "15");
       assert.equal(transaction.userId, user.id);
-      assert.equal(balance.toString(), "150");
+      assert.equal(balance.toString(), "15");
 
       const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
       assert.equal(transactions.length, 1);
       assert.equal(transactions[0].type, TransactionType.purchased_topup);
 
       const balanceAfter = await getCreditBalance(user.id);
-      assert.equal(balanceAfter.toString(), "150");
+      assert.equal(balanceAfter.toString(), "15");
     } finally {
       await prisma.user.delete({ where: { id: user.id } });
     }
@@ -82,7 +87,7 @@ describe("createTopUp (Sprint 3.5, known gap #5)", () => {
       await createTopUp(user.id, parseTopUpFields({ amount: 100 }));
       const { balance } = await createTopUp(user.id, parseTopUpFields({ amount: 50 }));
 
-      assert.equal(balance.toString(), "150");
+      assert.equal(balance.toString(), "15");
 
       const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
       assert.equal(transactions.length, 2);
@@ -92,10 +97,10 @@ describe("createTopUp (Sprint 3.5, known gap #5)", () => {
     }
   });
 
-  test("decimal amount is preserved exactly (e.g. $49.99 package)", async () => {
+  test("decimal amount is preserved exactly (e.g. 499.9 credits -> S$49.99 package)", async () => {
     const user = await createUser();
     try {
-      const { transaction, balance } = await createTopUp(user.id, parseTopUpFields({ amount: 49.99 }));
+      const { transaction, balance } = await createTopUp(user.id, parseTopUpFields({ amount: 499.9 }));
       assert.equal(transaction.amount.toString(), "49.99");
       assert.equal(balance.toString(), "49.99");
     } finally {
