@@ -267,10 +267,10 @@ belong to.
   booking previewed 50%/S$12.50 and the executed Stripe refund matched
   exactly (real refund id on the ledger row). See CLAUDE1.md
   "Sprint 4.75 — Cancel/Modify Booking UI + Stripe Elements" session note.
-- [ ] **`Company.supplierTier` admin UI — blocked on the admin route
-  (Sprint 6).** No admin page/component references `supplierTier` at all
-  (confirmed by repo-wide search); it's currently DB-only. Do not build until
-  `PATCH /api/admin/companies/[id]/supplier-tier` (or equivalent) exists.
+- [x] **`Company.supplierTier` admin UI — closed 2026-07-21**, same session as
+  the Sprint 6 admin route it was blocked on. Per-company tier `<select>` on
+  the admin Companies tab (`components/AdminUsersCompanies.tsx`). See the
+  Sprint 6 item above for the full write-up.
 - [ ] **`BookingCredit` redemption UI ("cancelled — here are alternatives,
   rebook") — blocked on issuance (Sprint 6).** No component references
   `BookingCredit` anywhere. Needs the issuance write-path built first.
@@ -329,7 +329,7 @@ belong to.
 
   **Follow-on items, not yet done (broken out 2026-07-21 so each is separately trackable instead of buried in one paragraph):**
   - [x] **Commission-rate field — closed 2026-07-21.** Confirmed with the product owner: flat 10% for space/equipment bookings (7% applies elsewhere — consumables/bulk orders — out of scope here). `Booking.platformCommissionPercent` (Decimal 5,2, default 10.00) snapshotted at creation time in `createBookingWithDebit`, not read live at cancellation time, so a future rate change can't reshuffle an already-created booking's numbers — same principle as `SupplierPayable.invoicingCadence`. See CLAUDE1.md "Cancellation Route + Commission-Rate Closure" for the full write-up.
-  - [ ] **`Company.supplierTier` admin route — contradiction, not forgotten.** The cancellation-model brief said to "stub the admin route with a TODO," while the same brief's exclusions said "no routes this session" — resolved by building neither route nor stub, see that session's write-up. `supplierTier` is currently DB-only, no admin UI/route exists. Needs `PATCH /api/admin/companies/[id]/supplier-tier` (or similar) as its own small session.
+  - [x] **`Company.supplierTier` admin route — closed 2026-07-21.** `PATCH /api/admin/companies/[id]/supplier-tier` (`app/api/admin/companies/[id]/supplier-tier/route.ts`), system-admin-only, validates against the `SupplierTier` enum (422 on an invalid value), no automatic gating logic (matches the field's own schema comment — manual admin decision only). `serializeAdminCompany` now returns `supplierTier`; new `useSetSupplierTier` hook; `AdminUsersCompanies.tsx`'s Companies tab gained a per-row tier `<select>` (pulled out of the existing expand-toggle `<button>` to avoid nesting an interactive element inside one, confirmed row-expand still works independently). Verified live via real cookie-jar login as `alice.admin@spacesnap.sg`: GreenPack Supplies free→top, confirmed via direct network response and a hard page reload (persisted, not just optimistic UI); invalid tier value → clean 422; reset back to `free` afterward, DB back to seeded state. `npm test` 244/244, `npx tsc --noEmit`/`eslint .` clean on touched files, `next build` clean with the new route listed.
   - [x] **Cancellation route + real Stripe refund execution — closed 2026-07-21.** `PATCH /api/bookings/[id]/cancel` (`cancelBookingWithRefund`, `lib/bookings.ts`), scoped to the booking's own user (not the supplier — that's still `declineBookingWithRefund`/the existing decline route). **This also required a correction to the already-shipped `declineBookingWithRefund`, confirmed with the product owner**: whichever party did NOT cause the cancellation is made whole, so the day-based tier only ever applies to the at-fault party's own side — it does not apply to both simultaneously the way the original (unconfirmed) design did.
     - Supplier-initiated (decline): user now always refunded 100% (previously wrongly tiered by day-before-start). The day tier instead sizes the supplier's penalty against `Booking.platformCommissionPercent` of `sgdAmount`.
     - User-initiated (cancel, new): user's refund follows the day tier as originally designed; supplier is unaffected (a cancelled booking never earned anything either way).

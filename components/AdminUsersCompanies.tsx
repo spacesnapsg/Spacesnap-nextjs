@@ -11,7 +11,7 @@ import {
   type UserRole,
   type AccountStatus,
 } from "@/lib/hooks/useAdminUsers";
-import { useAdminCompanies } from "@/lib/hooks/useAdminCompanies";
+import { useAdminCompanies, useSetSupplierTier, type SupplierTier } from "@/lib/hooks/useAdminCompanies";
 import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "users" | "companies";
@@ -215,6 +215,57 @@ function UsersTab() {
   );
 }
 
+const SUPPLIER_TIERS: SupplierTier[] = ["free", "preferred", "top"];
+
+const SUPPLIER_TIER_LABELS: Record<SupplierTier, string> = {
+  free: "Free",
+  preferred: "Preferred",
+  top: "Top",
+};
+
+const SUPPLIER_TIER_BADGE_STYLES: Record<SupplierTier, string> = {
+  free: "bg-white/10 text-muted-text border-white/20",
+  preferred: "bg-amber/15 text-amber border-amber/30",
+  top: "bg-gradient-to-r from-admin-red-start/20 to-admin-orange-end/20 text-admin-orange-end border-admin-orange-end/30",
+};
+
+function SupplierTierControl({ company }: { company: { id: string; supplierTier: SupplierTier } }) {
+  const setSupplierTier = useSetSupplierTier();
+  const [error, setError] = useState<string | null>(null);
+  const isPending = setSupplierTier.isPending && setSupplierTier.variables?.id === company.id;
+
+  function handleChange(next: SupplierTier) {
+    if (next === company.supplierTier) return;
+    setError(null);
+    setSupplierTier.mutate(
+      { id: company.id, supplierTier: next },
+      {
+        onError: (err) => setError(err instanceof ApiRequestError ? err.message : "Something went wrong."),
+      }
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1" onClick={(e) => e.stopPropagation()}>
+      <select
+        value={company.supplierTier}
+        disabled={isPending}
+        onChange={(e) => handleChange(e.target.value as SupplierTier)}
+        className={`h-8 rounded-full border px-3 text-xs font-medium bg-card focus:outline-none focus:border-admin-red-start transition-colors ${
+          SUPPLIER_TIER_BADGE_STYLES[company.supplierTier]
+        } ${isPending ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+      >
+        {SUPPLIER_TIERS.map((tier) => (
+          <option key={tier} value={tier} className="bg-card text-body-text">
+            {SUPPLIER_TIER_LABELS[tier]}
+          </option>
+        ))}
+      </select>
+      {error && <p className="text-xs text-error-red text-right max-w-[10rem]">{error}</p>}
+    </div>
+  );
+}
+
 function CompaniesTab() {
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -251,42 +302,46 @@ function CompaniesTab() {
             const expanded = expandedId === company.id;
             return (
               <div key={company.id} className="border-b border-border/60 last:border-0">
+              <div className="flex items-center justify-between gap-4 py-4">
                 <button
                   type="button"
                   onClick={() => setExpandedId(expanded ? null : company.id)}
-                  className="w-full flex items-center justify-between gap-4 py-4 text-left"
+                  className="flex items-center gap-3 min-w-0 flex-1 text-left"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {expanded ? (
-                      <ChevronDown size={16} className="text-muted-text shrink-0" />
-                    ) : (
-                      <ChevronRight size={16} className="text-muted-text shrink-0" />
-                    )}
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-body-text truncate">{company.name}</p>
-                      <p className="text-xs text-muted-text truncate">
-                        {company.businessName ?? "—"}
-                        {company.contactEmail ? ` · ${company.contactEmail}` : ""}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-6 shrink-0 text-right">
-                    <div>
-                      <p className="text-xs text-muted-text">Members</p>
-                      <p className="text-sm font-semibold text-body-text">{company.members.length}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-text">Listings</p>
-                      <p className="text-sm font-semibold text-body-text">{company.listingCount}</p>
-                    </div>
-                    <div className="hidden sm:block">
-                      <p className="text-xs text-muted-text">Since</p>
-                      <p className="text-sm text-body-text">
-                        {new Date(company.createdAt).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
-                      </p>
-                    </div>
+                  {expanded ? (
+                    <ChevronDown size={16} className="text-muted-text shrink-0" />
+                  ) : (
+                    <ChevronRight size={16} className="text-muted-text shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-body-text truncate">{company.name}</p>
+                    <p className="text-xs text-muted-text truncate">
+                      {company.businessName ?? "—"}
+                      {company.contactEmail ? ` · ${company.contactEmail}` : ""}
+                    </p>
                   </div>
                 </button>
+                <div className="flex items-center gap-6 shrink-0 text-right">
+                  <div>
+                    <p className="text-xs text-muted-text">Members</p>
+                    <p className="text-sm font-semibold text-body-text">{company.members.length}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-text">Listings</p>
+                    <p className="text-sm font-semibold text-body-text">{company.listingCount}</p>
+                  </div>
+                  <div className="hidden sm:block">
+                    <p className="text-xs text-muted-text">Since</p>
+                    <p className="text-sm text-body-text">
+                      {new Date(company.createdAt).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-text text-right mb-1">Tier</p>
+                    <SupplierTierControl company={company} />
+                  </div>
+                </div>
+              </div>
 
                 {expanded && (
                   <div className="pb-4 pl-7">

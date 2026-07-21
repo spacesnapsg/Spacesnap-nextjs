@@ -21,6 +21,7 @@ export function serializeAdminCompany(company: Company & { users: User[]; _count
     contactEmail: company.contactEmail,
     createdAt: company.createdAt.toISOString(),
     listingCount: company._count.listings,
+    supplierTier: company.supplierTier,
     members: company.users.map(serializeAdminCompanyMember),
   };
 }
