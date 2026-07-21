@@ -173,6 +173,7 @@ enum ActivityActionType {
   booking_created
   booking_confirmed
   booking_declined
+  booking_cancelled
   bulk_order_created
   bulk_order_confirmed
   bulk_order_declined
@@ -294,14 +295,21 @@ enum RewardGrantStatus {
   @@map("reward_grant_status")
 }
 
-// Merchant-of-record, direct-charge cancellation policy (2026-07-21 session) —
-// which party cancelled a booking, mirrored by two independent percent
-// tiers computed off days-before-session-start (see lib/booking-payments.ts):
-// userRefundPercent (100/50/0, how much of the Stripe charge the user gets
-// back) and supplierPenaltyPercent (0/50/100, applied against SpaceSnap's
-// commission portion of the booking — not the full booking value — when the
-// SUPPLIER is the one who cancelled). Both fields are nullable because most
-// bookings are never cancelled at all.
+// Merchant-of-record, direct-charge cancellation policy — which party
+// cancelled a booking. Whichever party did NOT cause the cancellation is made
+// whole; only the at-fault party's outcome follows the days-before-
+// session-start tier (see lib/booking-payments.ts):
+//   - Supplier-initiated (decline): userRefundPercent is always 100 (the user
+//     didn't cause this). supplierPenaltyPercent follows the day tier
+//     (0/50/100) and is applied against SpaceSnap's commission portion of the
+//     booking, not the full booking value.
+//   - User-initiated (cancel): userRefundPercent follows the day tier
+//     (100/50/0). supplierPenaltyPercent is always 0 (the supplier didn't
+//     cause this — they still get their full normal payout).
+// Both fields are nullable because most bookings are never cancelled at all.
+// Confirmed with the product owner 2026-07-21, correcting this session's
+// earlier (unconfirmed) assumption that the day tier applied to
+// userRefundPercent regardless of who cancelled — see CLAUDE1.md.
 enum BookingCancelledBy {
   user
   supplier
@@ -798,22 +806,29 @@ model TrainingSession {
 // cancellation-flow session actually sets cancelledAt/cancelledBy — not
 // written by any code yet this session (schema only).
 model Booking {
-  id                     BigInt              @id @default(autoincrement())
-  userId                 String              @map("user_id")
-  listingId              BigInt              @map("listing_id")
-  bookingType            BookingType         @map("booking_type")
-  startDate              DateTime            @map("start_date") @db.Date
-  endDate                DateTime            @map("end_date") @db.Date
-  sgdAmount              Decimal             @map("sgd_amount") @db.Decimal(10, 2)
-  earnedCreditsApplied   Decimal             @default(0) @map("earned_credits_applied") @db.Decimal(10, 2)
-  status                 BookingStatus       @default(pending)
-  cancelledAt            DateTime?           @map("cancelled_at")
-  cancelledBy            BookingCancelledBy? @map("cancelled_by")
-  cancellationReason     String?             @map("cancellation_reason")
-  userRefundPercent      Decimal?            @map("user_refund_percent") @db.Decimal(5, 2)
-  supplierPenaltyPercent Decimal?            @map("supplier_penalty_percent") @db.Decimal(5, 2)
-  createdAt              DateTime            @default(now()) @map("created_at")
-  updatedAt              DateTime            @updatedAt @map("updated_at")
+  id                        BigInt              @id @default(autoincrement())
+  userId                    String              @map("user_id")
+  listingId                 BigInt              @map("listing_id")
+  bookingType               BookingType         @map("booking_type")
+  startDate                 DateTime            @map("start_date") @db.Date
+  endDate                   DateTime            @map("end_date") @db.Date
+  sgdAmount                 Decimal             @map("sgd_amount") @db.Decimal(10, 2)
+  earnedCreditsApplied      Decimal             @default(0) @map("earned_credits_applied") @db.Decimal(10, 2)
+  // Snapshotted at booking creation (see PLATFORM_COMMISSION_PERCENT_BOOKINGS,
+  // lib/booking-payments.ts), not a live constant read at cancellation time —
+  // same "don't let a later rate change reshuffle an existing booking" design
+  // as SupplierPayable.invoicingCadence. Confirmed with the product owner
+  // 2026-07-21: flat 10% for space/equipment bookings (consumables/bulk
+  // orders use a different, separately-scoped rate).
+  platformCommissionPercent Decimal             @default(10) @map("platform_commission_percent") @db.Decimal(5, 2)
+  status                    BookingStatus       @default(pending)
+  cancelledAt               DateTime?           @map("cancelled_at")
+  cancelledBy               BookingCancelledBy? @map("cancelled_by")
+  cancellationReason        String?             @map("cancellation_reason")
+  userRefundPercent         Decimal?            @map("user_refund_percent") @db.Decimal(5, 2)
+  supplierPenaltyPercent    Decimal?            @map("supplier_penalty_percent") @db.Decimal(5, 2)
+  createdAt                 DateTime            @default(now()) @map("created_at")
+  updatedAt                 DateTime            @updatedAt @map("updated_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)

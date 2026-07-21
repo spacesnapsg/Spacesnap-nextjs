@@ -13,7 +13,12 @@ import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
 import { stripe, toStripeCents } from "@/lib/stripe";
 import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
-import { calculateUserCancellationRefund, calculateSupplierCancellationPenalty } from "@/lib/booking-payments";
+import {
+  calculateUserCancellationRefund,
+  calculateSupplierCancellationPenalty,
+  PLATFORM_COMMISSION_PERCENT_BOOKINGS,
+  invoicingCadenceForSupplierTier,
+} from "@/lib/booking-payments";
 
 export { RewardGrantNotRedeemableError };
 
@@ -309,6 +314,7 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
           endDate: new Date(params.endDate),
           sgdAmount: params.cost,
           earnedCreditsApplied: discount,
+          platformCommissionPercent: new Prisma.Decimal(PLATFORM_COMMISSION_PERCENT_BOOKINGS),
         },
       });
 
@@ -451,35 +457,33 @@ export class StripeRefundFailedError extends Error {
   }
 }
 
-// Rewritten 2026-07-21 (closing Sprint 3.5 known-gap #3 / the Sprint 6
-// follow-on of the same name) — replaces the old flat combined-ledger
-// `refund` Transaction (full sgdAmount, no real money movement, no
-// cancellation-window policy applied) with a real Stripe refund sized by
-// calculateUserCancellationRefund/calculateSupplierCancellationPenalty
-// (lib/booking-payments.ts).
+// Supplier-initiated cancellation. Corrected 2026-07-21 (product owner,
+// closing the previous version's TODO on SupplierPayable): the user did not
+// cause this, so they are always refunded in full — the cancellation-window
+// day tier no longer applies to their refund. Instead it sizes the
+// supplier's penalty against SpaceSnap's commission portion of the booking
+// (Booking.platformCommissionPercent, snapshotted at creation), and that
+// penalty now resolves into a real SupplierPayable row (companyId,
+// grossAmount = sgdAmount - commission, penaltyDeduction, netAmount,
+// invoicingCadence snapshotted from the company's current supplierTier).
+// netAmount can go negative if the penalty exceeds the gross payout — that
+// represents the supplier owing SpaceSnap back, to be recovered on their next
+// invoice; no automated collection/invoicing beyond this ledger row is built
+// here, per the still-open Sprint 6 Invoice/Receipt gap.
 //
-// Deliberately does NOT (both are separately-tracked, genuinely undecided
-// gaps, not guessed at here — see SPRINT_PLAN_NEXTJS_REWRITE.md Sprint 6
-// follow-ons):
-//   - write a SupplierPayable row — penaltyDeduction needs a real
-//     commission-rate figure, which doesn't exist anywhere in this schema
-//     yet. supplierPenaltyPercent is still recorded on the Booking so a
-//     future session can resolve it into a real payable once that figure
-//     lands.
-//   - issue a BookingCredit for any non-refunded portion — issuance policy
-//     for that model is undecided. The non-refunded portion of both the
-//     Stripe charge and the earned-credit discount simply isn't returned to
-//     the user in any form yet.
+// Still deliberately does NOT issue a BookingCredit for the (now
+// nonexistent, since the user is always refunded in full) non-refunded
+// portion — kept only as a note in case a future policy reduces the user's
+// refund below 100% again.
 //
-// Refund math: the cancellation-window percent applies uniformly to both
-// halves of what the user originally paid — the real-SGD portion actually
-// charged to Stripe (sgdAmount - earnedCreditsApplied) and the earned-credit
-// discount redeemed against a RewardGrant — so an early cancellation returns
-// both in full and a late one returns neither. The earned-credit portion is
-// reversed as a ledger-only earned_grant Transaction; the RewardGrant row
-// itself stays `redeemed` (its job was authorizing the original discount,
-// not tracking the current balance — SUM(Transaction.amount) is what the
-// balance actually reads from, per that model's own design principle).
+// Refund math: 100% of both halves of what the user originally paid — the
+// real-SGD portion actually charged to Stripe (sgdAmount - earnedCreditsApplied)
+// and the earned-credit discount redeemed against a RewardGrant. The
+// earned-credit portion is reversed as a ledger-only earned_grant
+// Transaction; the RewardGrant row itself stays `redeemed` (its job was
+// authorizing the original discount, not tracking the current balance —
+// SUM(Transaction.amount) is what the balance actually reads from, per that
+// model's own design principle).
 //
 // Known, narrow race (flagged, not engineered around): the Stripe refund
 // call happens before the status-guarded DB write, same ordering
@@ -493,7 +497,10 @@ export async function declineBookingWithRefund(
   bookingId: bigint,
   cancellationReason?: string
 ): Promise<BookingWithRelations> {
-  const existing = await prisma.booking.findUniqueOrThrow({ where: { id: bookingId } });
+  const existing = await prisma.booking.findUniqueOrThrow({
+    where: { id: bookingId },
+    include: { listing: { include: { company: true } } },
+  });
   if (existing.status !== BookingStatus.pending && existing.status !== BookingStatus.confirmed) {
     throw new BookingNotDeclinableError(existing.status);
   }
@@ -504,13 +511,19 @@ export async function declineBookingWithRefund(
   ]);
 
   const cancelledAt = new Date();
-  const userRefundPercent = new Prisma.Decimal(calculateUserCancellationRefund(existing, cancelledAt));
+  const userRefundPercent = new Prisma.Decimal(100);
   const supplierPenaltyPercent = new Prisma.Decimal(calculateSupplierCancellationPenalty(existing, cancelledAt));
 
   const chargeAmount = existing.sgdAmount.sub(existing.earnedCreditsApplied);
   const stripeRefundAmount = chargeAmount.mul(userRefundPercent).div(100).toDecimalPlaces(2);
   const earnedReversalAmount = existing.earnedCreditsApplied.mul(userRefundPercent).div(100).toDecimalPlaces(2);
   const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
+
+  const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
+  const grossAmount = existing.sgdAmount.sub(commissionAmount);
+  const penaltyDeduction = commissionAmount.mul(supplierPenaltyPercent).div(100).toDecimalPlaces(2);
+  const netAmount = grossAmount.sub(penaltyDeduction);
+  const invoicingCadence = invoicingCadenceForSupplierTier(existing.listing.company.supplierTier);
 
   if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
     try {
@@ -566,13 +579,24 @@ export async function declineBookingWithRefund(
         });
       }
 
+      await tx.supplierPayable.create({
+        data: {
+          companyId: existing.listing.companyId,
+          bookingId: updated.id,
+          grossAmount,
+          penaltyDeduction,
+          netAmount,
+          invoicingCadence,
+        },
+      });
+
       await tx.activityLog.create({
         data: {
           userId: updated.userId,
           actionType: ActivityActionType.booking_declined,
           description: `Booking #${updated.id} declined (${userRefundPercent}% refund: ${stripeRefundAmount} SGD${
             earnedReversalAmount.gt(0) ? ` + ${earnedReversalAmount} SGD in reversed reward credit` : ""
-          }).`,
+          }; supplier penalty ${supplierPenaltyPercent}% of commission: ${penaltyDeduction} SGD).`,
           relatedListingId: updated.listingId,
         },
       });
@@ -583,6 +607,147 @@ export async function declineBookingWithRefund(
     if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
       console.error(
         `declineBookingWithRefund: Stripe refund for PaymentIntent ${paymentIntentId} already succeeded, but the DB write failed afterward. Manual reconciliation required.`,
+        error
+      );
+    }
+    throw error;
+  }
+}
+
+// Thrown inside cancelBookingWithRefund when the booking isn't `pending` or
+// `confirmed` (i.e. it's already cancelled/active/completed). Distinct from
+// BookingNotDeclinableError so the two routes' error messages stay accurate
+// to which action was attempted, even though the underlying status guard is
+// identical.
+export class BookingNotCancellableError extends Error {
+  constructor(public readonly status: BookingStatus) {
+    super(`Booking is already ${status} and cannot be cancelled.`);
+  }
+}
+
+// User-initiated cancellation. The supplier did not cause this, so they are
+// never penalized — they still get their full normal payout (a
+// SupplierPayable with zero penaltyDeduction). The user's own refund follows
+// the cancellation-window day tier (calculateUserCancellationRefund),
+// confirmed with the product owner 2026-07-21 alongside the decline
+// correction above — see that function's header comment in
+// lib/booking-payments.ts for the full at-fault-party design.
+//
+// Mirrors declineBookingWithRefund's structure (Stripe refund before the
+// status-guarded DB write, same narrow race accepted, same reward-grant
+// reversal idiom) — only the refund/penalty math and cancelledBy differ.
+export async function cancelBookingWithRefund(
+  bookingId: bigint,
+  cancellationReason?: string
+): Promise<BookingWithRelations> {
+  const existing = await prisma.booking.findUniqueOrThrow({
+    where: { id: bookingId },
+    include: { listing: { include: { company: true } } },
+  });
+  if (existing.status !== BookingStatus.pending && existing.status !== BookingStatus.confirmed) {
+    throw new BookingNotCancellableError(existing.status);
+  }
+
+  const [paymentTransaction, earnedSpendTransaction] = await Promise.all([
+    prisma.transaction.findFirst({ where: { bookingId, type: TransactionType.booking_payment } }),
+    prisma.transaction.findFirst({ where: { bookingId, type: TransactionType.earned_spend } }),
+  ]);
+
+  const cancelledAt = new Date();
+  const userRefundPercent = new Prisma.Decimal(calculateUserCancellationRefund(existing, cancelledAt));
+  const supplierPenaltyPercent = new Prisma.Decimal(0);
+
+  const chargeAmount = existing.sgdAmount.sub(existing.earnedCreditsApplied);
+  const stripeRefundAmount = chargeAmount.mul(userRefundPercent).div(100).toDecimalPlaces(2);
+  const earnedReversalAmount = existing.earnedCreditsApplied.mul(userRefundPercent).div(100).toDecimalPlaces(2);
+  const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
+
+  const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
+  const grossAmount = existing.sgdAmount.sub(commissionAmount);
+  const invoicingCadence = invoicingCadenceForSupplierTier(existing.listing.company.supplierTier);
+
+  if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
+    try {
+      await stripe.refunds.create({ payment_intent: paymentIntentId, amount: toStripeCents(stripeRefundAmount) });
+    } catch (error) {
+      throw new StripeRefundFailedError(error);
+    }
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
+      if (booking.status !== BookingStatus.pending && booking.status !== BookingStatus.confirmed) {
+        throw new BookingNotCancellableError(booking.status);
+      }
+
+      const updated = await tx.booking.update({
+        where: { id: bookingId },
+        data: {
+          status: "cancelled",
+          cancelledAt,
+          cancelledBy: BookingCancelledBy.user,
+          cancellationReason: cancellationReason ?? null,
+          userRefundPercent,
+          supplierPenaltyPercent,
+        },
+        include: bookingWithRelationsArgs.include,
+      });
+
+      if (stripeRefundAmount.gt(0)) {
+        await tx.transaction.create({
+          data: {
+            userId: updated.userId,
+            bookingId: updated.id,
+            type: TransactionType.refund,
+            amount: stripeRefundAmount,
+            stripePaymentIntentId: paymentIntentId,
+            description: `Booking #${updated.id} cancelled by user — ${userRefundPercent}% cancellation-window refund of ${stripeRefundAmount} SGD issued via Stripe.`,
+          },
+        });
+      }
+
+      if (earnedReversalAmount.gt(0)) {
+        await tx.transaction.create({
+          data: {
+            userId: updated.userId,
+            bookingId: updated.id,
+            rewardGrantId: earnedSpendTransaction?.rewardGrantId ?? null,
+            type: TransactionType.earned_grant,
+            amount: earnedReversalAmount,
+            description: `Booking #${updated.id} cancelled by user — ${userRefundPercent}% reversal of the ${existing.earnedCreditsApplied} SGD reward discount applied at creation.`,
+          },
+        });
+      }
+
+      await tx.supplierPayable.create({
+        data: {
+          companyId: existing.listing.companyId,
+          bookingId: updated.id,
+          grossAmount,
+          penaltyDeduction: new Prisma.Decimal(0),
+          netAmount: grossAmount,
+          invoicingCadence,
+        },
+      });
+
+      await tx.activityLog.create({
+        data: {
+          userId: updated.userId,
+          actionType: ActivityActionType.booking_cancelled,
+          description: `Booking #${updated.id} cancelled by user (${userRefundPercent}% refund: ${stripeRefundAmount} SGD${
+            earnedReversalAmount.gt(0) ? ` + ${earnedReversalAmount} SGD in reversed reward credit` : ""
+          }; supplier paid in full, no penalty).`,
+          relatedListingId: updated.listingId,
+        },
+      });
+
+      return updated;
+    });
+  } catch (error) {
+    if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
+      console.error(
+        `cancelBookingWithRefund: Stripe refund for PaymentIntent ${paymentIntentId} already succeeded, but the DB write failed afterward. Manual reconciliation required.`,
         error
       );
     }

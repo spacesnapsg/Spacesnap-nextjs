@@ -3170,3 +3170,136 @@ supplier-tier gating logic, no changes to `purchasedBalance`/`earnedBalance`
 consumables/cert-fee logic, `createBookingWithDebit`/
 `declineBookingWithRefund` left in place (the former already correct for
 this model, the latter TODO'd, neither deleted/rewritten).
+
+## Cancellation Route + Commission-Rate Closure (2026-07-21)
+
+Closed two of the three still-open Sprint 6 follow-ons from the schema
+session above: the commission-rate figure, and the cancellation route +
+real Stripe refund execution. Both numbers (10% commission for
+space/equipment bookings; the free/preferred/top → monthly/biweekly/weekly
+invoicing-cadence mapping) were confirmed directly with the product owner
+before writing any code, per this project's "don't guess a number, ask"
+convention.
+
+### Correction to already-shipped code, not just an addition
+
+Before writing the cancellation route, the product owner walked through the
+actual mechanics with a concrete example (100-credit booking, supplier
+cancels 3 days out → 50% of the 10-credit commission = 5-credit penalty,
+deducted from the supplier's holding sum or invoiced if it can't cover it).
+That clarified something `declineBookingWithRefund` (built in the prior
+schema session) had wrong: **whichever party did NOT cause the cancellation
+is made whole — the day-based tier only ever governs the at-fault party's
+own side, never both at once.** The shipped version applied the day tier to
+the user's refund on every decline, regardless of who caused it — meaning a
+supplier declining late would have left the user with a reduced refund for
+something that wasn't their fault. Confirmed explicitly with the product
+owner before touching the shipped function (see the chat transcript this
+session started from) — this is the same "state a read, don't silently
+guess, and don't silently leave a wrong assumption in place once corrected"
+posture as the Sprint 4 tier-comparison scrap.
+
+**Corrected design, both sides now built:**
+- **Supplier-initiated (decline, rewritten):** user is always refunded
+  100% — the day tier no longer touches their refund. The day tier
+  (`calculateSupplierCancellationPenalty`, unchanged function) now sizes the
+  supplier's penalty against `Booking.platformCommissionPercent` of
+  `sgdAmount` (not the full booking value), which resolves into a real
+  `SupplierPayable` row — closing the "penaltyDeduction needs a real
+  commission-rate figure" TODO left by the prior session. `netAmount` can go
+  negative (supplier owes SpaceSnap back) if the penalty exceeds their gross
+  payout — no automated invoicing/collection beyond this ledger row is
+  built, per the still-open Sprint 6 Invoice/Receipt gap.
+- **User-initiated (cancel, new):** `cancelBookingWithRefund` (`lib/bookings.ts`),
+  `PATCH /api/bookings/[id]/cancel`. The day tier
+  (`calculateUserCancellationRefund`, unchanged function) sizes the user's
+  own refund, same as originally designed. The supplier is never penalized —
+  `SupplierPayable.penaltyDeduction` is always 0, full normal payout,
+  because the cancellation wasn't their doing.
+
+Both functions otherwise mirror each other's structure exactly (Stripe
+refund before the status-guarded DB write, same narrow race accepted, same
+earned-credit-reversal-as-ledger-only-`earned_grant` idiom, same
+`SupplierPayable` write) — only the refund/penalty math, `cancelledBy`, and
+which party's ownership gets checked at the route layer differ. The route
+layer follows the existing decline route's own pattern: ownership is
+checked in the route (booking's `userId` vs. the session), not the lib
+function — same split the supplier decline route already used for
+company-ownership.
+
+### Schema
+
+Migration `20260721071416_booking_cancellation_commission_and_cancel_activity`:
+`Booking.platformCommissionPercent` (Decimal 5,2, default 10.00 — the
+default matters here since existing seeded/dev bookings backfill to the
+confirmed 10% rather than needing a data migration), and
+`ActivityActionType.booking_cancelled` (distinct from `booking_declined`,
+matching this schema's existing "one value per hooked action" convention).
+Applied to both `spacesnap_dev` and `spacesnap_nextjs_test`.
+
+`lib/booking-payments.ts` gained `PLATFORM_COMMISSION_PERCENT_BOOKINGS`
+(the confirmed flat 10%, snapshotted onto `Booking.platformCommissionPercent`
+at creation in `createBookingWithDebit` rather than read live at
+cancellation time — same "don't let a later rate change reshuffle an
+existing booking" principle `SupplierPayable.invoicingCadence` already
+established) and `invoicingCadenceForSupplierTier` (the confirmed
+free/preferred/top → monthly/biweekly/weekly mapping, snapshotted onto
+`SupplierPayable.invoicingCadence` at the moment each payable is created).
+The file's header comment was rewritten to describe the corrected
+at-fault-party design instead of the original (now-resolved) "not confirmed
+with the product owner" flag.
+
+### Tests
+
+`lib/bookings.test.ts`: the existing day-tier decline tests were rewritten
+(they previously asserted a tiered user refund on decline, which is now
+wrong) to assert 100%-user-refund-always plus the correct `SupplierPayable`
+math (gross/penalty/net) at each of the three day tiers, plus a test
+confirming an earned-credit discount is reversed in full on decline
+regardless of timing. A new parallel describe block covers
+`cancelBookingWithRefund` at all three day tiers, the earned-credit
+proportional reversal, double-cancel rejection, and already-cancelled
+rejection — mirroring the existing decline test structure. Full suite: 219
+tests, all passing (`npm test` against the isolated `spacesnap_nextjs_test`
+DB). `npx tsc --noEmit`, `npx eslint .` (same two pre-existing findings as
+every prior session, neither touched here), and `npx next build` all clean.
+
+### Verified live, not just unit-tested
+
+Real cookie-jar logins against the dev server/DB (`ethan@example.com`,
+`divya@toolshare.sg` — ToolShare SG supplier, `farah@example.com`), listing
+165 (Power Drill Set, no cert requirement, priceDay 25.00, ToolShare SG =
+`free` supplierTier):
+- **Cancel, ≥7 days out** (booking 160): `PATCH /api/bookings/160/cancel` as
+  `ethan` → `200`, `cancelled_by='user'`, `user_refund_percent=100`,
+  `supplier_penalty_percent=0`; one `refund` Transaction for the full
+  25 SGD; `supplier_payables` row: gross 22.50 (25 − 10% commission),
+  penalty 0, net 22.50, `invoicing_cadence='monthly'`.
+- **Decline, 3-6 days out** (booking 161): `PATCH
+  /api/supplier/bookings/161/decline` as `divya` → `200`,
+  `cancelled_by='supplier'`, `user_refund_percent=100` (not tiered — the
+  correction in effect), `supplier_penalty_percent=50`; refund Transaction
+  for the full 25 SGD; `supplier_payables` row: gross 22.50, penalty 1.25
+  (50% of the 2.50 commission), net 21.25.
+- **Guards**: `farah` (not the booking's owner) attempting to cancel
+  ethan's booking → `403`; re-cancelling an already-cancelled booking →
+  `422 {"message":"Booking is already cancelled and cannot be cancelled."}`;
+  unauthenticated cancel attempt → `401`.
+- All test bookings (160, 161) and their Transaction/SupplierPayable rows
+  deleted afterward; dev DB confirmed back to its seeded state (both
+  counts `0`).
+
+**Note:** the dev server needed a restart mid-session — `npx prisma
+generate` regenerates the client files on disk, but the already-running
+Next dev process had the old client module cached in memory and threw
+`PrismaClientValidationError: Unknown argument platformCommissionPercent`
+on the first live booking-create attempt until restarted. Not a code bug,
+just a dev-server-lifecycle gotcha worth remembering for the next schema
+change made mid-session.
+
+**Not touched, per this session's actual scope:** the `BookingCredit`
+issuance policy (still undecided — see Sprint 6's own open item), any
+UI (`BookingModal.tsx`, a "Cancel Booking" button — Sprint 4.75 flagged
+this as unblocked by this route, but this session was scoped to the backend
+route + refund only), the Stripe Elements real-card-entry item (next up,
+per the product owner's own sequencing this session).
