@@ -69,7 +69,7 @@ function ListingCard({
           <div className="grid grid-cols-2 gap-2 text-sm border-t border-border/40 pt-3 mt-1">
             <div>
               <p className="text-muted-text text-xs">Per unit</p>
-              <p className="text-body-text font-medium">{listing.pricePerUnit} cr</p>
+              <p className="text-body-text font-medium">{listing.pricePerUnit} credits</p>
             </div>
             <div>
               <p className="text-muted-text text-xs">Stock</p>
@@ -80,15 +80,15 @@ function ListingCard({
           <div className="grid grid-cols-3 gap-2 text-sm border-t border-border/40 pt-3 mt-1">
             <div>
               <p className="text-muted-text text-xs">Day</p>
-              <p className="text-body-text font-medium">{listing.priceDay} cr</p>
+              <p className="text-body-text font-medium">{listing.priceDay} credits</p>
             </div>
             <div>
               <p className="text-muted-text text-xs">Week</p>
-              <p className="text-body-text font-medium">{listing.priceWeek} cr</p>
+              <p className="text-body-text font-medium">{listing.priceWeek} credits</p>
             </div>
             <div>
               <p className="text-muted-text text-xs">Month</p>
-              <p className="text-body-text font-medium">{listing.priceMonth} cr</p>
+              <p className="text-body-text font-medium">{listing.priceMonth} credits</p>
             </div>
           </div>
         )}

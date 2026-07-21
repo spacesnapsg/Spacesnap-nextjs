@@ -159,7 +159,7 @@ function BookingRow({
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
-        <p className="text-supplier-purple-end font-bold whitespace-nowrap">{booking.sgdAmount} cr</p>
+        <p className="text-supplier-purple-end font-bold whitespace-nowrap">{booking.sgdAmount} credits</p>
         <StatusBadge status={booking.status} styles={BOOKING_STATUS_STYLES[booking.status]} />
         {booking.status === "pending" && (
           <div className="flex items-center gap-2">
@@ -227,7 +227,7 @@ function BulkOrderRow({
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
-        <p className="text-supplier-purple-end font-bold whitespace-nowrap">{request.credits} cr</p>
+        <p className="text-supplier-purple-end font-bold whitespace-nowrap">{request.credits} credits</p>
         {hasCancellationRequest && (
           <button
             type="button"

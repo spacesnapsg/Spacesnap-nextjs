@@ -47,7 +47,7 @@ export default function AdminFinancialsPage() {
                     <tr key={row.companyId} className="border-b border-border/60 last:border-0">
                       <td className="py-3 px-6 text-sm text-body-text whitespace-nowrap">{row.companyName}</td>
                       <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">
-                        {row.revenue} cr
+                        {row.revenue} credits
                       </td>
                     </tr>
                   ))}
@@ -94,7 +94,7 @@ export default function AdminFinancialsPage() {
                         <td className="py-3 px-6 text-sm text-right whitespace-nowrap">
                           <span className={Number(row.amount) < 0 ? "text-error-red" : "text-success-green"}>
                             {Number(row.amount) >= 0 ? "+" : ""}
-                            {row.amount} cr
+                            {row.amount} credits
                           </span>
                         </td>
                       </tr>

@@ -84,7 +84,7 @@ export default function SupplierAnalyticsPage() {
                 <XAxis dataKey="label" stroke="#9ca3af" fontSize={12} />
                 <YAxis stroke="#9ca3af" fontSize={12} />
                 <Tooltip
-                  formatter={(value) => [`${value} cr`, "Revenue"]}
+                  formatter={(value) => [`${value} credits`, "Revenue"]}
                   contentStyle={{
                     backgroundColor: "#151a23",
                     border: "1px solid #1f2937",
@@ -125,7 +125,7 @@ export default function SupplierAnalyticsPage() {
                     <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.userName}</td>
                     <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.listingName}</td>
                     <td className="py-3 pr-4 text-muted-text capitalize whitespace-nowrap">{booking.bookingType}</td>
-                    <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.sgdAmount} cr</td>
+                    <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.sgdAmount} credits</td>
                     <td className="py-3 pr-4 whitespace-nowrap">
                       <span
                         className={`inline-block rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${STATUS_STYLES[booking.status]}`}

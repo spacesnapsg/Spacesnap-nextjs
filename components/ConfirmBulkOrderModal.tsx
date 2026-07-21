@@ -84,8 +84,8 @@ export default function ConfirmBulkOrderModal({
             <div className="flex items-start gap-2">
               <AlertTriangle size={18} className="text-amber shrink-0 mt-0.5" />
               <p className="text-sm text-amber">
-                {requestName ? requestName : "This requester"} only has {creditWarning.available} cr available right
-                now, but this order costs {creditWarning.required} cr. Confirming anyway holds the order at
+                {requestName ? requestName : "This requester"} only has {creditWarning.available} credits available right
+                now, but this order costs {creditWarning.required} credits. Confirming anyway holds the order at
                 fulfillment risk — the debit only happens once you fulfill it.
               </p>
             </div>

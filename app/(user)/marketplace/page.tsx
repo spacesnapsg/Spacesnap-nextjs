@@ -236,21 +236,21 @@ function ListingBody({
       {listing.type === "consumables" ? (
         <div className="border-t border-border/40 pt-3 mt-1">
           <p className="text-muted-text text-xs">Price</p>
-          <p className="text-body-text font-medium">{listing.pricePerUnit} cr / unit</p>
+          <p className="text-body-text font-medium">{listing.pricePerUnit} credits / unit</p>
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-2 text-sm border-t border-border/40 pt-3 mt-1">
           <div>
             <p className="text-muted-text text-xs">Day</p>
-            <p className="text-body-text font-medium">{listing.priceDay} cr</p>
+            <p className="text-body-text font-medium">{listing.priceDay} credits</p>
           </div>
           <div>
             <p className="text-muted-text text-xs">Week</p>
-            <p className="text-body-text font-medium">{listing.priceWeek} cr</p>
+            <p className="text-body-text font-medium">{listing.priceWeek} credits</p>
           </div>
           <div>
             <p className="text-muted-text text-xs">Month</p>
-            <p className="text-body-text font-medium">{listing.priceMonth} cr</p>
+            <p className="text-body-text font-medium">{listing.priceMonth} credits</p>
           </div>
         </div>
       )}
@@ -374,8 +374,8 @@ function MapView({
               >
                 <MapPin size={12} />
                 {listing.type === "consumables"
-                  ? `${listing.pricePerUnit} cr/unit`
-                  : `${listing.priceDay} cr/day`}
+                  ? `${listing.pricePerUnit} credits/unit`
+                  : `${listing.priceDay} credits/day`}
               </span>
               <span
                 className={`h-2 w-2 rotate-45 -mt-1 ${
@@ -412,21 +412,21 @@ function MapView({
             {activeListing.type === "consumables" ? (
               <div className="border-t border-border/40 pt-3">
                 <p className="text-muted-text text-xs">Price</p>
-                <p className="text-body-text font-medium">{activeListing.pricePerUnit} cr / unit</p>
+                <p className="text-body-text font-medium">{activeListing.pricePerUnit} credits / unit</p>
               </div>
             ) : (
               <div className="grid grid-cols-3 gap-2 text-sm border-t border-border/40 pt-3">
                 <div>
                   <p className="text-muted-text text-xs">Day</p>
-                  <p className="text-body-text font-medium">{activeListing.priceDay} cr</p>
+                  <p className="text-body-text font-medium">{activeListing.priceDay} credits</p>
                 </div>
                 <div>
                   <p className="text-muted-text text-xs">Week</p>
-                  <p className="text-body-text font-medium">{activeListing.priceWeek} cr</p>
+                  <p className="text-body-text font-medium">{activeListing.priceWeek} credits</p>
                 </div>
                 <div>
                   <p className="text-muted-text text-xs">Month</p>
-                  <p className="text-body-text font-medium">{activeListing.priceMonth} cr</p>
+                  <p className="text-body-text font-medium">{activeListing.priceMonth} credits</p>
                 </div>
               </div>
             )}

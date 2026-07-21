@@ -171,7 +171,7 @@ export default function AdminOverviewPage() {
         />
         <StatCard
           label="Platform Revenue"
-          value={financials ? `${financials.summary.totalRevenue} cr` : "…"}
+          value={financials ? `${financials.summary.totalRevenue} credits` : "…"}
           icon={DollarSign}
         />
       </div>

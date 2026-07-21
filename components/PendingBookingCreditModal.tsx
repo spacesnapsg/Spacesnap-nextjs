@@ -139,7 +139,7 @@ export default function PendingBookingCreditModal() {
                       </div>
                     )}
                   </div>
-                  <p className="shrink-0 text-sm text-body-text font-medium">{listing.priceDay} cr/day</p>
+                  <p className="shrink-0 text-sm text-body-text font-medium">{listing.priceDay} credits/day</p>
                 </button>
               ))}
               {bookableListings.length === 0 && (
