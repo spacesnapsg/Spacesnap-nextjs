@@ -218,6 +218,55 @@ Found via a linkage audit (2026-07-19): every page still reads from `lib/mock*.t
 
 ---
 
+## Sprint 4.75: UI Findings From the Money-Flow Rewiring (2026-07-21)
+
+Surfaced while auditing the Sprint 3.5/6 write-path changes (purchased/earned
+split, Stripe direct-charge bookings, cancellation-model schema) against the
+actual frontend — a mix of one real stale-copy bug and several UI gaps that
+are net-new features with no backend to wire to yet. Listed together here so
+they aren't lost across the Sprint 4.5/6/6.5 boundaries they each individually
+belong to.
+
+- [x] **Stale copy, fixable now, no backend dependency:** closed 2026-07-21 —
+  [`app/(supplier)/supplier-profile/page.tsx`](<app/(supplier)/supplier-profile/page.tsx>)'s
+  "No rating system built yet" replaced with a real weighted average across
+  the supplier's own listings (or "No ratings yet" when none exist). Found a
+  real bug underneath the stale copy while wiring it: `GET
+  /api/supplier/listings` never passed a `ratingAggregate` to
+  `serializeListing` at all (unlike the public `/api/listings` routes), so
+  every supplier-facing listing always serialized `averageRating: null` —
+  fixed by wiring `getListingRatingAggregates` into that route the same way
+  the public routes already do it. Verified live (`ben@acmecoworking.sg`,
+  real cookie-jar login): card now reads "No ratings yet" against the seeded
+  dev DB, which has no ratings yet — not just eyeballed from the code.
+- [ ] **Stripe Elements real card-entry UI — buildable now, not blocked.**
+  `BookingModal.tsx` sends a hardcoded `pm_card_visa` test token
+  (`TODO(stripe-elements-checkout)` at line 198) instead of collecting a real
+  card. The server-side charge path is already live and tested
+  (`createBookingWithDebit`), so this is a frontend-only build, not waiting on
+  any new route.
+- [ ] **Cancel Booking UI — blocked on the cancellation route (Sprint 6).**
+  No "Cancel Booking" control exists anywhere in the app (confirmed by
+  repo-wide search) despite `Booking.cancelledAt`/`cancelledBy`/
+  `cancellationReason`/`userRefundPercent` already existing in the schema.
+  Do not build this until the Sprint 6 cancellation route + real Stripe
+  refund execution item is done — there's nothing for a cancel button to call
+  yet.
+- [ ] **`Company.supplierTier` admin UI — blocked on the admin route
+  (Sprint 6).** No admin page/component references `supplierTier` at all
+  (confirmed by repo-wide search); it's currently DB-only. Do not build until
+  `PATCH /api/admin/companies/[id]/supplier-tier` (or equivalent) exists.
+- [ ] **`BookingCredit` redemption UI ("cancelled — here are alternatives,
+  rebook") — blocked on issuance (Sprint 6).** No component references
+  `BookingCredit` anywhere. Needs the issuance write-path built first.
+- [ ] **Rewards/tier UI (Free/Starter/Growth/Power) — blocked on Sprint 6.5.**
+  No mock or real UI exists for this anywhere in the repo. Do not design this
+  screen until the tier thresholds/spend-window/referral-bonus numbers in
+  Sprint 6.5 are confirmed with the product owner — there's nothing concrete
+  to lay out yet.
+
+---
+
 ## Sprint 5: Kiosk/Middleware API
 
 - [ ] Separate API surface for kiosk hardware auth
@@ -233,8 +282,18 @@ Found via a linkage audit (2026-07-19): every page still reads from `lib/mock*.t
 **Amended 2026-07-20 (purchased/earned balance split — see Sprint 2 amendment above):** a real-time Stripe charge per booking is the primary payment path in this product, not an optional add-on to a wallet. Every booking is charged full price in SGD via a Stripe payment intent for `Booking.sgdAmount` at creation time; no wallet balance is ever deducted to pay for a booking. `earnedBalance` may only reduce that charge as a discount line (`Booking.earnedCreditsApplied`, recorded as an `earned_spend` Transaction) — it never replaces the Stripe charge outright. `purchasedBalance` (wallet top-ups) is not a booking payment method at all; it only pays for SpaceSnap's own goods/services (consumables, certification fees, future gig-posting fees) — this is the regulatory boundary the whole split exists to enforce, so no future feature should route `purchasedBalance` into a booking, whatever wallet UI Sprint 7 or later ends up presenting.
 
 - [ ] Stripe integration: booking payment intents (`Booking.sgdAmount`, real-time SGD charge per booking) are the core of this sprint, not user-to-supplier wallet payments — see the amendment note above. Platform fee / operator payout mechanics still apply on top of the per-booking charge, scope TBD when this sprint starts. **Correction, 2026-07-21:** the direct-charge PaymentIntent path itself is no longer "not yet built" — `createBookingWithDebit` (`lib/bookings.ts`) already charges Stripe directly per booking (see CLAUDE1.md "Write-Path Session — Stripe Booking Charges..."). Leaving this line unchecked because the rest of this item (webhooks, decline→refund, platform-fee/payout mechanics) is still open, not because the charge-on-create piece is undone.
+
+**Re-audited 2026-07-21 (closing a standing "confirm this is merchant-of-record, not Connect" item carried in an out-of-repo status note):** re-checked `lib/bookings.ts:280-294` directly — `stripe.paymentIntents.create()` with no `transfer_data`, `application_fee_amount`, or connected-account (`stripeAccount`) parameters anywhere in `lib/bookings.ts`/`lib/stripe.ts`. This is a plain charge into SpaceSnap's own Stripe balance, genuinely merchant-of-record, not a Connect split. Already committed (`1a7ff5d`, `53e78f6`) — nothing was uncommitted. No code changes were needed; this line stays unchecked only for the still-open webhook/decline-refund/payout-mechanics items below.
 - [ ] ⚠️ Developer review required before going live — financial/compliance risk, same flag as the original plan
-- [ ] **Cancellation-window policy + supplier payouts, schema only (2026-07-21)** — `Booking` gained `cancelledAt`/`cancelledBy`/`cancellationReason`/`userRefundPercent`/`supplierPenaltyPercent`; new `BookingCredit` (bounded, per-booking credit note — not a wallet top-up) and `SupplierPayable` (what SpaceSnap owes a supplier per booking under the merchant-of-record model) models; `Company.supplierTier` (free/preferred/top, admin-settable only, no auto-gating logic). Pure calculators `calculateUserCancellationRefund`/`calculateSupplierCancellationPenalty` (`lib/booking-payments.ts`) resolve the day-based percent tiers. **The exact cancellation-window day thresholds (7/3/0) and their refund/penalty percentages (100/50/0) are this session's own assumption, inferred from the task brief's boundary-day test cases — not confirmed with the product owner.** Confirm before wiring this into a real cancellation route. See CLAUDE1.md "Schema + Core Lib — Merchant-of-Record Cancellation Model" for the full write-up, including what was already partially built before this session started.
+- [x] **Cancellation-window policy + supplier payouts, schema only (2026-07-21)** — `Booking` gained `cancelledAt`/`cancelledBy`/`cancellationReason`/`userRefundPercent`/`supplierPenaltyPercent`; new `BookingCredit` (bounded, per-booking credit note — not a wallet top-up) and `SupplierPayable` (what SpaceSnap owes a supplier per booking under the merchant-of-record model) models; `Company.supplierTier` (free/preferred/top, admin-settable only, no auto-gating logic). Pure calculators `calculateUserCancellationRefund`/`calculateSupplierCancellationPenalty` (`lib/booking-payments.ts`) resolve the day-based percent tiers. **The exact cancellation-window day thresholds (7/3/0) and their refund/penalty percentages (100/50/0) are this session's own assumption, inferred from the task brief's boundary-day test cases — not confirmed with the product owner.** Confirm before wiring this into a real cancellation route. See CLAUDE1.md "Schema + Core Lib — Merchant-of-Record Cancellation Model" for the full write-up, including what was already partially built before this session started.
+
+  **Follow-on items, not yet done (broken out 2026-07-21 so each is separately trackable instead of buried in one paragraph):**
+  - [ ] **Commission-rate field — blocking gap.** `calculateSupplierCancellationPenalty` returns a percent *of SpaceSnap's commission*, but no commission-rate figure exists anywhere in the schema (grepped `prisma/schema.prisma` — only a comment referencing "commission portion," no column; the 10%/7% figures only exist in the investor deck). Needed on `Listing` or `Booking` at creation time before `SupplierPayable.penaltyDeduction` can resolve to a real dollar amount.
+  - [ ] **`Company.supplierTier` admin route — contradiction, not forgotten.** The cancellation-model brief said to "stub the admin route with a TODO," while the same brief's exclusions said "no routes this session" — resolved by building neither route nor stub, see that session's write-up. `supplierTier` is currently DB-only, no admin UI/route exists. Needs `PATCH /api/admin/companies/[id]/supplier-tier` (or similar) as its own small session.
+  - [ ] **Cancellation route + real Stripe refund execution.** `calculateUserCancellationRefund`/`calculateSupplierCancellationPenalty` are pure functions only — nothing calls them yet. No endpoint exists to cancel a booking, and no code path issues an actual Stripe refund (calculating the refund percent ≠ crediting the user's card).
+  - [ ] **`BookingCredit` issuance.** Model exists, nothing writes to it — the "cancelled, here are alternatives, rebook" credit-note flow (both the backend issuance and the UI) is unbuilt.
+  - [x] **`declineBookingWithRefund` real rewrite** — closed 2026-07-21. Replaced the flat combined-ledger `refund` Transaction with a real `stripe.refunds.create` against the original PaymentIntent, sized by `calculateUserCancellationRefund`/`calculateSupplierCancellationPenalty` (the cancellation-window percent tiers from the schema session above), plus a proportional `earned_grant` reversal of any `earnedCreditsApplied` discount (ledger-only — the `RewardGrant` row stays `redeemed`, since its job was authorizing the original discount, not tracking the live balance). `cancelledAt`/`cancelledBy`/`cancellationReason`/`userRefundPercent`/`supplierPenaltyPercent` are now written on the `Booking` row. Deliberately still does **not** write a `SupplierPayable` (blocked on the commission-rate gap below) or issue a `BookingCredit` (issuance policy still undecided) — both flagged in the function's own header comment, not guessed at. 4 new tests added to `lib/bookings.test.ts` (100%/50%/0% refund tiers, proportional earned-credit reversal) alongside the 4 existing decline tests, all passing against the real dev DB + Stripe test-mode sandbox (`npm test`: 213/213). `npx tsc --noEmit`, `eslint`, and `next build` all clean.
+  - [ ] Which `InvoicingCadence` each `SupplierTier` maps to — undecided, not guessed at.
 
 **Checklist before moving to Sprint 7:**
 - [ ] Stripe webhook tested in sandbox for all states: success, failure, refund
@@ -242,8 +301,41 @@ Found via a linkage audit (2026-07-19): every page still reads from `lib/mock*.t
 
 ---
 
+## Sprint 6.5: Rewards/Tier System (Free/Starter/Growth/Power) — Not Started
+
+New user-facing scope, added 2026-07-21. Discussion-stage only — no schema, no
+`lib/` functions, no admin toggles exist yet. Distinct from the already-
+scrapped equipment-certification "tier" concept (`lib/tiers.ts`, deleted in
+Sprint 4 Item 2 — see that section's writeup above): this is a *user reward*
+tier (Free/Starter/Growth/Power), unrelated to how a certificate was earned.
+Also distinct from `Company.supplierTier` (Sprint 6, supplier-side payment
+tiers) — two separate tier concepts in this product, don't conflate them.
+
+- [ ] Define the reward-tier model: what each tier unlocks, and how a user
+  moves between tiers
+- [ ] `RewardGrant` (Sprint 6) is the redemption mechanic already built —
+  this sprint would be the issuance/progression layer that decides *when*
+  a grant gets created, not a replacement for it
+
+**Numbers TBC (blocking real implementation, not just polish):**
+- [ ] User reward-tier thresholds (bookings + spend per tier)
+- [ ] Rolling window length for cumulative spend
+- [ ] Referral flat bonus amount + qualifying booking value threshold (two
+  distinct numbers)
+
+Do not start building this until the thresholds above are confirmed with the
+product owner — same "numbers TBC, don't invent" posture as the commission-
+rate and supplier-tier gaps in Sprint 6.
+
+---
+
 ## Sprint 7: Dashboard, Polish, and Full Re-Verification
 
+- [ ] **"Credits" (cr) labeling on booking prices — Terms of Service clarification needed, not a UI bug.** `BookingModal.tsx`, the marketplace listing cards/detail panel, and the supplier inventory page all display `priceDay`/`priceWeek`/`priceMonth` with a "cr" suffix even though, since the 2026-07-21 write-path session, a booking is charged real-time SGD via Stripe and never touches any credit balance (confirmed against `lib/bookings.ts` — `Booking.sgdAmount` is set directly from these fields). **Decision (2026-07-21): keep the "cr" display as-is, do not relabel to SGD** — "Credits" at checkout is being kept purely as a cosmetic display unit, fixed at 1 credit = S$1, solely to present the SGD price of a booking. Instead, add a Terms of Service section making this explicit before Sprint 7 closes:
+
+  > "Credits" displayed at checkout are a cosmetic unit of display, fixed at 1 credit = S$1, used solely to present the Singapore Dollar price of a booking. Credits are not a stored value, wallet balance, prepaid instrument, or currency; they cannot be purchased, held, transferred, or redeemed independently of the specific transaction in which they are shown, and confer no rights beyond that transaction.
+
+  This is deliberately scoped to the booking-checkout "cr" label only — it does not apply to `pricePerUnit` (consumables), which stays genuinely `purchasedBalance`-funded and unaffected. Whatever ToS document/page this rewrite ends up shipping needs this as its own section.
 - [ ] Supplier dashboard: manage spaces, view bookings, access logs
 - [ ] Notifications: booking confirmations, credential expiry alerts, access events
 - [ ] Final responsive/polish pass

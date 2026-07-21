@@ -9,6 +9,7 @@ import {
   resolvePricing,
   serializeListing,
 } from "@/lib/listings";
+import { getListingRatingAggregates } from "@/lib/ratings";
 
 // Company-scoped listing management. Mirrors old SupplierListingController.
 export async function GET() {
@@ -21,7 +22,11 @@ export async function GET() {
     orderBy: { id: "asc" },
   });
 
-  return NextResponse.json({ listings: listings.map((listing) => serializeListing(listing)) });
+  const ratingAggregates = await getListingRatingAggregates(listings.map((l) => l.id));
+
+  return NextResponse.json({
+    listings: listings.map((listing) => serializeListing(listing, ratingAggregates.get(listing.id.toString()))),
+  });
 }
 
 export async function POST(request: NextRequest) {

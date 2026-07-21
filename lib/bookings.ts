@@ -1,6 +1,7 @@
 import {
   BookingType,
   BookingStatus,
+  BookingCancelledBy,
   TransactionType,
   ActivityActionType,
   RewardGrantType,
@@ -12,6 +13,7 @@ import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
 import { stripe, toStripeCents } from "@/lib/stripe";
 import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
+import { calculateUserCancellationRefund, calculateSupplierCancellationPenalty } from "@/lib/booking-payments";
 
 export { RewardGrantNotRedeemableError };
 
@@ -441,65 +443,149 @@ export class BookingNotDeclinableError extends Error {
   }
 }
 
-// Sprint 3.5 known-gap #3: decline needs to refund the credits debited at
-// booking creation — a real gap, not a design decision like confirm's above.
-// Per CLAUDE1.md's read of the old build (SupplierBookingController::decline),
-// the old code summed the booking's existing debit Transactions and refunded
-// that. This design instead reads the amount straight off the Booking row's
-// stored `sgdAmount` field (set once, at creation, in createBookingWithDebit,
-// renamed from `credits` in the 2026-07-20 purchased/earned balance split)
-// rather than recomputing from the listing's current price — pricing can
-// change after a booking exists, but the amount actually debited can't.
-//
-// TODO(2026-07-21 schema session): this function still writes a combined-
-// ledger `type: refund` Transaction for the full sgdAmount — it never issues
-// a real Stripe refund against the PaymentIntent createBookingWithDebit
-// charged (see that function's own header comment on the Stripe flow), and
-// it doesn't apply the cancellation-window policy at all (full refund
-// regardless of when the decline happens). A future session needs to
-// replace this with a real cancellation flow that: resolves
-// userRefundPercent/supplierPenaltyPercent via
+// Thrown when the Stripe refund call itself fails. Mirrors
+// StripeChargeFailedError's pattern above for the inverse operation.
+export class StripeRefundFailedError extends Error {
+  constructor(public readonly cause: unknown) {
+    super("Refund could not be processed.");
+  }
+}
+
+// Rewritten 2026-07-21 (closing Sprint 3.5 known-gap #3 / the Sprint 6
+// follow-on of the same name) — replaces the old flat combined-ledger
+// `refund` Transaction (full sgdAmount, no real money movement, no
+// cancellation-window policy applied) with a real Stripe refund sized by
 // calculateUserCancellationRefund/calculateSupplierCancellationPenalty
-// (lib/booking-payments.ts, added this session), issues a real
-// stripe.refunds.create for the refunded portion (or a BookingCredit row for
-// any non-refunded portion the policy doesn't return to the original
-// payment method — schema added this session, no issuance logic yet), and
-// writes a SupplierPayable row reflecting any supplier-cancellation penalty.
-// Not rewritten here per the standing rule never to delete/replace a
-// component before its replacement exists — this session is schema + pure
-// functions only, no Stripe calls, no route changes.
-export async function declineBookingWithRefund(bookingId: bigint): Promise<BookingWithRelations> {
-  return prisma.$transaction(async (tx) => {
-    const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
-    if (booking.status !== BookingStatus.pending && booking.status !== BookingStatus.confirmed) {
-      throw new BookingNotDeclinableError(booking.status);
+// (lib/booking-payments.ts).
+//
+// Deliberately does NOT (both are separately-tracked, genuinely undecided
+// gaps, not guessed at here — see SPRINT_PLAN_NEXTJS_REWRITE.md Sprint 6
+// follow-ons):
+//   - write a SupplierPayable row — penaltyDeduction needs a real
+//     commission-rate figure, which doesn't exist anywhere in this schema
+//     yet. supplierPenaltyPercent is still recorded on the Booking so a
+//     future session can resolve it into a real payable once that figure
+//     lands.
+//   - issue a BookingCredit for any non-refunded portion — issuance policy
+//     for that model is undecided. The non-refunded portion of both the
+//     Stripe charge and the earned-credit discount simply isn't returned to
+//     the user in any form yet.
+//
+// Refund math: the cancellation-window percent applies uniformly to both
+// halves of what the user originally paid — the real-SGD portion actually
+// charged to Stripe (sgdAmount - earnedCreditsApplied) and the earned-credit
+// discount redeemed against a RewardGrant — so an early cancellation returns
+// both in full and a late one returns neither. The earned-credit portion is
+// reversed as a ledger-only earned_grant Transaction; the RewardGrant row
+// itself stays `redeemed` (its job was authorizing the original discount,
+// not tracking the current balance — SUM(Transaction.amount) is what the
+// balance actually reads from, per that model's own design principle).
+//
+// Known, narrow race (flagged, not engineered around): the Stripe refund
+// call happens before the status-guarded DB write, same ordering
+// createBookingWithDebit uses for its charge. Two concurrent decline
+// requests for the same booking could both pass the pre-check and both fire
+// a Stripe refund before either commits — the DB write's own re-check
+// (below) prevents a double status transition/double ledger entry, but
+// can't un-fire an already-issued Stripe refund. Same risk class this
+// codebase already accepts for confirmBookingWithAudit's stale-read window.
+export async function declineBookingWithRefund(
+  bookingId: bigint,
+  cancellationReason?: string
+): Promise<BookingWithRelations> {
+  const existing = await prisma.booking.findUniqueOrThrow({ where: { id: bookingId } });
+  if (existing.status !== BookingStatus.pending && existing.status !== BookingStatus.confirmed) {
+    throw new BookingNotDeclinableError(existing.status);
+  }
+
+  const [paymentTransaction, earnedSpendTransaction] = await Promise.all([
+    prisma.transaction.findFirst({ where: { bookingId, type: TransactionType.booking_payment } }),
+    prisma.transaction.findFirst({ where: { bookingId, type: TransactionType.earned_spend } }),
+  ]);
+
+  const cancelledAt = new Date();
+  const userRefundPercent = new Prisma.Decimal(calculateUserCancellationRefund(existing, cancelledAt));
+  const supplierPenaltyPercent = new Prisma.Decimal(calculateSupplierCancellationPenalty(existing, cancelledAt));
+
+  const chargeAmount = existing.sgdAmount.sub(existing.earnedCreditsApplied);
+  const stripeRefundAmount = chargeAmount.mul(userRefundPercent).div(100).toDecimalPlaces(2);
+  const earnedReversalAmount = existing.earnedCreditsApplied.mul(userRefundPercent).div(100).toDecimalPlaces(2);
+  const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
+
+  if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
+    try {
+      await stripe.refunds.create({ payment_intent: paymentIntentId, amount: toStripeCents(stripeRefundAmount) });
+    } catch (error) {
+      throw new StripeRefundFailedError(error);
     }
+  }
 
-    const updated = await tx.booking.update({
-      where: { id: bookingId },
-      data: { status: "cancelled" },
-      include: bookingWithRelationsArgs.include,
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
+      if (booking.status !== BookingStatus.pending && booking.status !== BookingStatus.confirmed) {
+        throw new BookingNotDeclinableError(booking.status);
+      }
+
+      const updated = await tx.booking.update({
+        where: { id: bookingId },
+        data: {
+          status: "cancelled",
+          cancelledAt,
+          cancelledBy: BookingCancelledBy.supplier,
+          cancellationReason: cancellationReason ?? null,
+          userRefundPercent,
+          supplierPenaltyPercent,
+        },
+        include: bookingWithRelationsArgs.include,
+      });
+
+      if (stripeRefundAmount.gt(0)) {
+        await tx.transaction.create({
+          data: {
+            userId: updated.userId,
+            bookingId: updated.id,
+            type: TransactionType.refund,
+            amount: stripeRefundAmount,
+            stripePaymentIntentId: paymentIntentId,
+            description: `Booking #${updated.id} declined — ${userRefundPercent}% cancellation-window refund of ${stripeRefundAmount} SGD issued via Stripe.`,
+          },
+        });
+      }
+
+      if (earnedReversalAmount.gt(0)) {
+        await tx.transaction.create({
+          data: {
+            userId: updated.userId,
+            bookingId: updated.id,
+            rewardGrantId: earnedSpendTransaction?.rewardGrantId ?? null,
+            type: TransactionType.earned_grant,
+            amount: earnedReversalAmount,
+            description: `Booking #${updated.id} declined — ${userRefundPercent}% reversal of the ${existing.earnedCreditsApplied} SGD reward discount applied at creation.`,
+          },
+        });
+      }
+
+      await tx.activityLog.create({
+        data: {
+          userId: updated.userId,
+          actionType: ActivityActionType.booking_declined,
+          description: `Booking #${updated.id} declined (${userRefundPercent}% refund: ${stripeRefundAmount} SGD${
+            earnedReversalAmount.gt(0) ? ` + ${earnedReversalAmount} SGD in reversed reward credit` : ""
+          }).`,
+          relatedListingId: updated.listingId,
+        },
+      });
+
+      return updated;
     });
-
-    await tx.transaction.create({
-      data: {
-        userId: updated.userId,
-        bookingId: updated.id,
-        type: TransactionType.refund,
-        amount: updated.sgdAmount,
-        description: `Booking #${updated.id} declined — refund of the ${updated.sgdAmount} debited at creation.`,
-      },
-    });
-
-    await tx.activityLog.create({
-      data: {
-        userId: updated.userId,
-        actionType: ActivityActionType.booking_declined,
-        description: `Booking #${updated.id} declined (${updated.sgdAmount} credits refunded).`,
-        relatedListingId: updated.listingId,
-      },
-    });
-
-    return updated;
-  });
+  } catch (error) {
+    if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
+      console.error(
+        `declineBookingWithRefund: Stripe refund for PaymentIntent ${paymentIntentId} already succeeded, but the DB write failed afterward. Manual reconciliation required.`,
+        error
+      );
+    }
+    throw error;
+  }
 }

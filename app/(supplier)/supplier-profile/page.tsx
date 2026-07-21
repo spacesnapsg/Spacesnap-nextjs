@@ -206,6 +206,18 @@ export default function SupplierProfilePage() {
 
   const completedBookingsCount = (bookings ?? []).filter((b) => b.status === "completed").length;
 
+  const ratingTotals = (listings ?? []).reduce(
+    (acc, listing) => {
+      if (listing.ratingCount > 0 && listing.averageRating !== null) {
+        acc.weightedSum += listing.averageRating * listing.ratingCount;
+        acc.count += listing.ratingCount;
+      }
+      return acc;
+    },
+    { weightedSum: 0, count: 0 }
+  );
+  const overallAverageRating = ratingTotals.count > 0 ? ratingTotals.weightedSum / ratingTotals.count : null;
+
   if (userLoading) {
     return <p className="text-sm text-muted-text text-center py-16">Loading profile…</p>;
   }
@@ -310,7 +322,14 @@ export default function SupplierProfilePage() {
               </div>
               <div className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-b-0">
                 <p className="text-sm text-muted-text">Average Rating</p>
-                <p className="text-sm text-muted-text italic">No rating system built yet</p>
+                {overallAverageRating !== null ? (
+                  <p className="text-sm font-semibold text-body-text">
+                    {overallAverageRating.toFixed(1)} / 5{" "}
+                    <span className="text-muted-text font-normal">({ratingTotals.count})</span>
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-text italic">No ratings yet</p>
+                )}
               </div>
             </div>
           </Card>
