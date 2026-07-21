@@ -3,21 +3,31 @@
 // covered in prisma/tests/db-constraints.test.ts. Hits the real dev Postgres
 // DB through Prisma (no mocking) since this function's whole job is to mirror
 // that constraint's date-range/status semantics ahead of the insert.
+//
+// 2026-07-21 write-path session: createBookingWithDebit now makes a real
+// Stripe test-mode API call per booking (no mocking, same "hit the real
+// backing service" convention this file already uses for Postgres) — see
+// lib/stripe.ts. `pm_card_visa`/`pm_card_chargeDeclined` are Stripe's own
+// well-known static test PaymentMethod ids, safe to reuse across test runs.
 import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, ListingType, BookingType, TransactionType } from "../app/generated/prisma/client";
+import { PrismaClient, ListingType, BookingType, TransactionType, RewardGrantType } from "../app/generated/prisma/client";
+import { getCreditBalance } from "./credits";
 import {
   hasOverlappingBooking,
   createBookingWithDebit,
-  getCreditBalance,
-  InsufficientCreditBalanceError,
   confirmBookingWithAudit,
   BookingNotConfirmableError,
   declineBookingWithRefund,
   BookingNotDeclinableError,
+  StripeChargeFailedError,
+  RewardGrantNotRedeemableError,
 } from "./bookings";
+
+const TEST_PAYMENT_METHOD_ID = "pm_card_visa";
+const TEST_DECLINED_PAYMENT_METHOD_ID = "pm_card_chargeDeclined";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -75,7 +85,7 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
           bookingType: BookingType.daily,
           startDate: new Date("2027-03-01"),
           endDate: new Date("2027-03-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -98,7 +108,7 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
           bookingType: BookingType.daily,
           startDate: new Date("2027-04-01"),
           endDate: new Date("2027-04-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -121,7 +131,7 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
           bookingType: BookingType.daily,
           startDate: new Date("2027-05-01"),
           endDate: new Date("2027-05-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -144,7 +154,7 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
           bookingType: BookingType.daily,
           startDate: new Date("2027-06-01"),
           endDate: new Date("2027-06-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "cancelled",
         },
       });
@@ -169,7 +179,7 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
           bookingType: BookingType.daily,
           startDate: new Date("2027-07-01"),
           endDate: new Date("2027-07-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -181,13 +191,55 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
   });
 });
 
-// Coverage for the Sprint 3.5 ledger gap: balance check, Booking insert, and
-// debit Transaction row all inside one DB transaction (createBookingWithDebit).
-// Balance is never a stored column — always SUM(Transaction.amount) for the
-// user, per the Transaction model's comment in schema.prisma — so these tests
-// assert against the ledger, not a credit_balance field that doesn't exist.
-describe("createBookingWithDebit (Sprint 3.5, ledger-atomic booking creation)", () => {
-  test("rejects with InsufficientCreditBalanceError when the user has no credits, and writes nothing", async () => {
+// Coverage for the 2026-07-21 write-path rewrite: createBookingWithDebit no
+// longer checks or debits any wallet balance for a booking — it charges the
+// full (or reward-discounted) amount in real-time SGD via a Stripe
+// PaymentIntent, created before the DB transaction opens, then writes the
+// Booking + booking_payment Transaction (+ earned_spend Transaction if a
+// RewardGrant was redeemed) atomically. See createBookingWithDebit's own
+// comment in lib/bookings.ts for the ordering rationale.
+describe("createBookingWithDebit (2026-07-21, Stripe charge + RewardGrant discount)", () => {
+  test("charges the full cost via Stripe and writes exactly one booking_payment Transaction row, with no reward discount", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-03",
+        endDate: "2027-09-03",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      assert.equal(booking.sgdAmount.toString(), "10");
+      assert.equal(booking.earnedCreditsApplied.toString(), "0");
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].type, TransactionType.booking_payment);
+      assert.equal(transactions[0].amount.toString(), "-10");
+      assert.ok(transactions[0].stripePaymentIntentId);
+
+      // A booking charged directly via Stripe never moves the combined
+      // ledger sum on its own (no topup involved) — booking_payment amounts
+      // are still summed by getCreditBalance's blind SUM (it has no type
+      // filter), so a user with zero prior activity ends up with a negative
+      // combined figure. That combined figure is a legacy concept being
+      // phased out in favor of purchasedBalance/earnedBalance (see
+      // lib/credits.ts) — asserted here only to document the actual
+      // behavior, not to claim it's the meaningful number going forward.
+      const balanceAfter = await getCreditBalance(user.id);
+      assert.equal(balanceAfter.toString(), "-10");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("rejects with StripeChargeFailedError when the card is declined, and writes no booking or Transaction", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -199,11 +251,12 @@ describe("createBookingWithDebit (Sprint 3.5, ledger-atomic booking creation)", 
             userId: user.id,
             listingId: listing.id,
             bookingType: BookingType.daily,
-            startDate: "2027-09-01",
-            endDate: "2027-09-01",
+            startDate: "2027-09-04",
+            endDate: "2027-09-04",
             cost: listing.priceDay!,
+            paymentMethodId: TEST_DECLINED_PAYMENT_METHOD_ID,
           }),
-        InsufficientCreditBalanceError
+        StripeChargeFailedError
       );
 
       const bookings = await prisma.booking.findMany({ where: { userId: user.id } });
@@ -215,13 +268,112 @@ describe("createBookingWithDebit (Sprint 3.5, ledger-atomic booking creation)", 
     }
   });
 
-  test("rejects when the balance is short by any amount, even just below the cost", async () => {
+  test("a lost double-booking race (DB exclusion constraint) rejects cleanly with no orphan booking or Transaction, after the Stripe charge had already succeeded", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+
+      const first = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-05",
+        endDate: "2027-09-07",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      // Same listing, overlapping dates — hasOverlappingBooking is a route
+      // pre-check, not enforced by createBookingWithDebit itself, so calling
+      // this directly (bypassing the route) exercises the DB's
+      // bookings_no_overlap EXCLUDE constraint as the actual backstop, and
+      // this function's compensating-refund catch block along with it.
+      await assert.rejects(() =>
+        createBookingWithDebit({
+          userId: user.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: "2027-09-06",
+          endDate: "2027-09-08",
+          cost: listing.priceDay!,
+          paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        })
+      );
+
+      const bookings = await prisma.booking.findMany({ where: { listingId: listing.id } });
+      assert.equal(bookings.length, 1);
+      assert.equal(bookings[0].id.toString(), first.id.toString());
+
+      const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
+      assert.equal(transactions.length, 1); // only the first booking's charge, nothing orphaned from the second
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// 2026-07-21 — RewardGrant (booking_discount_pct) redemption against a
+// booking's discount line (Booking.earnedCreditsApplied). No issuance flow
+// exists yet, so grants are seeded directly via prisma, same as every other
+// fixture in this file.
+describe("createBookingWithDebit — RewardGrant (booking_discount_pct) redemption", () => {
+  test("resolves a percentage grant's discount, charges Stripe for the net amount, marks the grant redeemed, and writes an earned_spend Transaction", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
       const listing = await createSpaceListing(company.id); // priceDay 10.00
-      await prisma.transaction.create({
-        data: { userId: user.id, type: TransactionType.topup, amount: "9.99" },
+      const grant = await prisma.rewardGrant.create({
+        data: { userId: user.id, type: RewardGrantType.booking_discount_pct, value: "20", grantedVia: "test-fixture" },
+      });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-09",
+        endDate: "2027-09-09",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        rewardGrantId: grant.id,
+      });
+
+      // 20% off 10.00 = 2.00 discount; Stripe charged for 8.00.
+      assert.equal(booking.sgdAmount.toString(), "10");
+      assert.equal(booking.earnedCreditsApplied.toString(), "2");
+
+      const grantAfter = await prisma.rewardGrant.findUnique({ where: { id: grant.id } });
+      assert.equal(grantAfter!.status, "redeemed");
+      assert.ok(grantAfter!.redeemedAt);
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 2);
+      const payment = transactions.find((t) => t.type === TransactionType.booking_payment);
+      assert.ok(payment);
+      assert.equal(payment!.amount.toString(), "-8");
+      const earnedSpend = transactions.find((t) => t.type === TransactionType.earned_spend);
+      assert.ok(earnedSpend);
+      assert.equal(earnedSpend!.amount.toString(), "-2");
+      assert.equal(earnedSpend!.rewardGrantId?.toString(), grant.id.toString());
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("rejects an already-redeemed grant before ever calling Stripe, and writes nothing", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const grant = await prisma.rewardGrant.create({
+        data: {
+          userId: user.id,
+          type: RewardGrantType.booking_discount_pct,
+          value: "20",
+          status: "redeemed",
+          redeemedAt: new Date(),
+          grantedVia: "test-fixture",
+        },
       });
 
       await assert.rejects(
@@ -230,11 +382,13 @@ describe("createBookingWithDebit (Sprint 3.5, ledger-atomic booking creation)", 
             userId: user.id,
             listingId: listing.id,
             bookingType: BookingType.daily,
-            startDate: "2027-09-02",
-            endDate: "2027-09-02",
+            startDate: "2027-09-10",
+            endDate: "2027-09-10",
             cost: listing.priceDay!,
+            paymentMethodId: TEST_PAYMENT_METHOD_ID,
+            rewardGrantId: grant.id,
           }),
-        InsufficientCreditBalanceError
+        RewardGrantNotRedeemableError
       );
 
       const bookings = await prisma.booking.findMany({ where: { userId: user.id } });
@@ -244,69 +398,88 @@ describe("createBookingWithDebit (Sprint 3.5, ledger-atomic booking creation)", 
     }
   });
 
-  test("succeeds when balance exactly matches cost: balance decremented to zero, one debit Transaction row", async () => {
+  test("rejects a grant belonging to a different user", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const otherUser = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const grant = await prisma.rewardGrant.create({
+        data: { userId: otherUser.id, type: RewardGrantType.booking_discount_pct, value: "20", grantedVia: "test-fixture" },
+      });
+
+      await assert.rejects(
+        () =>
+          createBookingWithDebit({
+            userId: user.id,
+            listingId: listing.id,
+            bookingType: BookingType.daily,
+            startDate: "2027-09-11",
+            endDate: "2027-09-11",
+            cost: listing.priceDay!,
+            paymentMethodId: TEST_PAYMENT_METHOD_ID,
+            rewardGrantId: grant.id,
+          }),
+        RewardGrantNotRedeemableError
+      );
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id, otherUser.id]);
+    }
+  });
+
+  test("rejects a free_consumable_unit grant (wrong type for a booking)", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
-      const listing = await createSpaceListing(company.id); // priceDay 10.00
-      await prisma.transaction.create({
-        data: { userId: user.id, type: TransactionType.topup, amount: "10.00" },
+      const listing = await createSpaceListing(company.id);
+      const grant = await prisma.rewardGrant.create({
+        data: { userId: user.id, type: RewardGrantType.free_consumable_unit, value: "1", grantedVia: "test-fixture" },
       });
 
-      const booking = await createBookingWithDebit({
-        userId: user.id,
-        listingId: listing.id,
-        bookingType: BookingType.daily,
-        startDate: "2027-09-03",
-        endDate: "2027-09-03",
-        cost: listing.priceDay!,
-      });
-
-      const balanceAfter = await getCreditBalance(user.id);
-      assert.equal(balanceAfter.toString(), "0");
-
-      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
-      assert.equal(transactions.length, 1);
-      assert.equal(transactions[0].type, TransactionType.booking);
-      assert.equal(transactions[0].amount.toString(), "-10");
+      await assert.rejects(
+        () =>
+          createBookingWithDebit({
+            userId: user.id,
+            listingId: listing.id,
+            bookingType: BookingType.daily,
+            startDate: "2027-09-12",
+            endDate: "2027-09-12",
+            cost: listing.priceDay!,
+            paymentMethodId: TEST_PAYMENT_METHOD_ID,
+            rewardGrantId: grant.id,
+          }),
+        RewardGrantNotRedeemableError
+      );
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });
 
-  test("succeeds with balance to spare: balance decremented by exactly the cost, exactly one Transaction row created", async () => {
+  test("clamps a grant worth more than the booking cost to 100%, never issuing a net credit or a negative Stripe charge", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
       const listing = await createSpaceListing(company.id); // priceDay 10.00
-      await prisma.transaction.create({
-        data: { userId: user.id, type: TransactionType.topup, amount: "50.00" },
+      const grant = await prisma.rewardGrant.create({
+        data: { userId: user.id, type: RewardGrantType.booking_discount_pct, value: "150", grantedVia: "test-fixture" },
       });
-      const balanceBefore = await getCreditBalance(user.id);
-      assert.equal(balanceBefore.toString(), "50");
 
       const booking = await createBookingWithDebit({
         userId: user.id,
         listingId: listing.id,
         bookingType: BookingType.daily,
-        startDate: "2027-09-04",
-        endDate: "2027-09-04",
+        startDate: "2027-09-13",
+        endDate: "2027-09-13",
         cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        rewardGrantId: grant.id,
       });
 
-      const balanceAfter = await getCreditBalance(user.id);
-      assert.equal(balanceAfter.toString(), "40");
+      assert.equal(booking.earnedCreditsApplied.toString(), "10"); // clamped to the full cost, not 15
 
-      const bookingRow = await prisma.booking.findUnique({ where: { id: booking.id } });
-      assert.ok(bookingRow);
-      assert.equal(bookingRow!.credits.toString(), "10");
-
-      const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
-      assert.equal(transactions.length, 2); // the topup + the debit
-      const debit = transactions.find((t) => t.type === TransactionType.booking);
-      assert.ok(debit);
-      assert.equal(debit!.bookingId?.toString(), booking.id.toString());
-      assert.equal(debit!.amount.toString(), "-10");
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      const payment = transactions.find((t) => t.type === TransactionType.booking_payment);
+      assert.equal(payment!.amount.toString(), "0"); // a fully-discounted booking still records a zero-amount Stripe charge for audit parity
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -331,7 +504,7 @@ describe("confirmBookingWithAudit (Sprint 3.5, known gap #2)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-10-01"),
           endDate: new Date("2027-10-01"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -360,7 +533,7 @@ describe("confirmBookingWithAudit (Sprint 3.5, known gap #2)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-10-02"),
           endDate: new Date("2027-10-02"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -387,7 +560,7 @@ describe("confirmBookingWithAudit (Sprint 3.5, known gap #2)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-10-03"),
           endDate: new Date("2027-10-03"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "cancelled",
         },
       });
@@ -409,7 +582,7 @@ describe("confirmBookingWithAudit (Sprint 3.5, known gap #2)", () => {
 // credits debited at creation. Per CLAUDE1.md's read of the old build, the
 // old code summed the booking's debit Transactions and refunded that; this
 // design instead reads the refund amount straight off the Booking row's
-// stored `credits` field, so a price change on the listing after booking
+// stored `sgdAmount` field, so a price change on the listing after booking
 // creation can't skew the refund.
 describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
   test("declines a pending booking, refunds exactly the amount debited at creation, and writes exactly one refund Transaction row", async () => {
@@ -417,6 +590,10 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
     const user = await createUser();
     try {
       const listing = await createSpaceListing(company.id); // priceDay 10.00
+      // Establishes a baseline combined-ledger balance so the refund
+      // arithmetic below is visible — createBookingWithDebit no longer
+      // requires or checks any wallet balance to succeed (it charges Stripe
+      // directly), this topup is purely for the assertion's readability.
       await prisma.transaction.create({
         data: { userId: user.id, type: TransactionType.topup, amount: "50.00" },
       });
@@ -428,6 +605,7 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
         startDate: "2027-11-01",
         endDate: "2027-11-01",
         cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
 
       const balanceAfterBooking = await getCreditBalance(user.id);
@@ -466,6 +644,7 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
         startDate: "2027-11-02",
         endDate: "2027-11-02",
         cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
       await confirmBookingWithAudit(booking.id);
 
@@ -491,7 +670,7 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-11-03"),
           endDate: new Date("2027-11-03"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "cancelled",
         },
       });
@@ -524,6 +703,7 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
         startDate: "2027-11-04",
         endDate: "2027-11-04",
         cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
 
       await declineBookingWithRefund(booking.id);

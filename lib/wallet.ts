@@ -19,6 +19,16 @@ import { getCreditBalance } from "@/lib/credits";
 // outside seed data) isn't wired yet, so this is credits-only for now:
 // no payment is actually charged. `stripePaymentIntentId` stays null until
 // Sprint 6 wires a real charge ahead of this call.
+//
+// 2026-07-21, same-session correction: the purchased/earned split (Sprint 2
+// amendment) makes createPurchaseWithDebit (lib/purchases.ts) check
+// purchasedBalance specifically, not the raw combined ledger — this write
+// path was still writing the old, un-partitioned `topup` type, which meant
+// no top-up could ever fund a "Buy Now" purchase going forward. Switched to
+// `purchased_topup` (still counted by the combined getCreditBalance SUM
+// below, since that sum has no type filter — this doesn't change what the
+// wallet page displays, only what future purchasedBalance-scoped checks see).
+// Not a backfill: pre-existing seeded `topup` rows are untouched.
 export function parseTopUpFields(body: unknown): Prisma.Decimal {
   const errors: Record<string, string[]> = {};
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
@@ -50,7 +60,7 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal): Promi
     const transaction = await tx.transaction.create({
       data: {
         userId,
-        type: TransactionType.topup,
+        type: TransactionType.purchased_topup,
         amount,
         description: "Wallet top-up",
       },

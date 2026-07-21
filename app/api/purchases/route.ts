@@ -3,7 +3,13 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError, unauthorizedResponse, validationErrorResponse } from "@/lib/api-errors";
 import { InsufficientCreditBalanceError } from "@/lib/credits";
-import { createPurchaseWithDebit, parsePurchaseCreateFields, serializePurchase, InsufficientStockError } from "@/lib/purchases";
+import {
+  createPurchaseWithDebit,
+  InsufficientStockError,
+  parsePurchaseCreateFields,
+  RewardGrantNotRedeemableError,
+  serializePurchase,
+} from "@/lib/purchases";
 
 // POST: "Buy Now" — an immediate, completed purchase (consumables only),
 // distinct from POST /api/bulk-order-requests (a pending request the
@@ -49,6 +55,8 @@ export async function POST(request: NextRequest) {
       listingId: fields.listingId,
       quantity: fields.quantity,
       cost,
+      unitPrice: listing.pricePerUnit,
+      rewardGrantId: fields.rewardGrantId,
     });
 
     return NextResponse.json({ purchase: serializePurchase(purchase) }, { status: 201 });
@@ -58,6 +66,9 @@ export async function POST(request: NextRequest) {
     }
     if (error instanceof InsufficientStockError) {
       return validationErrorResponse(new ApiValidationError({ quantity: [error.message] }));
+    }
+    if (error instanceof RewardGrantNotRedeemableError) {
+      return validationErrorResponse(new ApiValidationError({ rewardGrantId: [error.message] }));
     }
     throw error;
   }

@@ -10,7 +10,8 @@ export interface UserBooking {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
-  credits: number;
+  sgdAmount: number;
+  earnedCreditsApplied: number;
   status: BookingStatus;
   rating: { id: string; score: number; comment: string | null } | null;
 }

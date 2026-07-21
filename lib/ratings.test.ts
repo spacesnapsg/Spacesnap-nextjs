@@ -62,7 +62,7 @@ function createBooking(userId: string, listingId: bigint, status: "pending" | "c
       bookingType: BookingType.daily,
       startDate: new Date(day),
       endDate: new Date(day),
-      credits: "10.00",
+      sgdAmount: "10.00",
       status,
     },
   });

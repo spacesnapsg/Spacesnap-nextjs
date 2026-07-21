@@ -574,7 +574,7 @@ async function main() {
       bookingType: BookingType.daily,
       startDate: new Date("2026-06-10"),
       endDate: new Date("2026-06-10"),
-      credits: "120.00",
+      sgdAmount: "120.00",
       status: BookingStatus.completed,
     },
   });
@@ -597,7 +597,7 @@ async function main() {
       bookingType: BookingType.weekly,
       startDate: new Date("2026-08-01"),
       endDate: new Date("2026-08-07"),
-      credits: "950.00",
+      sgdAmount: "950.00",
       status: BookingStatus.confirmed,
     },
   });
@@ -628,7 +628,7 @@ async function main() {
       bookingType: BookingType.daily,
       startDate: new Date("2026-07-28"),
       endDate: new Date("2026-07-28"),
-      credits: "60.00",
+      sgdAmount: "60.00",
       status: BookingStatus.pending,
     },
   });
@@ -650,7 +650,7 @@ async function main() {
       bookingType: BookingType.daily,
       startDate: new Date("2026-07-18"),
       endDate: new Date("2026-07-20"),
-      credits: "240.00",
+      sgdAmount: "240.00",
       status: BookingStatus.active,
     },
   });
@@ -672,7 +672,7 @@ async function main() {
       bookingType: BookingType.weekly,
       startDate: new Date("2026-06-15"),
       endDate: new Date("2026-06-21"),
-      credits: "120.00",
+      sgdAmount: "120.00",
       status: BookingStatus.cancelled,
     },
   });

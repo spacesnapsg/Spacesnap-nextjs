@@ -87,7 +87,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-01-01"),
           endDate: new Date("2027-01-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -100,7 +100,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
               bookingType: BookingType.daily,
               startDate: new Date("2027-01-03"),
               endDate: new Date("2027-01-07"),
-              credits: "10.00",
+              sgdAmount: "10.00",
             },
           }),
         EXCLUSION_VIOLATION,
@@ -126,7 +126,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-02-01"),
           endDate: new Date("2027-02-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -137,7 +137,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-02-06"),
           endDate: new Date("2027-02-10"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -161,7 +161,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-03-01"),
           endDate: new Date("2027-03-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: BookingStatus.cancelled,
         },
       });
@@ -173,7 +173,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-03-02"),
           endDate: new Date("2027-03-06"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -198,7 +198,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-04-01"),
           endDate: new Date("2027-04-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -209,7 +209,7 @@ describe("bookings_no_overlap exclusion constraint", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-04-01"),
           endDate: new Date("2027-04-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 

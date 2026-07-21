@@ -7,10 +7,11 @@ import {
   BOOKING_OVERLAP_MESSAGE,
   createBookingWithDebit,
   hasOverlappingBooking,
-  InsufficientCreditBalanceError,
   missingCertificateIds,
   parseBookingCreateFields,
+  RewardGrantNotRedeemableError,
   serializeBooking,
+  StripeChargeFailedError,
 } from "@/lib/bookings";
 
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
@@ -113,16 +114,23 @@ export async function POST(request: NextRequest) {
       startDate: fields.startDate,
       endDate: fields.endDate,
       cost,
+      paymentMethodId: fields.paymentMethodId,
+      rewardGrantId: fields.rewardGrantId,
     });
 
     return NextResponse.json({ booking: serializeBooking(booking) }, { status: 201 });
   } catch (error) {
-    if (error instanceof InsufficientCreditBalanceError) {
-      return validationErrorResponse(new ApiValidationError({ credits: [error.message] }));
+    if (error instanceof RewardGrantNotRedeemableError) {
+      return validationErrorResponse(new ApiValidationError({ rewardGrantId: [error.message] }));
+    }
+    if (error instanceof StripeChargeFailedError) {
+      return NextResponse.json({ message: error.message }, { status: 402 });
     }
     // Race window between the app-layer check above and this insert: the DB
     // constraint (bookings_no_overlap) is the actual source of truth and
     // still fires here if another request's booking landed in between.
+    // createBookingWithDebit has already refunded the Stripe charge by the
+    // time this error surfaces (see its own catch block).
     const code = (error as { cause?: { code?: string } })?.cause?.code;
     if (code === "23P01") {
       return NextResponse.json({ message: BOOKING_OVERLAP_MESSAGE }, { status: 409 });

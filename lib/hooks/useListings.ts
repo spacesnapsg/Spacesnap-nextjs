@@ -56,6 +56,8 @@ interface CreateBookingInput {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
+  paymentMethodId: string;
+  rewardGrantId?: string;
 }
 
 export function useCreateBooking() {

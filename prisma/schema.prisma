@@ -104,11 +104,62 @@ enum CreditHoldStatus {
 // amount sign still carries the actual direction, this just makes the ledger
 // readable instead of overloading `booking` for both the original debit and
 // the decline-refund credit like the old schema did.
+//
+// 2026-07-20 — purchased/earned balance split (MAS Payment Services Act
+// exposure fix): a single combined wallet lets purchased (SGD top-up) credit
+// pay a third-party operator's booking, which this product cannot do. Two
+// independent, non-interchangeable balances replace the combined one, each
+// computed live off this same ledger (never stored denormalized, same
+// principle as the pre-split design — see Transaction model comment below),
+// just partitioned by type instead of summed as one bucket:
+//   purchasedBalance = SUM(amount) WHERE type IN (purchased_topup, purchased_spend)
+//   earnedBalance    = SUM(amount) WHERE type IN (earned_grant, earned_spend)
+// purchased_topup/purchased_spend: bought with SGD, spendable ONLY on
+//   SpaceSnap's own goods/services (consumables from SpaceSnap's own stock,
+//   certification fees, gig-posting fees) — never on a booking.
+// earned_grant/earned_spend: never purchased, only issued as a reward
+//   (booking activity, referrals, gig-completion payouts, operator
+//   promotional allocations); spendable as a discount on bookings, on
+//   consumables, or a gig worker's payout choice.
+// booking_payment: the real-time SGD/Stripe charge for a booking (full
+//   price). Deliberately outside both balance sums above — it never touches
+//   either balance directly, only records the charge for audit parity with
+//   every other credit-affecting event in this ledger. An earned_spend row
+//   on the same booking is what actually carries an earned-balance discount.
+// The old topup/booking/refund/purchase values are kept, not removed, since
+// the write paths that still use them (booking create/confirm/decline,
+// bulk-order fulfillment, Buy Now) haven't been rewired to the split model
+// yet — that's Sprint 3.5/6 execution work, tracked in
+// SPRINT_PLAN_NEXTJS_REWRITE.md, not part of this schema change. New code
+// should use the five new values below, not the old four.
+//
+// 2026-07-21 — consumables + gigs extension, inspected against the
+// paragraph above before adding anything (per this session's own "confirm
+// no duplication" instruction): earned_spend/earned_grant/purchased_spend
+// were all written last session already anticipating this work —
+// purchased_spend's own doc explicitly lists "gig-posting fees", and
+// earned_grant/earned_spend's explicitly lists "gig-completion payouts" and
+// "a gig worker's payout choice". So none of earned_spend_booking,
+// earned_spend_consumable, earned_grant_gig, or gig_purchase_spend get
+// added — they'd duplicate existing generic values, disambiguated instead
+// by which FK is set on the row (bookingId vs purchaseId vs gigTaskId) or
+// by GigAssignment.payoutChoice. The one genuinely new case: a worker
+// choosing direct SGD instead of earned credit is money leaving SpaceSnap
+// to a member, which nothing existing represents (booking_payment is money
+// coming in) — that's the only addition below.
 enum TransactionType {
   topup
   booking
   refund
   purchase
+
+  purchased_topup
+  purchased_spend
+  earned_grant
+  earned_spend
+  booking_payment
+
+  gig_payout_sgd
 
   @@map("transaction_type")
 }
@@ -190,6 +241,83 @@ enum SignoffRequestStatus {
   failed
 
   @@map("signoff_request_status")
+}
+
+// 2026-07-21 — gigs, new minimal scope (confirmed via grep of this repo and
+// the old Laravel codebase: neither ever had gig tables/routes before this).
+// Mirrors BulkOrderStatus's shape (pending/confirmed/fulfilled/cancelled)
+// but with gig-specific labels — a task is `open` until a worker is
+// assigned, not "pending" (which in this schema's other enums means
+// "awaiting supplier action on something already submitted").
+enum GigTaskStatus {
+  open
+  assigned
+  completed
+  cancelled
+
+  @@map("gig_task_status")
+}
+
+// The worker's choice at assignment time for how GigAssignment.payoutAmount
+// gets settled at completion — see the TransactionType comment above for
+// which existing ledger value each choice maps to (earned_grant vs the new
+// gig_payout_sgd).
+enum GigPayoutChoice {
+  earned_credit
+  sgd
+
+  @@map("gig_payout_choice")
+}
+
+// 2026-07-21 write-path session — a discount request must resolve against a
+// specific, server-issued grant, never a client-supplied dollar amount or a
+// pooled earnedBalance sum (that pooled sum still exists for internal
+// reporting, see getEarnedBalance's comment in lib/credits.ts, but nothing
+// redeems against it directly as of this session). One value per reward
+// flavor implied by earlier sessions' comments ("10% off your next booking",
+// "1 free consumables pack", gig payout choice already schema'd via
+// GigAssignment.payoutChoice) — not a general-purpose rule engine, and no
+// issuance logic beyond what those three already imply (see lib/reward-grants.ts).
+enum RewardGrantType {
+  booking_discount_pct
+  free_consumable_unit
+  gig_payout_credit
+
+  @@map("reward_grant_type")
+}
+
+enum RewardGrantStatus {
+  available
+  redeemed
+  expired
+
+  @@map("reward_grant_status")
+}
+
+// A grant is issued with its own resolved type+value (e.g. `booking_discount_pct`
+// value 10 = 10% off) and can only ever be redeemed once, atomically with the
+// booking/purchase it discounts — see redeemRewardGrant (lib/reward-grants.ts),
+// which flips status via an updateMany WHERE status:'available' guard so a
+// race between two concurrent redemption attempts can't double-spend the same
+// grant. grantedVia is a loose free-text label (e.g. "booking", "referral",
+// "gig"), not an FK — no issuing flow exists yet for any of these, so there's
+// nothing concrete to reference back to.
+model RewardGrant {
+  id         BigInt            @id @default(autoincrement())
+  userId     String            @map("user_id")
+  type       RewardGrantType
+  value      Decimal           @db.Decimal(10, 2)
+  status     RewardGrantStatus @default(available)
+  grantedVia String            @map("granted_via")
+  redeemedAt DateTime?         @map("redeemed_at")
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  transactions Transaction[]
+
+  @@index([userId, status])
+  @@map("reward_grants")
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +444,9 @@ model User {
   ratings                 Rating[]
   quizAttempts            QuizAttempt[]
   creditHolds             CreditHold[]
+  postedGigTasks          GigTask[]                   @relation("GigTaskPoster")
+  gigAssignments          GigAssignment[]             @relation("GigAssignmentWorker")
+  rewardGrants            RewardGrant[]
 
   @@map("users")
 }
@@ -526,17 +657,36 @@ model TrainingSession {
 // (raw SQL + btree_gist — Prisma can't express EXCLUDE natively). Any status
 // other than `cancelled` holds the slot; only cancelled bookings are excluded
 // from the overlap check.
+//
+// 2026-07-20: `credits` (a combined-wallet deduction) repurposed to
+// `sgdAmount` — the purchased/earned balance split means a booking is no
+// longer paid by deducting any wallet balance at all; it's charged in
+// real-time SGD via Stripe (this field is the authoritative charge amount),
+// with an optional earnedBalance discount recorded in `earnedCreditsApplied`.
+// No purchasedBalance can ever be applied here — that's the whole point of
+// the split, see TransactionType's purchased/earned comment. The actual
+// Stripe-charge wiring (payment intent creation, earned-spend Transaction in
+// the same DB transaction as the Booking create) is still on the old
+// combined-ledger debit path as of this schema change — tracked as a
+// Sprint 3.5 known gap in SPRINT_PLAN_NEXTJS_REWRITE.md, not rewired here.
+//
+// 2026-07-21: the gap above is closed — createBookingWithDebit (lib/bookings.ts)
+// now creates a real Stripe PaymentIntent for `sgdAmount - earnedCreditsApplied`
+// before opening the DB transaction. `earnedCreditsApplied` is resolved by
+// redeeming a specific RewardGrant (type `booking_discount_pct`), never a raw
+// client-supplied amount — see RewardGrant's own comment.
 model Booking {
-  id          BigInt        @id @default(autoincrement())
-  userId      String        @map("user_id")
-  listingId   BigInt        @map("listing_id")
-  bookingType BookingType   @map("booking_type")
-  startDate   DateTime      @map("start_date") @db.Date
-  endDate     DateTime      @map("end_date") @db.Date
-  credits     Decimal       @db.Decimal(10, 2)
-  status      BookingStatus @default(pending)
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  id                   BigInt        @id @default(autoincrement())
+  userId               String        @map("user_id")
+  listingId            BigInt        @map("listing_id")
+  bookingType          BookingType   @map("booking_type")
+  startDate            DateTime      @map("start_date") @db.Date
+  endDate              DateTime      @map("end_date") @db.Date
+  sgdAmount            Decimal       @map("sgd_amount") @db.Decimal(10, 2)
+  earnedCreditsApplied Decimal       @default(0) @map("earned_credits_applied") @db.Decimal(10, 2)
+  status               BookingStatus @default(pending)
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
@@ -667,13 +817,30 @@ model CreditHold {
 // funds — Sprint 6, not built here) will eventually hang; this model itself
 // stays payment-provider-agnostic, same as every other credit-affecting
 // model in this schema today.
+// 2026-07-21: `earnedCreditsApplied` added — same pattern as
+// Booking.earnedCreditsApplied (see that field's comment), an optional
+// discount line against `credits` (this model's existing full-cost field,
+// confirmed unchanged before adding — it was never called `cost`).
+// `credits` still covers the full price via purchasedBalance as today;
+// this is an additive discount option, not a replacement mechanic — a
+// purchase can still be paid entirely from purchasedBalance with this at 0.
+//
+// 2026-07-21, same session: the write path is wired — createPurchaseWithDebit
+// (lib/purchases.ts) now debits purchasedBalance for `credits - earnedCreditsApplied`
+// (TransactionType.purchased_spend, replacing the old combined-ledger `purchase`
+// type) and, when a RewardGrant (type `free_consumable_unit`) is redeemed,
+// writes a matching earned_spend row. Unlike Booking, Purchase stays
+// purchasedBalance-funded — consumables are SpaceSnap's own stock, not a
+// third-party operator charge, so there's no compliance reason to route this
+// through Stripe per-purchase (see TransactionType's purchased/earned comment).
 model Purchase {
-  id        BigInt   @id @default(autoincrement())
-  userId    String   @map("user_id")
-  listingId BigInt   @map("listing_id")
-  quantity  Int
-  credits   Decimal  @db.Decimal(10, 2)
-  createdAt DateTime @default(now()) @map("created_at")
+  id                   BigInt   @id @default(autoincrement())
+  userId               String   @map("user_id")
+  listingId            BigInt   @map("listing_id")
+  quantity             Int
+  credits              Decimal  @db.Decimal(10, 2)
+  earnedCreditsApplied Decimal  @default(0) @map("earned_credits_applied") @db.Decimal(10, 2)
+  createdAt            DateTime @default(now()) @map("created_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
@@ -683,18 +850,76 @@ model Purchase {
   @@map("purchases")
 }
 
+// 2026-07-21 — gigs, schema only (no payment/payout logic here, same as the
+// booking write-path deferral last session — see TransactionType comment
+// above and the write-path gap tracked in SPRINT_PLAN_NEXTJS_REWRITE.md).
+// purchasedSpend is what the poster pays SpaceSnap to post/fulfil the task —
+// SpaceSnap is always principal, posting a task never pays another member
+// directly (same pattern as every other purchased_spend event). No
+// Transaction FK column added here (unlike Booking/BulkOrderRequest/
+// Purchase) — deliberately deferred to the write-path session that actually
+// creates these rows, not guessed at ahead of it.
+model GigTask {
+  id             BigInt        @id @default(autoincrement())
+  posterId       String        @map("poster_id")
+  description    String
+  purchasedSpend Decimal       @map("purchased_spend") @db.Decimal(10, 2)
+  status         GigTaskStatus @default(open)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  poster User @relation("GigTaskPoster", fields: [posterId], references: [id], onDelete: Cascade)
+
+  assignments GigAssignment[]
+
+  @@map("gig_tasks")
+}
+
+// One row per worker assigned to a GigTask. payoutAmount is the resolved
+// SGD-equivalent value at completion regardless of payoutChoice — earned
+// credits and SGD are two different settlement rails for the same amount,
+// not two different prices. completedAt nullable: set only when the
+// assignment finishes (status transition to GigTaskStatus.completed lives on
+// the parent GigTask, not duplicated here).
+model GigAssignment {
+  id           BigInt          @id @default(autoincrement())
+  gigTaskId    BigInt          @map("gig_task_id")
+  workerId     String          @map("worker_id")
+  payoutChoice GigPayoutChoice @map("payout_choice")
+  payoutAmount Decimal         @map("payout_amount") @db.Decimal(10, 2)
+  completedAt  DateTime?       @map("completed_at")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+
+  gigTask GigTask @relation(fields: [gigTaskId], references: [id], onDelete: Cascade)
+  worker  User    @relation("GigAssignmentWorker", fields: [workerId], references: [id], onDelete: Cascade)
+
+  @@map("gig_assignments")
+}
+
 // The wallet ledger — balance is always SUM(amount) WHERE user_id = ?, never
 // stored denormalized. bookingId/bulkOrderRequestId/purchaseId nullable
 // (topups aren't tied to any of them). Supports one row per credit-affecting
 // event (booking create debit, booking confirm, decline/refund credit,
 // bulk-order purchase, instant purchase, topup) rather than the old app's
 // single create-time-only row.
+//
+// 2026-07-20: `type` now also carries which of the two split balances a row
+// belongs to (purchased_* vs earned_*) or neither (booking_payment) — see
+// the purchased/earned balance-split comment on TransactionType above for
+// the full reasoning and the two SUM formulas.
 model Transaction {
   id                    BigInt          @id @default(autoincrement())
   userId                String          @map("user_id")
   bookingId             BigInt?         @map("booking_id")
   bulkOrderRequestId    BigInt?         @map("bulk_order_request_id")
   purchaseId            BigInt?         @map("purchase_id")
+  // 2026-07-21: set on the earned_spend row a grant redemption writes (or, in
+  // future, the earned_grant row an issuance flow writes) — ties the ledger
+  // movement back to the specific RewardGrant it corresponds to, per that
+  // model's own comment. Nullable: most Transaction rows (topups, purchased_spend,
+  // booking_payment, refunds) have no grant involved at all.
+  rewardGrantId         BigInt?         @map("reward_grant_id")
   type                  TransactionType
   amount                Decimal         @db.Decimal(10, 2)
   stripePaymentIntentId String?         @map("stripe_payment_intent_id")
@@ -706,6 +931,7 @@ model Transaction {
   booking          Booking?          @relation(fields: [bookingId], references: [id], onDelete: SetNull)
   bulkOrderRequest BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: SetNull)
   purchase         Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  rewardGrant      RewardGrant?      @relation(fields: [rewardGrantId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
 }

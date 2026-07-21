@@ -11,7 +11,8 @@ export interface SupplierBooking {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
-  credits: number;
+  sgdAmount: number;
+  earnedCreditsApplied: number;
   status: BookingStatus;
   listingName?: string;
   requiredCertificates?: { certificateId: string; certificateName: string }[];

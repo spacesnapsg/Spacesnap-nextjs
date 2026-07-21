@@ -195,6 +195,13 @@ export default function BookingModal({ open, onClose, listing }: BookingModalPro
         bookingType: duration as BookingType,
         startDate: toDateString(selectedDate),
         endDate: toDateString(endDate),
+        // TODO(stripe-elements-checkout): booking creation now charges
+        // real-time SGD via Stripe (2026-07-21 write-path session) — this
+        // hardcodes Stripe's well-known test PaymentMethod token so the
+        // booking flow keeps working end-to-end until a real card-entry UI
+        // (Stripe Elements) replaces it. Server-side wiring is real and
+        // tested (lib/bookings.test.ts); only card collection is stubbed.
+        paymentMethodId: "pm_card_visa",
       },
       { onSuccess: handleClose }
     );

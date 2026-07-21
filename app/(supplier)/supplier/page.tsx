@@ -124,7 +124,7 @@ export default function SupplierAnalyticsPage() {
                     <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.userName}</td>
                     <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.listingName}</td>
                     <td className="py-3 pr-4 text-muted-text capitalize whitespace-nowrap">{booking.bookingType}</td>
-                    <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.credits} cr</td>
+                    <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.sgdAmount} cr</td>
                     <td className="py-3 pr-4 whitespace-nowrap">
                       <span
                         className={`inline-block rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${STATUS_STYLES[booking.status]}`}

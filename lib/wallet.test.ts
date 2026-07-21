@@ -1,8 +1,11 @@
 // Coverage for the Sprint 3.5 known-gap #5 fix: wallet top-up creates a real
-// `type: topup` Transaction row and raises the live balance (SUM of the
-// ledger), instead of only ever existing via prisma/seed.ts or test fixtures.
-// Hits the real dev Postgres DB through Prisma (no mocking), same as
-// lib/bulk-orders.test.ts.
+// Transaction row and raises the live balance (SUM of the ledger), instead
+// of only ever existing via prisma/seed.ts or test fixtures. Hits the real
+// dev Postgres DB through Prisma (no mocking), same as lib/bulk-orders.test.ts.
+//
+// 2026-07-21: switched from `topup` to `purchased_topup` (see createTopUp's
+// own comment, lib/wallet.ts) — assertions below updated to match, balance
+// math is unaffected since getCreditBalance's SUM has no type filter.
 import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -57,14 +60,14 @@ describe("createTopUp (Sprint 3.5, known gap #5)", () => {
       const amount = parseTopUpFields({ amount: 150 });
       const { transaction, balance } = await createTopUp(user.id, amount);
 
-      assert.equal(transaction.type, TransactionType.topup);
+      assert.equal(transaction.type, TransactionType.purchased_topup);
       assert.equal(transaction.amount.toString(), "150");
       assert.equal(transaction.userId, user.id);
       assert.equal(balance.toString(), "150");
 
       const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
       assert.equal(transactions.length, 1);
-      assert.equal(transactions[0].type, TransactionType.topup);
+      assert.equal(transactions[0].type, TransactionType.purchased_topup);
 
       const balanceAfter = await getCreditBalance(user.id);
       assert.equal(balanceAfter.toString(), "150");
@@ -83,7 +86,7 @@ describe("createTopUp (Sprint 3.5, known gap #5)", () => {
 
       const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
       assert.equal(transactions.length, 2);
-      assert.ok(transactions.every((t) => t.type === TransactionType.topup));
+      assert.ok(transactions.every((t) => t.type === TransactionType.purchased_topup));
     } finally {
       await prisma.user.delete({ where: { id: user.id } });
     }

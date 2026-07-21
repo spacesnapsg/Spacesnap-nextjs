@@ -21,8 +21,18 @@ function formatDate(dateString: string) {
   });
 }
 
-function isCreditType(type: WalletTransaction["type"]) {
-  return type === "topup" || type === "refund";
+// 2026-07-21: was a hardcoded `type === "topup" || type === "refund"`
+// allowlist — went stale the moment this session added purchased_topup as a
+// second credit-direction type (wallet top-ups now write that instead, see
+// createTopUp's comment in lib/wallet.ts), which silently broke this page's
+// sign display and "This Month's Spend" aggregate for every future top-up.
+// The ledger's own convention (see Transaction's schema comment: "amount
+// sign still carries the actual direction") already makes the type-name
+// allowlist redundant — deriving credit/debit straight from the amount's
+// sign is both the fix and the more correct source of truth, and it can't
+// go stale again as new TransactionType values are added.
+function isCreditType(amount: number) {
+  return amount >= 0;
 }
 
 // Derived from the real transaction ledger rather than a dedicated stats
@@ -41,7 +51,7 @@ function computeStats(transactions: WalletTransaction[]) {
   const spendByMonth = new Map<string, number>();
 
   for (const t of transactions) {
-    if (isCreditType(t.type)) continue;
+    if (isCreditType(t.amount)) continue;
     const d = new Date(t.createdAt);
     const key = monthKey(d);
     const spend = Math.abs(t.amount);
@@ -99,7 +109,7 @@ function BalanceTrendChart({ data }: { data: number[] }) {
 }
 
 function TransactionRow({ transaction }: { transaction: WalletTransaction }) {
-  const isCredit = isCreditType(transaction.type);
+  const isCredit = isCreditType(transaction.amount);
   const Icon = isCredit ? ArrowDownCircle : ArrowUpCircle;
 
   return (

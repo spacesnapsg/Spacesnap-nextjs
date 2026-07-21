@@ -89,7 +89,7 @@ describe("createCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-12-01"),
           endDate: new Date("2027-12-01"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -116,7 +116,7 @@ describe("createCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-12-02"),
           endDate: new Date("2027-12-02"),
-          credits: "10.00",
+          sgdAmount: "10.00",
         },
       });
 
@@ -147,7 +147,7 @@ describe("createCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-12-03"),
           endDate: new Date("2027-12-03"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -191,7 +191,7 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-12-04"),
           endDate: new Date("2027-12-04"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -219,7 +219,7 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-12-06"),
           endDate: new Date("2027-12-06"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -279,7 +279,7 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           bookingType: BookingType.daily,
           startDate: new Date("2027-12-05"),
           endDate: new Date("2027-12-05"),
-          credits: "10.00",
+          sgdAmount: "10.00",
           status: "confirmed",
         },
       });

@@ -2849,3 +2849,183 @@ the original scope — bookings and "Buy Now" purchases still debit
 immediately at creation/fulfillment with no hold step, unchanged. No changes
 to `fulfillBulkOrderWithDebit`'s actual debit logic beyond adding the
 release call.
+
+## Write-Path Session — Stripe Booking Charges + Purchase/RewardGrant Rewiring (2026-07-21)
+
+The session the two prior schema-only amendments (purchased/earned split,
+2026-07-20; gigs + consumables earned-credits, 2026-07-21) were building
+toward: booking creation now actually charges real-time SGD via Stripe, and
+`Purchase.earnedCreditsApplied` is actually wired. Gigs stayed shelved per
+explicit instruction, even though `GigTask`/`GigAssignment` already exist —
+no gig payment logic was touched.
+
+**Task 1 (inspect first) surfaced three findings that changed the session's
+actual scope, reported to the product owner before writing any logic:**
+- Zero Stripe SDK usage anywhere in this repo (confirmed by grep) — the old
+  wallet top-up flow was always credits-only. This session installs `stripe`
+  for the first time.
+- The "`type: purchase` never created by real app code" gap the session
+  brief described was already closed (Sprint 4.5's `createPurchaseWithDebit`
+  — see that session's write-up). What was actually still open on the
+  Purchase side was narrower: wiring the schema-only
+  `Purchase.earnedCreditsApplied` into that existing debit path.
+- No "reward system" (percentage/unit rules) exists anywhere in the schema
+  or code — `earnedBalance` is just a live `Decimal` SUM off the ledger. The
+  session brief asked for the server to "resolve what a reward is worth,"
+  but there was nothing to resolve against. Flagged rather than invented.
+
+**Design decisions, all confirmed with the product owner before writing
+code:**
+- **New `RewardGrant` model** (`userId`, `type` enum
+  `booking_discount_pct`/`free_consumable_unit`/`gig_payout_credit`,
+  `value`, `status` available/redeemed/expired, `grantedVia` free-text,
+  `redeemedAt`) — a discount request references a specific, server-issued
+  grant by id, never a client-supplied dollar amount or percentage.
+  `earnedBalance` as a pooled SUM still exists for reporting but nothing
+  redeems against it directly. New `Transaction.rewardGrantId` FK ties an
+  `earned_spend` row back to the grant it spent. No issuance flow exists yet
+  for any grant type — rows are seeded directly via Prisma, same as every
+  other "schema now, write-path later" item in this codebase. Migration
+  `20260720165211_reward_grants_and_booking_stripe` (the auto timestamp
+  landed in UTC slightly behind the neighboring 2026-07-21 migration's
+  filename — cosmetic only, no dependency between them, left as-is rather
+  than risk desyncing `_prisma_migrations` tracking by renaming).
+- **Stripe ordering:** the `PaymentIntent` is created *before* the DB
+  transaction opens (confirmed with the product owner — Prisma's
+  `$transaction` can't roll back an external API call). If the DB
+  transaction then fails for any reason (double-booking race, lost
+  grant-redemption race), `createBookingWithDebit` issues a compensating
+  Stripe refund before rethrowing, so a charge never survives without a
+  matching booking. A fully-discounted booking (grant clamps to 100%) skips
+  the Stripe call entirely — Stripe rejects zero-amount PaymentIntents
+  outright, caught live by the RewardGrant test suite before it could ship.
+- **Server-side test tokens only, no checkout UI this session** — the API
+  takes a `paymentMethodId` (Stripe's own static test tokens,
+  `pm_card_visa`/`pm_card_chargeDeclined`, safe to reuse indefinitely in
+  test mode); no Stripe Elements card-entry component was built. Real
+  card-entry UI is explicit follow-up scope, not silently assumed done.
+- **Purchases stay purchasedBalance-funded, not a Stripe charge per
+  purchase** — unlike bookings, consumables are SpaceSnap's own stock, so
+  the MAS compliance boundary that forces bookings onto real-time Stripe
+  doesn't apply here. `createPurchaseWithDebit` switched from the old
+  combined-ledger `purchase` type to `purchased_spend`, checked against a
+  new `assertSufficientPurchasedBalance` (`lib/credits.ts`) instead of the
+  blind combined `assertSufficientBalance`.
+- **Stripe Connect (85/15 operator payouts) confirmed out of scope** — single
+  charge from member to platform's own account only, per the product
+  owner's explicit confirmation. Sprint 6's full scope, untouched.
+
+**What was built:**
+- `lib/stripe.ts` — Stripe client (`stripe` npm package, first use in this
+  repo) + a `toStripeCents` helper (`Decimal` SGD → integer minor units).
+- `lib/reward-grants.ts` — `resolveRewardGrantDiscount` (read-only sizing,
+  called ahead of the Stripe call so the charge amount is known before the
+  DB transaction opens; clamps the discount to the charge amount so a grant
+  can never produce a net credit) and `redeemRewardGrant` (atomic
+  `updateMany` status-flip inside the caller's transaction — the actual
+  concurrency guard against double-redeeming the same grant).
+- `lib/bookings.ts`: `createBookingWithDebit` rewritten — no longer checks
+  or debits any wallet balance; charges `sgdAmount - earnedCreditsApplied`
+  via a real Stripe PaymentIntent, writes a `booking_payment` Transaction
+  (+ `earned_spend` if a grant was redeemed), same atomic `$transaction` as
+  before for the Booking/Transaction/ActivityLog rows. New
+  `StripeChargeFailedError`/re-exported `RewardGrantNotRedeemableError`.
+  `declineBookingWithRefund`/`confirmBookingWithAudit` untouched — decline
+  is a real, explicitly-flagged remaining gap (see sprint plan).
+- `lib/purchases.ts`: `createPurchaseWithDebit` rewired to
+  `purchased_spend`/`assertSufficientPurchasedBalance`, plus the same
+  RewardGrant (`free_consumable_unit`) redemption pattern as bookings.
+- `lib/wallet.ts`: `createTopUp` switched from `TransactionType.topup` to
+  `purchased_topup` — **found live, not anticipated in planning**: with
+  Purchase now checking `purchasedBalance` specifically instead of the
+  blind combined sum, top-ups still writing the old un-partitioned `topup`
+  type meant no top-up could ever fund a "Buy Now" purchase going forward.
+  Fixed in the same session per this codebase's "known gaps get fixed at
+  the point they're rebuilt" rule, not deferred. Doesn't backfill
+  pre-existing seeded `topup` rows.
+- `app/(user)/wallet/page.tsx`: **second live-verification catch** — the
+  wallet-topup type change above broke this page's `isCreditType` helper,
+  which hardcoded `type === "topup" || type === "refund"` to decide the
+  +/− sign and to exclude credits from "This Month's Spend." A fresh
+  top-up rendered as a debit and inflated the spend figure. Root-caused via
+  live browser verification (screenshot alone looked fine, `get_page_text`
+  caught the wrong sign), not caught by any test (no frontend test coverage
+  for this page). Fixed by deriving credit/debit from the transaction's
+  `amount` sign directly instead of a type allowlist — matches the ledger's
+  own documented convention ("amount sign carries the direction," see
+  `Transaction`'s schema comment) and can't go stale again as new
+  `TransactionType` values are added.
+- `components/BookingModal.tsx` / `lib/hooks/useListings.ts`: `Book Now`
+  now sends a hardcoded `pm_card_visa` test token as `paymentMethodId`, with
+  a `TODO(stripe-elements-checkout)` comment — keeps the live golden path
+  working end-to-end pending a real card-entry UI, not a silent no-op.
+- Schema: `RewardGrant`/`RewardGrantType`/`RewardGrantStatus`,
+  `Transaction.rewardGrantId`, dated comments on `Booking`/`Purchase`
+  documenting the closed gap. `.env`/`.env.testing`/`.env.example` gained
+  `STRIPE_SECRET_KEY` (a real Stripe test-mode sandbox key in the two
+  gitignored env files, a placeholder in `.env.example`).
+
+**A third live-only bug, found and fixed before any of the above could be
+verified at all:** `createBookingWithDebit` originally passed
+`customer: user.stripeCustomerId` to the PaymentIntent create call. Every
+seeded user's `stripeCustomerId` (e.g. `cus_test_ethan001`,
+`prisma/seed.ts`) is a placeholder string, not a real Stripe Customer object
+— passing it made every live Stripe call fail with "No such customer,"
+invisible to the unit test suite because test fixtures never set
+`stripeCustomerId` at all (so the field was already `null`/`undefined`
+there, masking the bug). Fixed by not attaching a Customer at all — a
+one-off charge against a supplied PaymentMethod doesn't need one; real
+Stripe Customer creation/lookup is its own unbuilt feature. Caught only by
+driving the actual browser flow against the real Stripe sandbox, not by
+`npm test` or `tsc`/`eslint`/`next build` alone — all three passed the whole
+time this bug was live.
+
+**Tests:** `lib/bookings.test.ts`'s `createBookingWithDebit` coverage fully
+rewritten (real Stripe test-mode API calls, no mocking, same "hit the real
+backing service" convention as this file's existing Postgres coverage) —
+full-cost charge + `booking_payment` row, `pm_card_chargeDeclined` rejection
+via `StripeChargeFailedError`, a genuine double-booking race against the DB
+exclusion constraint proving the compensating-refund path actually fires,
+plus 5 new RewardGrant redemption cases (percentage discount, already-
+redeemed, wrong owner, wrong type, 100%-clamp skipping Stripe entirely).
+`lib/purchases.test.ts` similarly rewritten for `purchasedBalance`
+fixtures + 5 new RewardGrant (`free_consumable_unit`) cases.
+`lib/wallet.test.ts` updated for `purchased_topup`. All 192 tests pass (0
+regressions), `npx tsc --noEmit`, `npx eslint .` (same two pre-existing,
+unrelated findings as every prior session), and `npx next build` all clean.
+
+**Verified live**, full loop via the real browser against the real Stripe
+test sandbox (not just unit tests) — `ethan@example.com`, Studio Space A
+(120 cr/day) and Compostable Packaging Boxes (18.50 cr/unit):
+- Booked Studio Space A for Jul 25 → `201`, `Booking.sgdAmount` 120,
+  exactly one `booking_payment` Transaction (`-120`,
+  `stripePaymentIntentId` set) — cross-checked directly against the Stripe
+  API (`paymentIntents.retrieve`): `status: succeeded, amount: 12000,
+  currency: sgd`, confirming the DB row and the actual Stripe charge agree.
+- "Buy Now" on the packaging listing failed first with "Insufficient credit
+  balance" — correct, expected behavior: Ethan's existing 80 cr was all
+  legacy `topup` rows, and `purchasedBalance` (the new `purchased_topup`/
+  `purchased_spend`-only sum) was genuinely zero. Topped up 50 credits via
+  the real Top Up Credits UI (which is what surfaced the wallet-topup and
+  wallet-page bugs above), then "Buy Now" succeeded — "Purchase Complete...
+  18.5 credits were charged."
+- All scratch state (the test booking + its Transaction, the test purchase +
+  its Transaction + stock restored, the test top-up Transaction + its
+  ActivityLog row) deleted via one-off scripts afterward; re-confirmed via
+  the DB directly, not just the UI.
+
+**Not touched, explicitly deferred, not silently dropped:**
+- Booking decline still uses the old combined-ledger `refund` credit, not a
+  real Stripe refund + `earned_grant` reversal — flagged as a new standalone
+  gap in `SPRINT_PLAN_NEXTJS_REWRITE.md` rather than assumed covered by this
+  session's refund-on-DB-failure logic (that logic only fires for the
+  *creation*-time compensating case, not a supplier's later decline).
+- No RewardGrant issuance flow of any kind (admin/promo UI, referrals, gig
+  payouts) — grants are only reachable today by seeding them directly.
+  Flagged as its own new known gap in the sprint plan.
+- Gigs: confirmed still shelved per this session's explicit scoping
+  instruction, despite `GigTask`/`GigAssignment` already existing in schema.
+- Stripe Connect / operator payout splits: confirmed out of scope with the
+  product owner, Sprint 6's full remit.
+- No Stripe Elements checkout UI — `BookingModal` sends a hardcoded test
+  token; a real card-entry flow is unbuilt follow-up work, not assumed done.

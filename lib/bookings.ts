@@ -1,10 +1,30 @@
-import { BookingType, BookingStatus, TransactionType, ActivityActionType, type Booking, Prisma } from "@/app/generated/prisma/client";
+import {
+  BookingType,
+  BookingStatus,
+  TransactionType,
+  ActivityActionType,
+  RewardGrantType,
+  type Booking,
+  Prisma,
+} from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
-import { assertSufficientBalance, getCreditBalance, InsufficientCreditBalanceError } from "@/lib/credits";
+import { stripe, toStripeCents } from "@/lib/stripe";
+import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
 
-export { getCreditBalance, InsufficientCreditBalanceError };
+export { RewardGrantNotRedeemableError };
+
+// Thrown when the Stripe PaymentIntent create/confirm call itself fails, or
+// resolves to a non-`succeeded` status (e.g. `requires_action` for 3DS) —
+// this session's flow is server-side test tokens only (no Stripe Elements
+// client), so a status other than immediate success is treated as a hard
+// failure rather than something the route can walk the user through.
+export class StripeChargeFailedError extends Error {
+  constructor(public readonly cause: unknown) {
+    super("Payment could not be processed.");
+  }
+}
 
 const BOOKING_TYPES = new Set<string>(Object.values(BookingType));
 
@@ -34,7 +54,8 @@ export function serializeBooking(booking: Booking | BookingWithRelations | Booki
     bookingType: booking.bookingType,
     startDate: booking.startDate.toISOString().slice(0, 10),
     endDate: booking.endDate.toISOString().slice(0, 10),
-    credits: Number(booking.credits),
+    sgdAmount: Number(booking.sgdAmount),
+    earnedCreditsApplied: Number(booking.earnedCreditsApplied),
     status: booking.status,
     createdAt: booking.createdAt.toISOString(),
     updatedAt: booking.updatedAt.toISOString(),
@@ -70,6 +91,8 @@ interface ParsedBookingFields {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
+  paymentMethodId: string;
+  rewardGrantId?: bigint;
 }
 
 function isDateString(value: unknown): value is string {
@@ -103,6 +126,25 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
     errors.endDate = ["endDate must be on or after startDate."];
   }
 
+  // 2026-07-21: booking creation charges real-time SGD via Stripe (see
+  // createBookingWithDebit, lib/bookings.ts) — a Stripe PaymentMethod id is
+  // now required on every request. This session's flow is server-side test
+  // tokens only (no Stripe Elements client), so no card-collection UI is
+  // implied by this field.
+  if (typeof b.paymentMethodId !== "string" || b.paymentMethodId.length === 0) {
+    errors.paymentMethodId = ["paymentMethodId is required."];
+  }
+
+  let rewardGrantId: bigint | undefined;
+  if (b.rewardGrantId !== undefined && b.rewardGrantId !== null) {
+    const rawGrantId = typeof b.rewardGrantId === "number" ? String(b.rewardGrantId) : b.rewardGrantId;
+    if (typeof rawGrantId !== "string" || !/^\d+$/.test(rawGrantId)) {
+      errors.rewardGrantId = ["rewardGrantId must be an id."];
+    } else {
+      rewardGrantId = BigInt(rawGrantId);
+    }
+  }
+
   if (Object.keys(errors).length > 0) {
     throw new ApiValidationError(errors);
   }
@@ -112,6 +154,8 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
     bookingType: b.bookingType as BookingType,
     startDate: b.startDate as string,
     endDate: b.endDate as string,
+    paymentMethodId: b.paymentMethodId as string,
+    rewardGrantId,
   };
 }
 
@@ -163,54 +207,161 @@ interface CreateBookingWithDebitParams {
   startDate: string;
   endDate: string;
   cost: Prisma.Decimal;
+  paymentMethodId: string;
+  rewardGrantId?: bigint;
 }
 
-// Sprint 3.5 known-gap #1: balance check, Booking insert, and the ledger
-// debit all happen inside one DB transaction, so a booking can never exist
-// without a matching debit row and a debit never happens without the booking.
+// 2026-07-21 write-path session: replaces the old combined-wallet debit with
+// the purchased/earned split's actual design (see Booking's schema comment
+// and TransactionType's purchased/earned comment) — a booking is charged
+// full price in real-time SGD via Stripe, never from purchasedBalance, with
+// an optional earnedBalance discount resolved by redeeming a specific
+// RewardGrant (never a client-supplied amount).
+//
+// Ordering, confirmed with the product owner before writing this: the Stripe
+// PaymentIntent is created *before* the DB transaction opens, since Prisma's
+// $transaction can't roll back an external API call. If the DB transaction
+// then fails for any reason (the overlap-constraint race, a lost
+// grant-redemption race, an unexpected error), the charge has already
+// succeeded — so the catch block below issues a Stripe refund before
+// rethrowing, rather than leaving a charged user with no booking. This
+// mirrors the "a booking never exists without its matching charge record,
+// and vice versa" atomicity discipline the old combined-ledger version had,
+// extended to a step Prisma's transaction can't cover on its own.
+//
 // Cert-gating, overlap, and consumables checks stay as pre-checks in the
-// route, run before this transaction opens (unchanged).
-// Note: this doesn't add serializable isolation, so two concurrent requests
-// from the same near-empty-balance user could both read a sufficient balance
-// before either commits (analogous to the overlap race Sprint 4 Item 3
-// closed with a DB exclusion constraint) — there's no equivalent DB-level
-// non-negative-balance constraint here yet. Out of this item's scope, not
-// silently missed.
+// route, run before this function is even called (unchanged).
 export async function createBookingWithDebit(params: CreateBookingWithDebitParams): Promise<Booking> {
-  return prisma.$transaction(async (tx) => {
-    await assertSufficientBalance(tx, params.userId, params.cost);
+  let discount = new Prisma.Decimal(0);
+  let grantId: bigint | null = null;
 
-    const booking = await tx.booking.create({
-      data: {
-        userId: params.userId,
-        listingId: params.listingId,
-        bookingType: params.bookingType,
-        startDate: new Date(params.startDate),
-        endDate: new Date(params.endDate),
-        credits: params.cost,
-      },
+  if (params.rewardGrantId !== undefined) {
+    const resolved = await resolveRewardGrantDiscount(
+      params.userId,
+      params.rewardGrantId,
+      RewardGrantType.booking_discount_pct,
+      params.cost
+    );
+    discount = resolved.discount;
+    grantId = resolved.grant.id;
+  }
+
+  const chargeAmount = params.cost.sub(discount);
+
+  // A grant can (per its own clamp in resolveRewardGrantDiscount) cover the
+  // full cost, leaving nothing to actually charge — Stripe rejects
+  // zero-amount PaymentIntents outright, so this is a real case to special-
+  // case, not a hypothetical. No PaymentIntent is created at all; the
+  // Transaction row below records the zero-amount charge for audit parity
+  // with every other booking, same "audit row, no ledger movement" idiom
+  // confirmBookingWithAudit already uses elsewhere in this file.
+  let paymentIntentId: string | null = null;
+  if (chargeAmount.gt(0)) {
+    // Deliberately not attaching `customer: user.stripeCustomerId` — the
+    // seeded values there (e.g. "cus_test_ethan001") are placeholder
+    // strings from prisma/seed.ts, not real Stripe Customer objects, so
+    // passing one to a live Stripe API call fails with "No such customer."
+    // Real customer creation/lookup is its own feature (saved payment
+    // methods, customer-object lifecycle) that hasn't been built — out of
+    // this session's scope (a one-off charge against a supplied
+    // PaymentMethod doesn't require a Customer at all). Confirmed live
+    // against the Stripe test sandbox before landing this.
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: toStripeCents(chargeAmount),
+        currency: "sgd",
+        payment_method: params.paymentMethodId,
+        payment_method_types: ["card"],
+        confirm: true,
+        description: `SpaceSnap booking — listing ${params.listingId}`,
+      });
+    } catch (error) {
+      throw new StripeChargeFailedError(error);
+    }
+
+    if (paymentIntent.status !== "succeeded") {
+      throw new StripeChargeFailedError(new Error(`PaymentIntent ${paymentIntent.id} ended in status "${paymentIntent.status}".`));
+    }
+
+    paymentIntentId = paymentIntent.id;
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.create({
+        data: {
+          userId: params.userId,
+          listingId: params.listingId,
+          bookingType: params.bookingType,
+          startDate: new Date(params.startDate),
+          endDate: new Date(params.endDate),
+          sgdAmount: params.cost,
+          earnedCreditsApplied: discount,
+        },
+      });
+
+      await tx.transaction.create({
+        data: {
+          userId: params.userId,
+          bookingId: booking.id,
+          type: TransactionType.booking_payment,
+          amount: chargeAmount.negated(),
+          stripePaymentIntentId: paymentIntentId,
+          description:
+            paymentIntentId !== null
+              ? `Booking #${booking.id} — ${chargeAmount} SGD charged via Stripe.`
+              : `Booking #${booking.id} — fully covered by a reward discount, no Stripe charge needed.`,
+        },
+      });
+
+      if (grantId !== null && discount.gt(0)) {
+        await redeemRewardGrant(tx, grantId);
+        await tx.transaction.create({
+          data: {
+            userId: params.userId,
+            bookingId: booking.id,
+            rewardGrantId: grantId,
+            type: TransactionType.earned_spend,
+            amount: discount.negated(),
+            description: `Booking #${booking.id} — reward grant #${grantId} redeemed for a ${discount} SGD discount.`,
+          },
+        });
+      }
+
+      await tx.activityLog.create({
+        data: {
+          userId: params.userId,
+          actionType: ActivityActionType.booking_created,
+          description: discount.gt(0)
+            ? `Booking #${booking.id} created (${chargeAmount} SGD charged, ${discount} SGD reward discount applied).`
+            : `Booking #${booking.id} created (${chargeAmount} SGD charged).`,
+          relatedListingId: params.listingId,
+        },
+      });
+
+      return booking;
     });
-
-    await tx.transaction.create({
-      data: {
-        userId: params.userId,
-        bookingId: booking.id,
-        type: TransactionType.booking,
-        amount: params.cost.negated(),
-      },
-    });
-
-    await tx.activityLog.create({
-      data: {
-        userId: params.userId,
-        actionType: ActivityActionType.booking_created,
-        description: `Booking #${booking.id} created (${params.cost} credits debited).`,
-        relatedListingId: params.listingId,
-      },
-    });
-
-    return booking;
-  });
+  } catch (error) {
+    // The Stripe charge above already succeeded (if there was one at all —
+    // a fully-discounted booking has no PaymentIntent to refund) — anything
+    // that fails past this point (double-booking race, lost
+    // grant-redemption race, or any other DB error) must not leave the user
+    // charged with no booking to show for it, so refund before rethrowing
+    // the original error.
+    if (paymentIntentId !== null) {
+      await stripe.refunds.create({ payment_intent: paymentIntentId }).catch((refundError) => {
+        // Best-effort: if even the refund fails, the original DB error below
+        // is still the more actionable thing to surface to the caller, but a
+        // charged-with-no-booking user needs a paper trail to reconcile from.
+        console.error(
+          `createBookingWithDebit: DB transaction failed AND the compensating refund also failed for PaymentIntent ${paymentIntentId}. Manual reconciliation required.`,
+          refundError
+        );
+      });
+    }
+    throw error;
+  }
 }
 
 // Thrown inside confirmBookingWithAudit when the booking isn't in `pending`
@@ -286,7 +437,8 @@ export class BookingNotDeclinableError extends Error {
 // Per CLAUDE1.md's read of the old build (SupplierBookingController::decline),
 // the old code summed the booking's existing debit Transactions and refunded
 // that. This design instead reads the amount straight off the Booking row's
-// stored `credits` field (set once, at creation, in createBookingWithDebit)
+// stored `sgdAmount` field (set once, at creation, in createBookingWithDebit,
+// renamed from `credits` in the 2026-07-20 purchased/earned balance split)
 // rather than recomputing from the listing's current price — pricing can
 // change after a booking exists, but the amount actually debited can't.
 export async function declineBookingWithRefund(bookingId: bigint): Promise<BookingWithRelations> {
@@ -307,8 +459,8 @@ export async function declineBookingWithRefund(bookingId: bigint): Promise<Booki
         userId: updated.userId,
         bookingId: updated.id,
         type: TransactionType.refund,
-        amount: updated.credits,
-        description: `Booking #${updated.id} declined — refund of the ${updated.credits} debited at creation.`,
+        amount: updated.sgdAmount,
+        description: `Booking #${updated.id} declined — refund of the ${updated.sgdAmount} debited at creation.`,
       },
     });
 
@@ -316,7 +468,7 @@ export async function declineBookingWithRefund(bookingId: bigint): Promise<Booki
       data: {
         userId: updated.userId,
         actionType: ActivityActionType.booking_declined,
-        description: `Booking #${updated.id} declined (${updated.credits} credits refunded).`,
+        description: `Booking #${updated.id} declined (${updated.sgdAmount} credits refunded).`,
         relatedListingId: updated.listingId,
       },
     });
