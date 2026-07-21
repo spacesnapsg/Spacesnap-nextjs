@@ -6,10 +6,12 @@ import { stripe } from "@/lib/stripe";
 // Sprint 6 checklist item: "Stripe webhook tested in sandbox for all states:
 // success, failure, refund." Every Stripe-charging write path in this
 // codebase (createBookingWithDebit, modifyBookingWithFee,
-// cancelBookingWithRefund, declineBookingWithRefund, lib/bookings.ts) already
-// records its own Transaction row synchronously, in the same request that
-// makes the Stripe API call — so this webhook is not the primary write path
-// for any of them. Its job is the safety net those write paths can't cover
+// cancelBookingWithRefund, resolveBookingCreditWithRefund, lib/bookings.ts —
+// NOT declineBookingPendingResolution, which defers the Stripe call entirely
+// until the credit it issues actually resolves) already records its own
+// Transaction row synchronously, in the same request that makes the Stripe
+// API call — so this webhook is not the primary write path for any of them.
+// Its job is the safety net those write paths can't cover
 // themselves: detecting the case where a Stripe charge/refund succeeded but
 // the app's own DB write never landed (process died mid-request, the
 // compensating-refund catch's own refund call failed silently, a refund was
@@ -107,7 +109,7 @@ async function reconcileChargeRefunded(charge: Stripe.Charge): Promise<void> {
 
   if (!recordedRefundTotal.equals(stripeRefundTotal)) {
     console.error(
-      `[stripe-webhook] charge.refunded for PaymentIntent ${paymentIntentId}: Stripe reports ${stripeRefundTotal} SGD refunded in total, but this app's ledger only has ${recordedRefundTotal} SGD across matching "refund" Transaction rows. Possible causes: a refund issued outside this app (e.g. the Stripe Dashboard), or a refund Transaction write that failed after cancelBookingWithRefund/declineBookingWithRefund's stripe.refunds.create call already succeeded. Manual reconciliation required.`
+      `[stripe-webhook] charge.refunded for PaymentIntent ${paymentIntentId}: Stripe reports ${stripeRefundTotal} SGD refunded in total, but this app's ledger only has ${recordedRefundTotal} SGD across matching "refund" Transaction rows. Possible causes: a refund issued outside this app (e.g. the Stripe Dashboard), or a refund Transaction write that failed after cancelBookingWithRefund/resolveBookingCreditWithRefund's stripe.refunds.create call already succeeded. Manual reconciliation required.`
     );
   }
 }

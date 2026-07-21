@@ -44,6 +44,7 @@ const BOOKING_STATUS_STYLES: Record<UserBooking["status"], string> = {
   active: "bg-success-green/15 text-success-green border-success-green/30",
   completed: "bg-muted-text/15 text-muted-text border-border",
   cancelled: "bg-red-400/15 text-red-400 border-red-400/30",
+  declined_pending_resolution: "bg-red-400/15 text-red-400 border-red-400/30",
 };
 
 const BULK_ORDER_STATUS_STYLES: Record<MyBulkOrderRequest["status"], string> = {
@@ -95,6 +96,10 @@ const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   signoff_requested: Award,
   signoff_reviewed: Award,
   instant_purchase_completed: ShoppingBag,
+  booking_declined_pending_resolution: CalendarCheck,
+  booking_credit_granted: Wallet,
+  booking_credit_redeemed: Wallet,
+  booking_credit_refunded: Wallet,
 };
 
 // Only booking_created/confirmed/declined/completed descriptions ever

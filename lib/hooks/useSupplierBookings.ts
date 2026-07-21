@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
-export type BookingStatus = "pending" | "confirmed" | "active" | "completed" | "cancelled";
+export type BookingStatus = "pending" | "confirmed" | "active" | "completed" | "cancelled" | "declined_pending_resolution";
 export type BookingType = "daily" | "weekly" | "monthly";
 
 export interface SupplierBooking {

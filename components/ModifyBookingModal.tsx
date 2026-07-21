@@ -123,7 +123,7 @@ function ModifyBookingModalContent({ onClose, booking }: { onClose: () => void; 
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-text">Modification fee</span>
                   <span className="text-body-text font-medium">
-                    {MODIFICATION_FEE_PERCENT}% &middot; S${feeAmount.toFixed(2)}
+                    {MODIFICATION_FEE_PERCENT}% &middot; {feeAmount.toFixed(2)} credits
                   </span>
                 </div>
                 <p className="text-xs text-muted-text mt-2">
@@ -164,7 +164,7 @@ function ModifyBookingModalContent({ onClose, booking }: { onClose: () => void; 
               onClick={handleConfirm}
               className={`flex-1 ${!selectedDate || isSubmitting || cardBlocked ? "opacity-50 cursor-not-allowed" : ""}`}
             >
-              {isSubmitting ? "Rescheduling…" : isFeeTier ? `Reschedule (S$${feeAmount.toFixed(2)})` : "Reschedule"}
+              {isSubmitting ? "Rescheduling…" : isFeeTier ? `Reschedule (${feeAmount.toFixed(2)} credits)` : "Reschedule"}
             </Button>
           </div>
         </div>

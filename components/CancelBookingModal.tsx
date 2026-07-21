@@ -81,7 +81,7 @@ export default function CancelBookingModal({ open, onClose, booking }: CancelBoo
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-text">Refund</span>
           <span className="text-body-text font-medium">
-            {refundPercent}% &middot; S${refundAmount.toFixed(2)} of S${booking.sgdAmount.toFixed(2)}
+            {refundPercent}% &middot; {refundAmount.toFixed(2)} of {booking.sgdAmount.toFixed(2)} credits
           </span>
         </div>
         <p className="text-xs text-muted-text mt-2">

@@ -59,7 +59,7 @@ Not funded by or claimed under the Startup SG Tech POC grant.
 
 Bottom line: don't rebuild the Verifications tab until the trigger/effect of `is_verified` is nailed down — probably worth a quick grep of `spacesnap-api` (`UserController@pendingVerifications`) to see what actually populates that pending list, since the frontend-facing docs don't say.
 Sign-out is still unwired in both UserNavbar.tsx and SupplierNavbar.tsx — same gap as the old app (buttons present, never call clearSession()).
-Notifications page doesn't exist as a route, only the NotificationsPanel dropdown component — matches old app structure where /notifications was a page but this port hasn't built it yet.
+Notifications page doesn't exist as a route, only the NotificationsPanel dropdown component — matches old app structure where /notifications was a page but this port hasn't built it yet. **The dropdown itself was mock-data-only (`MOCK_NOTIFICATIONS`) until 2026-07-21**, when it was wired to a real `Notification` model/backend as part of the BookingCredit feature — see CLAUDE1.md "BookingCredit Issuance — Rebook-or-Refund Flow." A dedicated `/notifications` page (vs. just the dropdown) is still not built.
 The old app's known admin red/orange color never got tokenized (hardcoded arbitrary hex values). Worth a quick check that this rewrite's from-admin-red-start to-admin-orange-end classes are real theme tokens and didn't reintroduce that gap.
 
 
@@ -76,7 +76,6 @@ The old app's known admin red/orange color never got tokenized (hardcoded arbitr
 - [x] Prisma schema: users, suppliers, spaces, credentials, training_records, bookings, transactions, certificates (with pending/approved/rejected states)
 - [x] Exclusion constraint on `bookings` to prevent overlapping time slots (Prisma doesn't support this natively — needs raw SQL migration)
 - [x] CHECK constraints for listing pricing rules (space/equipment vs. consumables)
-- [ ] `is_verified` boolean on users (admin-review concept — kept distinct from any auth-provider email verification flag) — deliberately not added yet, see Sprint 1 notes above on undefined trigger/effect
 - [x] Foreign keys across all tables
 - [x] Seed script with test/mock data
 - [x] Manual test: overlapping booking rejected at DB level (`23P01` exclusion violation confirmed via raw SQL insert)
@@ -274,9 +273,12 @@ belong to.
   the Sprint 6 admin route it was blocked on. Per-company tier `<select>` on
   the admin Companies tab (`components/AdminUsersCompanies.tsx`). See the
   Sprint 6 item above for the full write-up.
-- [ ] **`BookingCredit` redemption UI ("cancelled — here are alternatives,
-  rebook") — blocked on issuance (Sprint 6).** No component references
-  `BookingCredit` anywhere. Needs the issuance write-path built first.
+- [x] **`BookingCredit` issuance + redemption UI — closed 2026-07-21.** Full
+  rebook-or-refund flow, built per the product owner's specific UX brief
+  (browse-alternatives-first funnel, refund buried as the last card, not an
+  upfront choice; no "S$"/SGD anywhere in the app, credits-only display).
+  See CLAUDE1.md "BookingCredit Issuance — Rebook-or-Refund Flow" for the
+  full design and live-verification writeup.
 - [ ] **Rewards/tier UI (Free/Starter/Growth/Power) — blocked on Sprint 6.5.**
   No mock or real UI exists for this anywhere in the repo. Do not design this
   screen until the tier thresholds/spend-window/referral-bonus numbers in
@@ -339,7 +341,7 @@ belong to.
     - `SupplierPayable.invoicingCadence` mapping from `Company.supplierTier`, also confirmed with the product owner: `free`→monthly, `preferred`→biweekly, `top`→weekly (`invoicingCadenceForSupplierTier`, `lib/booking-payments.ts`).
     - See CLAUDE1.md "Cancellation Route + Commission-Rate Closure" for the full write-up, live-verification transcript, and test coverage.
   - [x] **`SupplierPayable` correction: completion earnings + live aggregate balance — closed 2026-07-21 (same day, separate session).** The line above initially wrote a `SupplierPayable` for the *cancelled* booking itself with a fabricated `grossAmount` — wrong, since a cancelled booking's money was refunded, not earned. Caught by the product owner's own worked example (2× $5 completed bookings + 1× $5 booking declined <3 days out → supplier should net $8.50, SpaceSnap $1.50). Fixed: new `createCompletedBookingPayable` (`lib/supplier-payables.ts`) writes the real earning row when a booking actually completes (wired into `checkOutCheckIn`, `lib/check-ins.ts` — this row never existed anywhere before this fix). `declineBookingWithRefund`'s row is now a pure penalty debit (`grossAmount 0`); `cancelBookingWithRefund`'s is now a zero-effect audit row (all three amounts 0), not a fabricated payout. New `getSupplierPendingPayableBalance(companyId)` — live `SUM(netAmount)` over a company's pending rows, same never-denormalized principle as `getCreditBalance` — is what actually nets a penalty against other bookings' earnings; no explicit "check balance, then deduct" step exists or is needed anywhere. See CLAUDE1.md "SupplierPayable Correction — Completion Earnings + Live Aggregate Balance" for the full write-up, including the live verification reproducing the exact worked example through the real API routes.
-  - [ ] **`BookingCredit` issuance.** Model exists, nothing writes to it — the "cancelled, here are alternatives, rebook" credit-note flow (both the backend issuance and the UI) is unbuilt.
+  - [x] **`BookingCredit` issuance — closed 2026-07-21.** Full rebook-or-refund flow built (issuance, redemption, forced-refund cron, admin goodwill grants) — see the Sprint 4.75 line above and CLAUDE1.md "BookingCredit Issuance — Rebook-or-Refund Flow" for the full design. `declineBookingWithRefund` renamed to `declineBookingPendingResolution` as part of this — it no longer fires an immediate Stripe refund, it issues the credit and defers the refund to the user's own choice.
   - [x] **`declineBookingWithRefund` real rewrite** — closed 2026-07-21. Replaced the flat combined-ledger `refund` Transaction with a real `stripe.refunds.create` against the original PaymentIntent, sized by `calculateUserCancellationRefund`/`calculateSupplierCancellationPenalty` (the cancellation-window percent tiers from the schema session above), plus a proportional `earned_grant` reversal of any `earnedCreditsApplied` discount (ledger-only — the `RewardGrant` row stays `redeemed`, since its job was authorizing the original discount, not tracking the live balance). `cancelledAt`/`cancelledBy`/`cancellationReason`/`userRefundPercent`/`supplierPenaltyPercent` are now written on the `Booking` row. Deliberately still does **not** write a `SupplierPayable` (blocked on the commission-rate gap below) or issue a `BookingCredit` (issuance policy still undecided) — both flagged in the function's own header comment, not guessed at. 4 new tests added to `lib/bookings.test.ts` (100%/50%/0% refund tiers, proportional earned-credit reversal) alongside the 4 existing decline tests, all passing against the real dev DB + Stripe test-mode sandbox (`npm test`: 213/213). `npx tsc --noEmit`, `eslint`, and `next build` all clean.
   - [x] Which `InvoicingCadence` each `SupplierTier` maps to — ~~undecided~~ **this line was stale** (caught 2026-07-21): confirmed with the product owner and built the same day as the cancellation route — `free`→monthly, `preferred`→biweekly, `top`→weekly (`invoicingCadenceForSupplierTier`, `lib/booking-payments.ts`), per the item a few lines above.
 
@@ -385,7 +387,7 @@ rate and supplier-tier gaps in Sprint 6.
 
   This is deliberately scoped to the booking-checkout "cr" label only — it does not apply to `pricePerUnit` (consumables), which stays genuinely `purchasedBalance`-funded and unaffected. Whatever ToS document/page this rewrite ends up shipping needs this as its own section.
 - [ ] Supplier dashboard: manage spaces, view bookings, access logs
-- [ ] Notifications: booking confirmations, credential expiry alerts, access events
+- [x] Notifications: booking confirmations, credential expiry alerts — closed 2026-07-21 as part of the BookingCredit feature (real `Notification` backend, `booking_confirmed`/`cert_expiry`/`credit_topup`/`cert_earned`/`booking_credit_pending` all wired; `cert_expiry` swept daily via the same cron as the BookingCredit forced-refund job). "Access events" (check-in/out) still not wired — no notification type exists for those, and Sprint 4.5 already flagged check-ins themselves as kiosk-only/deferred to Sprint 5, not this repo's job yet.
 - [ ] Final responsive/polish pass
 - [ ] **Re-run the full PreUAT checklist against the new stack** — every item that passed on the old Bubble/Laravel build gets re-verified here, not assumed carried over
 - [ ] Financials/audit-trail spot check: confirm revenue-by-operator figures are complete now that the transaction gaps from Sprint 3.5 are closed

@@ -3819,3 +3819,206 @@ this session, still open.
   where the first issuance flow lives (see the Sprint 6 item's own note).
 - No second-reviewer sign-off on live payment code — that Sprint 6 checklist
   line is a human-process item, not something a session can close by itself.
+
+## BookingCredit Issuance — Rebook-or-Refund Flow (2026-07-21)
+
+Closes the standing "`BookingCredit` issuance — needs a product decision on
+where the first flow lives" gap (Sprint 6/4.75). Scoped live with the
+product owner across several rounds before building:
+
+**Trigger, confirmed:** only two ways a `BookingCredit` is ever issued —
+(1) automatically when a supplier declines a booking that had real money
+charged to it, (2) an admin manual goodwill grant. Explicitly **not**
+automatic on user-initiated cancellation (`cancelBookingWithRefund`) — that
+path's day-tier refund is unchanged, untouched by this feature.
+
+**UX, confirmed (several rounds of iteration):** not a symmetric "refund or
+rebook" choice. On next login, a modal alerts the user their booking was
+cancelled (no mention of a refund option in this copy — product owner
+explicitly asked for this), Next advances to a scrollable list of **all**
+listings (spaces + equipment, filter pills), and the very last card in that
+scroll is "Refund me instead" — the explicit fallback, not an upfront fork.
+Also confirmed: no "S$"/"SGD" display anywhere in the app — every amount
+shows as "X credits" (or "X.XX credits"), including in the two pre-existing
+`CancelBookingModal`/`ModifyBookingModal` components, which still had literal
+`S$` in their refund/fee previews from an earlier session — fixed as part of
+this pass since the instruction was "anywhere in the app," not scoped to new
+code.
+
+**Redemption math, confirmed:** new booking costs more than the credit → credit
+applied in full, Stripe charges the difference (top-up). New booking costs
+less → fully covered, no Stripe charge on the new booking, and the leftover
+is refunded as real money against the **original** cancelled booking's
+PaymentIntent — never left as a smaller lingering credit. The credit is
+always fully consumed in one shot, whichever branch fires.
+
+**Inaction, confirmed:** if the user never resolves it, a real Stripe refund
+fires automatically after **1 week** (`BOOKING_CREDIT_REFUND_OBLIGATION_DAYS`),
+via a real cron endpoint (`POST /api/cron/resolve-pending-booking-credits`,
+`CRON_SECRET`-authenticated) — not the lazy-on-read pattern this codebase
+uses everywhere else for time-based expiry (`CreditHold`'s 7-day hold),
+since real owed money needs to reach the user even if they never log back in
+at all. This is genuinely new infra for this codebase (confirmed via grep:
+no cron/scheduled-job anywhere before this). `GET
+/api/bookings/pending-resolution` also does a lazy sweep of the caller's own
+overdue credits as a dev-time safety net, but the cron is what actually
+guarantees the 1-week deadline holds for a user who never returns — and the
+Railway dashboard configuration (a Cron Schedule service POSTing to this
+route daily with the secret) is outside what this session could provision;
+flagged, not silently assumed done.
+
+### Schema (two migrations, `20260721125102_booking_credits_refund_obligation_and_notifications` + `20260721130000`/`20260721131500` for a false-start unique constraint, see below)
+
+- `BookingStatus.declined_pending_resolution` — a supplier decline with real
+  money owed sits here, not `cancelled`, until the credit resolves one way
+  or the other. The one exception: a booking with nothing actually charged
+  to Stripe (fully reward-discounted) finalizes straight to `cancelled` at
+  decline time, no user decision needed, no credit issued.
+- `BookingCredit.refundObligated` (new boolean) — true for decline-issued
+  credits (real money, must resolve to a real refund if unused, never
+  forfeited); false for admin-granted goodwill credits (no real charge
+  behind them, can simply lapse to `expired` after 90 days). Drives which
+  branch `sweepOverdueBookingCredits` takes.
+- `BookingCreditStatus.refunded` (new) — reached by a decline-issued credit
+  resolving via cash, whether by explicit user claim or the cron timeout.
+  Kept distinct from `expired`, which only a goodwill credit ever reaches.
+- `Transaction.bookingCreditId` (new nullable FK) — traces a ledger row back
+  to the credit that authorized it, same pattern as the existing
+  `rewardGrantId`.
+- `Notification` model + `NotificationType` enum (new) — see the separate
+  section below; built alongside this feature per the same session's second
+  ask ("wire up notifications, don't leave it undone").
+- **False start, corrected same session:** first pass added a
+  `@@unique([userId, relatedCertificateId, type])` DB constraint on
+  `Notification` intended to dedup the cron's `cert_expiry` sweep — but that
+  column is also used by `cert_earned`, where a **second** notification for
+  the same certificate is legitimate (re-earning/renewing after expiry, per
+  `issueCredential`'s own upsert comment) and the DB constraint blocked it.
+  Caught before shipping, not after: dropped the constraint
+  (`20260721131500_drop_notification_cert_expiry_unique`), replaced with an
+  app-layer `findFirst`-then-create check scoped to `cert_expiry` only —
+  correct given this only runs once a day off a single cron sweep, no real
+  concurrent-write race to guard against the way e.g. the booking-overlap
+  constraint does.
+
+### `lib/bookings.ts`
+
+- `declineBookingWithRefund` **renamed** to `declineBookingPendingResolution`
+  — it no longer calls Stripe at all. Supplier penalty (against commission)
+  and the earned-credit reversal both still fire immediately, unchanged;
+  only the real-SGD portion's resolution is deferred, via a
+  `refundObligated` `BookingCredit` instead of an immediate `refund`
+  Transaction. Every call site updated (`app/api/supplier/bookings/[id]/decline/route.ts`,
+  `lib/supplier-payables.test.ts`, plus comment-only mentions in
+  `lib/stripe-webhooks.ts`/`lib/booking-policy.ts`/`lib/bulk-orders.ts`).
+- `resolveBookingCreditWithRefund(creditId, "user_claim" | "cron_timeout")` —
+  the actual Stripe refund call, shared by the explicit "refund me" route and
+  the cron sweep. Finalizes the source booking to `cancelled`, deletes the
+  pinned notification.
+- `createBookingWithDebit` gained an optional `bookingCreditId` param —
+  computes `creditAppliedAmount`/`creditLeftoverRefund`/`finalChargeAmount`
+  ahead of the existing reward-grant discount logic, fires the leftover
+  refund (if any) before opening the DB transaction (same "Stripe calls
+  can't be rolled back by Prisma" discipline as the charge itself), and
+  inside the transaction: marks the credit `applied`, finalizes the source
+  booking to `cancelled`, writes a `booking_credit_redeemed` activity row,
+  deletes the pinned notification.
+- `sweepOverdueBookingCredits()` — the cron's entry point. Two independent
+  sweeps (obligated → forced refund via `resolveBookingCreditWithRefund`;
+  non-obligated → bulk `expired` update), sequential not `Promise.all` so one
+  failed Stripe call doesn't abort the batch.
+- `grantBookingCredit({ userId, sourceBookingId, amount })` — the admin
+  goodwill path. Requires `sourceBookingId` to actually belong to the target
+  user (schema's `NOT NULL`, not loosened for a hypothetical unattached
+  grant).
+- `getPendingResolutionBookings(userId)` — powers both the modal and the
+  notification data; does the lazy dev-time sweep described above.
+
+### New routes
+
+`GET /api/bookings/pending-resolution`, `PATCH /api/bookings/[id]/claim-refund`,
+`POST /api/admin/booking-credits` (system-admin-only), `POST
+/api/cron/resolve-pending-booking-credits` (`CRON_SECRET` bearer-token auth,
+`timingSafeEqual` comparison). `POST /api/bookings` now accepts an optional
+`bookingCreditId` in the body, threaded through to `createBookingWithDebit`.
+
+### Notifications — real backend (second ask, same session)
+
+`components/NotificationsPanel.tsx` was 100% mock data (`MOCK_NOTIFICATIONS`)
+before this session, a gap flagged since Sprint 1 and never closed across
+many intervening sessions. Rather than leave the pinned booking-credit entry
+as a client-side synthetic item bolted onto an otherwise-mock panel, built
+the real thing: `Notification` model, `GET /api/notifications`, `PATCH
+.../[id]/read`, `PATCH .../read-all`, `lib/notifications.ts`
+(`getNotifications` — pinned-first sort — `markNotificationRead`,
+`markAllNotificationsRead`, `sweepExpiringCertificateNotifications`).
+Real notification rows now get created at: supplier decline
+(`booking_credit_pending`, pinned, deleted on resolution — not just marked
+read, since the product ask was "stays there until cleared"), booking
+confirm (`confirmBookingWithAudit`), wallet top-up (`createTopUp`,
+`lib/wallet.ts`), certificate earned (`issueCredential`,
+`lib/training-credentials.ts`), and certificate expiring within 7 days
+(`sweepExpiringCertificateNotifications`, swept by the same daily cron as
+the BookingCredit forced-refund job — no separate cron infra invented for
+it). `NotificationsPanel.tsx` rewired to `useNotifications()`
+(`lib/hooks/useNotifications.ts`), 60s poll so the pinned entry disappears
+promptly once resolved elsewhere.
+
+### A regression caught during live verification, not shipped blind
+
+Adding the 4 new `ActivityActionType` values (`booking_declined_pending_resolution`,
+`booking_credit_granted`, `booking_credit_redeemed`, `booking_credit_refunded`)
+crashed the user dashboard's Recent Activity feed at runtime —
+`app/(user)/user/page.tsx`'s `ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon>`
+is keyed off a **hand-maintained** string union in `lib/hooks/useActivity.ts`
+(frontend doesn't import the generated Prisma client), and that union's own
+comment already warned this exact failure mode had happened before
+("`booking_cancelled`/`booking_modified`/... had landed in the schema across
+three earlier sessions without this side being updated"). History repeated
+itself until live-testing caught it (`<Icon />` with an undefined component
+→ hard crash, not a silent gap). Fixed: all 4 values added to the union,
+`ACTIVITY_CATEGORIES`, and `ACTIVITY_ICONS`; the same `BookingStatus` gap
+existed for `declined_pending_resolution` across three separate
+hand-maintained `Record<BookingStatus, string>` style maps
+(`app/(user)/user/page.tsx`, `app/(supplier)/supplier/page.tsx`,
+`app/(supplier)/supplier-requests/page.tsx`) — lower severity (missing
+CSS class, not a crash) but fixed for consistency. **Worth a future
+session's time to consider deriving these frontend enum mirrors from the
+Prisma schema instead of hand-maintaining them** — this is the second time
+the exact same class of bug has shipped.
+
+### Live verification, not just unit tests
+
+Real cookie-jar logins against the dev server/DB (`ethan@example.com`,
+`divya@toolshare.sg` declining as the ToolShare supplier), driven through
+the actual browser UI for the modal/redemption steps, not just `curl`:
+- Decline → `declined_pending_resolution`, `BookingCredit` issued
+  (`refundObligated: true`, `available`, 7-day `expiresAt`), pinned
+  notification created, confirmed directly in Postgres.
+- Explicit "Refund me instead" (last card in the scroll) → real
+  `stripe.refunds.create`, `BookingCredit` → `refunded`, source booking →
+  `cancelled`, pinned notification deleted — confirmed via the UI (modal
+  closed, bell shows "You're all caught up") and the DB.
+- Rebook, top-up case (credit 25, new booking 120) → modal live-previewed
+  "Covers 25.00 credits — you'll be charged 95.00 credits", completed with a
+  real Stripe test card (`4242 4242 4242 4242`) through the actual
+  `StripeCardField` iframe (not a hardcoded token) — confirmed exactly a
+  -95 `booking_payment` Transaction with a real PaymentIntent, credit
+  `applied`, source booking finalized to `cancelled`.
+- Cron route: real request with the correct `CRON_SECRET` → 200 with a sweep
+  summary; wrong secret → clean 401.
+- `npm test`: 266/266 (up from 244 at the last count in this file). `npx tsc
+  --noEmit`, `eslint .`, and `next build` all clean. All test bookings/credits/
+  notifications deleted afterward, dev DB confirmed back to its
+  pre-session row count for the test user.
+
+### Not done this session
+
+- The Railway Cron Schedule dashboard configuration that actually triggers
+  `POST /api/cron/resolve-pending-booking-credits` on a real 24h schedule in
+  production — the route and its auth exist and are tested, but nothing in
+  this repo can provision Railway's own scheduler.
+- A dedicated `/notifications` page (only the navbar dropdown is wired).
+- Deriving `ActivityActionType`/`BookingStatus` frontend unions from the
+  Prisma schema instead of hand-maintaining them — flagged above as worth a
+  future session, not attempted here (out of this session's actual scope).

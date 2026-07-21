@@ -2,10 +2,12 @@ import {
   BookingType,
   BookingStatus,
   BookingCancelledBy,
+  BookingCreditStatus,
   TransactionType,
   ActivityActionType,
   RewardGrantType,
   type Booking,
+  type BookingCredit,
   Prisma,
 } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -33,6 +35,50 @@ export class StripeChargeFailedError extends Error {
   constructor(public readonly cause: unknown) {
     super("Payment could not be processed.");
   }
+}
+
+// A refundObligated BookingCredit (supplier-decline-issued) must resolve —
+// rebooked or refunded — within this window, or sweepOverdueBookingCredits
+// forces the refund automatically. Confirmed with the product owner
+// 2026-07-21: 1 week, not the general 90-day BookingCredit expiry below,
+// because real owed money can't be left open-ended the way an optional
+// goodwill grant can.
+export const BOOKING_CREDIT_REFUND_OBLIGATION_DAYS = 7;
+
+// A non-obligated (admin goodwill) BookingCredit's expiry — no real charge
+// backs it, so it can simply lapse to `expired` with nothing owed.
+export const BOOKING_CREDIT_GOODWILL_EXPIRY_DAYS = 90;
+
+// Thrown when a supplied bookingCreditId doesn't belong to the caller, isn't
+// `available`, or is past its expiresAt — mirrors RewardGrantNotRedeemableError's
+// pattern (lib/reward-grants.ts) for the other discount mechanic this same
+// route accepts.
+export class BookingCreditNotApplicableError extends Error {
+  constructor() {
+    super("This credit is not available to redeem.");
+  }
+}
+
+// Thrown inside resolveBookingCreditWithRefund when the credit isn't
+// `available` (already applied/refunded/expired).
+export class BookingCreditNotResolvableError extends Error {
+  constructor(public readonly status: BookingCreditStatus) {
+    super(`This credit is already ${status} and cannot be refunded.`);
+  }
+}
+
+export function serializeBookingCredit(credit: BookingCredit) {
+  return {
+    id: credit.id.toString(),
+    userId: credit.userId,
+    sourceBookingId: credit.sourceBookingId.toString(),
+    amount: Number(credit.amount),
+    status: credit.status,
+    appliedToBookingId: credit.appliedToBookingId ? credit.appliedToBookingId.toString() : null,
+    refundObligated: credit.refundObligated,
+    expiresAt: credit.expiresAt.toISOString(),
+    createdAt: credit.createdAt.toISOString(),
+  };
 }
 
 const BOOKING_TYPES = new Set<string>(Object.values(BookingType));
@@ -105,6 +151,7 @@ interface ParsedBookingFields {
   endDate: string;
   paymentMethodId: string;
   rewardGrantId?: bigint;
+  bookingCreditId?: bigint;
 }
 
 function isDateString(value: unknown): value is string {
@@ -157,6 +204,19 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
     }
   }
 
+  // Optional: redeem an available BookingCredit (issued by a supplier decline
+  // left pending resolution, or an admin goodwill grant) as a discount on
+  // THIS new booking — see the redemption math in createBookingWithDebit.
+  let bookingCreditId: bigint | undefined;
+  if (b.bookingCreditId !== undefined && b.bookingCreditId !== null) {
+    const rawCreditId = typeof b.bookingCreditId === "number" ? String(b.bookingCreditId) : b.bookingCreditId;
+    if (typeof rawCreditId !== "string" || !/^\d+$/.test(rawCreditId)) {
+      errors.bookingCreditId = ["bookingCreditId must be an id."];
+    } else {
+      bookingCreditId = BigInt(rawCreditId);
+    }
+  }
+
   if (Object.keys(errors).length > 0) {
     throw new ApiValidationError(errors);
   }
@@ -168,6 +228,7 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
     endDate: b.endDate as string,
     paymentMethodId: b.paymentMethodId as string,
     rewardGrantId,
+    bookingCreditId,
   };
 }
 
@@ -271,6 +332,13 @@ interface CreateBookingWithDebitParams {
   cost: Prisma.Decimal;
   paymentMethodId: string;
   rewardGrantId?: bigint;
+  // Redeems an available BookingCredit as a discount on this booking — see
+  // the redemption math below. Always fully consumed in one shot: if this
+  // booking costs less than the credit, the leftover is refunded as real
+  // money against the credit's SOURCE booking's PaymentIntent, never kept
+  // around as a smaller remaining credit (confirmed with the product owner,
+  // 2026-07-21 — a BookingCredit is a stand-in for a refund, not a wallet).
+  bookingCreditId?: bigint;
 }
 
 // 2026-07-21 write-path session: replaces the old combined-wallet debit with
@@ -319,15 +387,56 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
 
   const chargeAmount = params.cost.sub(discount);
 
-  // A grant can (per its own clamp in resolveRewardGrantDiscount) cover the
-  // full cost, leaving nothing to actually charge — Stripe rejects
-  // zero-amount PaymentIntents outright, so this is a real case to special-
-  // case, not a hypothetical. No PaymentIntent is created at all; the
-  // Transaction row below records the zero-amount charge for audit parity
-  // with every other booking, same "audit row, no ledger movement" idiom
-  // confirmBookingWithAudit already uses elsewhere in this file.
+  // Redeem an available BookingCredit against what's left after the reward
+  // discount above. Two credit-application outcomes, both fully consuming
+  // the credit in one shot (see the interface comment above):
+  //  - chargeAmount >= credit.amount: credit covers part of it, Stripe is
+  //    charged the difference below (the "ask the user to top up" case).
+  //  - chargeAmount <  credit.amount: this booking is fully covered, no
+  //    Stripe charge on IT at all, and the leftover is refunded as real
+  //    money against the credit's own source booking's PaymentIntent.
+  let creditToApply: { id: bigint; amount: Prisma.Decimal; sourceBookingId: bigint; sourcePaymentIntentId: string | null } | null =
+    null;
+  if (params.bookingCreditId !== undefined) {
+    const credit = await prisma.bookingCredit.findUnique({ where: { id: params.bookingCreditId } });
+    if (!credit || credit.userId !== params.userId || credit.status !== BookingCreditStatus.available || credit.expiresAt <= new Date()) {
+      throw new BookingCreditNotApplicableError();
+    }
+    const sourcePaymentTransaction = await prisma.transaction.findFirst({
+      where: { bookingId: credit.sourceBookingId, type: TransactionType.booking_payment },
+    });
+    creditToApply = {
+      id: credit.id,
+      amount: credit.amount,
+      sourceBookingId: credit.sourceBookingId,
+      sourcePaymentIntentId: sourcePaymentTransaction?.stripePaymentIntentId ?? null,
+    };
+  }
+
+  let creditAppliedAmount = new Prisma.Decimal(0);
+  let creditLeftoverRefund = new Prisma.Decimal(0);
+  let finalChargeAmount = chargeAmount;
+
+  if (creditToApply) {
+    if (chargeAmount.gte(creditToApply.amount)) {
+      creditAppliedAmount = creditToApply.amount;
+      finalChargeAmount = chargeAmount.sub(creditToApply.amount);
+    } else {
+      creditAppliedAmount = chargeAmount;
+      creditLeftoverRefund = creditToApply.amount.sub(chargeAmount);
+      finalChargeAmount = new Prisma.Decimal(0);
+    }
+  }
+
+  // A grant (and/or a fully-covering credit) can leave nothing to actually
+  // charge — Stripe rejects zero-amount PaymentIntents outright, so this is
+  // a real case to special-case, not a hypothetical. No PaymentIntent is
+  // created at all; the Transaction row below records the zero-amount charge
+  // for audit parity with every other booking, same "audit row, no ledger
+  // movement" idiom confirmBookingWithAudit already uses elsewhere in this
+  // file.
   let paymentIntentId: string | null = null;
-  if (chargeAmount.gt(0)) {
+  if (finalChargeAmount.gt(0)) {
     // Deliberately not attaching `customer: user.stripeCustomerId` — the
     // seeded values there (e.g. "cus_test_ethan001") are placeholder
     // strings from prisma/seed.ts, not real Stripe Customer objects, so
@@ -340,7 +449,7 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
     let paymentIntent;
     try {
       paymentIntent = await stripe.paymentIntents.create({
-        amount: toStripeCents(chargeAmount),
+        amount: toStripeCents(finalChargeAmount),
         currency: "sgd",
         payment_method: params.paymentMethodId,
         payment_method_types: ["card"],
@@ -356,6 +465,27 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
     }
 
     paymentIntentId = paymentIntent.id;
+  }
+
+  // The credit covered more than this booking cost — refund the leftover as
+  // real money against the credit's SOURCE booking's own PaymentIntent
+  // (there's nothing to charge/refund on the NEW booking, which has no
+  // PaymentIntent of its own when finalChargeAmount is 0). Fired here,
+  // before the DB transaction opens, same "Stripe calls can't be rolled back
+  // by Prisma" discipline as the charge above — if the DB transaction below
+  // then fails, this refund (unlike the new charge) is not compensated for;
+  // flagged as the same class of known, narrow, un-engineered-around race
+  // this file already accepts elsewhere (e.g. declineBookingWithRefund's own
+  // header comment), not silently ignored.
+  if (creditLeftoverRefund.gt(0) && creditToApply?.sourcePaymentIntentId) {
+    try {
+      await stripe.refunds.create({
+        payment_intent: creditToApply.sourcePaymentIntentId,
+        amount: toStripeCents(creditLeftoverRefund),
+      });
+    } catch (error) {
+      throw new StripeRefundFailedError(error);
+    }
   }
 
   try {
@@ -377,13 +507,16 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
         data: {
           userId: params.userId,
           bookingId: booking.id,
+          bookingCreditId: creditToApply?.id ?? null,
           type: TransactionType.booking_payment,
-          amount: chargeAmount.negated(),
+          amount: finalChargeAmount.negated(),
           stripePaymentIntentId: paymentIntentId,
           description:
             paymentIntentId !== null
-              ? `Booking #${booking.id} — ${chargeAmount} SGD charged via Stripe.`
-              : `Booking #${booking.id} — fully covered by a reward discount, no Stripe charge needed.`,
+              ? `Booking #${booking.id} — ${finalChargeAmount} SGD charged via Stripe${creditAppliedAmount.gt(0) ? ` (${creditAppliedAmount} SGD covered by booking credit #${creditToApply?.id})` : ""}.`
+              : creditAppliedAmount.gt(0)
+                ? `Booking #${booking.id} — fully covered by booking credit #${creditToApply?.id}, no Stripe charge needed.`
+                : `Booking #${booking.id} — fully covered by a reward discount, no Stripe charge needed.`,
         },
       });
 
@@ -401,13 +534,57 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
         });
       }
 
+      if (creditToApply) {
+        await tx.bookingCredit.update({
+          where: { id: creditToApply.id },
+          data: { status: BookingCreditStatus.applied, appliedToBookingId: booking.id },
+        });
+
+        // The credit's source booking is now fully resolved — made whole
+        // either by this new booking alone, or by this new booking plus the
+        // leftover Stripe refund fired above. Mirrors
+        // resolveBookingCreditWithRefund's own finalization, just via the
+        // "rebooked" branch instead of the "refunded" branch.
+        await tx.booking.update({
+          where: { id: creditToApply.sourceBookingId },
+          data: { status: BookingStatus.cancelled, cancelledAt: new Date(), userRefundPercent: new Prisma.Decimal(100) },
+        });
+
+        if (creditLeftoverRefund.gt(0)) {
+          await tx.transaction.create({
+            data: {
+              userId: params.userId,
+              bookingId: creditToApply.sourceBookingId,
+              bookingCreditId: creditToApply.id,
+              type: TransactionType.refund,
+              amount: creditLeftoverRefund,
+              stripePaymentIntentId: creditToApply.sourcePaymentIntentId,
+              description: `Booking #${creditToApply.sourceBookingId} credit — ${creditAppliedAmount} SGD applied to booking #${booking.id}, remaining ${creditLeftoverRefund} SGD refunded via Stripe.`,
+            },
+          });
+        }
+
+        await tx.activityLog.create({
+          data: {
+            userId: params.userId,
+            actionType: ActivityActionType.booking_credit_redeemed,
+            description: `Booking credit #${creditToApply.id} (from booking #${creditToApply.sourceBookingId}) redeemed against booking #${booking.id}: ${creditAppliedAmount} SGD applied${
+              creditLeftoverRefund.gt(0) ? `, ${creditLeftoverRefund} SGD refunded` : ""
+            }.`,
+            relatedListingId: params.listingId,
+          },
+        });
+
+        await tx.notification.deleteMany({ where: { relatedBookingId: creditToApply.sourceBookingId, pinned: true } });
+      }
+
       await tx.activityLog.create({
         data: {
           userId: params.userId,
           actionType: ActivityActionType.booking_created,
           description: discount.gt(0)
-            ? `Booking #${booking.id} created (${chargeAmount} SGD charged, ${discount} SGD reward discount applied).`
-            : `Booking #${booking.id} created (${chargeAmount} SGD charged).`,
+            ? `Booking #${booking.id} created (${finalChargeAmount} SGD charged, ${discount} SGD reward discount applied).`
+            : `Booking #${booking.id} created (${finalChargeAmount} SGD charged).`,
           relatedListingId: params.listingId,
         },
       });
@@ -416,11 +593,12 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
     });
   } catch (error) {
     // The Stripe charge above already succeeded (if there was one at all —
-    // a fully-discounted booking has no PaymentIntent to refund) — anything
-    // that fails past this point (double-booking race, lost
+    // a fully-discounted/credited booking has no PaymentIntent to refund) —
+    // anything that fails past this point (double-booking race, lost
     // grant-redemption race, or any other DB error) must not leave the user
     // charged with no booking to show for it, so refund before rethrowing
-    // the original error.
+    // the original error. The leftover-credit refund above (if any) is a
+    // separate, already-accepted risk — see its own comment.
     if (paymentIntentId !== null) {
       await stripe.refunds.create({ payment_intent: paymentIntentId }).catch((refundError) => {
         // Best-effort: if even the refund fails, the original DB error below
@@ -490,6 +668,17 @@ export async function confirmBookingWithAudit(bookingId: bigint): Promise<Bookin
       },
     });
 
+    await tx.notification.create({
+      data: {
+        userId: updated.userId,
+        type: "booking_confirmed",
+        title: "Booking confirmed",
+        message: `Your booking #${updated.id} has been confirmed.`,
+        relatedBookingId: updated.id,
+        relatedListingId: updated.listingId,
+      },
+    });
+
     return updated;
   });
 }
@@ -512,50 +701,32 @@ export class StripeRefundFailedError extends Error {
   }
 }
 
-// Supplier-initiated cancellation. Corrected 2026-07-21 (product owner,
-// closing the previous version's TODO on SupplierPayable): the user did not
-// cause this, so they are always refunded in full — the cancellation-window
-// day tier no longer applies to their refund. Instead it sizes the
-// supplier's penalty against SpaceSnap's commission portion of the booking
-// (Booking.platformCommissionPercent, snapshotted at creation).
+// Supplier-initiated decline. Renamed from declineBookingWithRefund
+// (2026-07-21, product owner) — the old version refunded 100% to Stripe
+// immediately and unconditionally. That's no longer the design: a real
+// refund is still genuinely owed (the day-tier penalty against the
+// supplier's own commission is unaffected by any of this, unchanged below),
+// but WHICH SHAPE that refund takes — cash back, or applied toward a
+// different listing — is the user's own choice, made later (see the
+// GET /api/bookings/pending-resolution modal flow), not decided here.
 //
-// Corrected again the same day (worked example from the product owner —
-// see CLAUDE1.md): a cancelled booking earns the supplier NOTHING — the
-// full amount was refunded to the user, so there is no "grossAmount" to
-// speak of for this booking. The SupplierPayable row written here is a pure
-// penalty DEBIT (grossAmount 0, netAmount = -penaltyDeduction) against
-// whatever the supplier is already owed from OTHER, actually-completed
-// bookings (see createCompletedBookingPayable, lib/supplier-payables.ts) —
-// the live SUM in getSupplierPendingPayableBalance is what nets a penalty
-// against prior earnings, not anything computed or checked here. That SUM
-// can go negative if penalties exceed pending earnings — the supplier owing
-// SpaceSnap back, to be recovered on their next invoice; no automated
-// collection/invoicing beyond this ledger row is built here, per the
-// still-open Sprint 6 Invoice/Receipt gap.
+// So this function no longer calls Stripe at all. Instead of an immediate
+// `refund` Transaction, it issues a refundObligated BookingCredit for the
+// real-SGD portion (see resolveBookingCreditWithRefund for the "user picks
+// refund" branch, and createBookingWithDebit's bookingCreditId param for the
+// "user picks rebook" branch) and leaves the booking in
+// `declined_pending_resolution` rather than `cancelled` — it isn't actually
+// resolved yet. The one exception: if nothing was ever charged to Stripe
+// (chargeAmount is 0, e.g. a booking fully covered by a reward discount),
+// there's nothing to hand the user a choice over — that case finalizes
+// straight to `cancelled` here, same as the old behavior.
 //
-// Still deliberately does NOT issue a BookingCredit for the (now
-// nonexistent, since the user is always refunded in full) non-refunded
-// portion — kept only as a note in case a future policy reduces the user's
-// refund below 100% again.
-//
-// Refund math: 100% of both halves of what the user originally paid — the
-// real-SGD portion actually charged to Stripe (sgdAmount - earnedCreditsApplied)
-// and the earned-credit discount redeemed against a RewardGrant. The
-// earned-credit portion is reversed as a ledger-only earned_grant
-// Transaction; the RewardGrant row itself stays `redeemed` (its job was
-// authorizing the original discount, not tracking the current balance —
-// SUM(Transaction.amount) is what the balance actually reads from, per that
-// model's own design principle).
-//
-// Known, narrow race (flagged, not engineered around): the Stripe refund
-// call happens before the status-guarded DB write, same ordering
-// createBookingWithDebit uses for its charge. Two concurrent decline
-// requests for the same booking could both pass the pre-check and both fire
-// a Stripe refund before either commits — the DB write's own re-check
-// (below) prevents a double status transition/double ledger entry, but
-// can't un-fire an already-issued Stripe refund. Same risk class this
-// codebase already accepts for confirmBookingWithAudit's stale-read window.
-export async function declineBookingWithRefund(
+// The earned-credit reversal and the supplier's commission-based penalty
+// are NOT deferred — both fire immediately, same as before this change: the
+// earned-credit reversal is a ledger-only entry (no real-world money, no
+// reason to wait on the user), and the supplier caused this regardless of
+// how the user later resolves their own refund.
+export async function declineBookingPendingResolution(
   bookingId: bigint,
   cancellationReason?: string
 ): Promise<BookingWithRelations> {
@@ -567,111 +738,281 @@ export async function declineBookingWithRefund(
     throw new BookingNotDeclinableError(existing.status);
   }
 
-  const [paymentTransaction, earnedSpendTransaction] = await Promise.all([
-    prisma.transaction.findFirst({ where: { bookingId, type: TransactionType.booking_payment } }),
-    prisma.transaction.findFirst({ where: { bookingId, type: TransactionType.earned_spend } }),
-  ]);
+  const earnedSpendTransaction = await prisma.transaction.findFirst({
+    where: { bookingId, type: TransactionType.earned_spend },
+  });
 
-  const cancelledAt = new Date();
-  const userRefundPercent = new Prisma.Decimal(100);
-  const supplierPenaltyPercent = new Prisma.Decimal(calculateSupplierCancellationPenalty(existing, cancelledAt));
-
+  const declinedAt = new Date();
+  const supplierPenaltyPercent = new Prisma.Decimal(calculateSupplierCancellationPenalty(existing, declinedAt));
   const chargeAmount = existing.sgdAmount.sub(existing.earnedCreditsApplied);
-  const stripeRefundAmount = chargeAmount.mul(userRefundPercent).div(100).toDecimalPlaces(2);
-  const earnedReversalAmount = existing.earnedCreditsApplied.mul(userRefundPercent).div(100).toDecimalPlaces(2);
-  const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
+  const earnedReversalAmount = existing.earnedCreditsApplied;
 
   const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
   const penaltyDeduction = commissionAmount.mul(supplierPenaltyPercent).div(100).toDecimalPlaces(2);
   const invoicingCadence = invoicingCadenceForSupplierTier(existing.listing.company.supplierTier);
+  const creditExpiresAt = new Date(declinedAt.getTime() + BOOKING_CREDIT_REFUND_OBLIGATION_DAYS * 24 * 60 * 60 * 1000);
 
-  if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
+    if (booking.status !== BookingStatus.pending && booking.status !== BookingStatus.confirmed) {
+      throw new BookingNotDeclinableError(booking.status);
+    }
+
+    const updated = await tx.booking.update({
+      where: { id: bookingId },
+      data: {
+        status: chargeAmount.gt(0) ? BookingStatus.declined_pending_resolution : BookingStatus.cancelled,
+        ...(chargeAmount.gt(0) ? {} : { cancelledAt: declinedAt, userRefundPercent: new Prisma.Decimal(100) }),
+        cancelledBy: BookingCancelledBy.supplier,
+        cancellationReason: cancellationReason ?? null,
+        supplierPenaltyPercent,
+      },
+      include: bookingWithRelationsArgs.include,
+    });
+
+    if (earnedReversalAmount.gt(0)) {
+      await tx.transaction.create({
+        data: {
+          userId: updated.userId,
+          bookingId: updated.id,
+          rewardGrantId: earnedSpendTransaction?.rewardGrantId ?? null,
+          type: TransactionType.earned_grant,
+          amount: earnedReversalAmount,
+          description: `Booking #${updated.id} declined by supplier — full reversal of the ${earnedReversalAmount} SGD reward discount applied at creation.`,
+        },
+      });
+    }
+
+    await tx.supplierPayable.create({
+      data: {
+        companyId: existing.listing.companyId,
+        bookingId: updated.id,
+        grossAmount: new Prisma.Decimal(0),
+        penaltyDeduction,
+        netAmount: penaltyDeduction.negated(),
+        invoicingCadence,
+      },
+    });
+
+    let credit = null;
+    if (chargeAmount.gt(0)) {
+      credit = await tx.bookingCredit.create({
+        data: {
+          userId: updated.userId,
+          sourceBookingId: updated.id,
+          amount: chargeAmount,
+          refundObligated: true,
+          expiresAt: creditExpiresAt,
+        },
+      });
+
+      await tx.notification.create({
+        data: {
+          userId: updated.userId,
+          type: "booking_credit_pending",
+          pinned: true,
+          title: "Your booking was cancelled by the supplier",
+          message: `Booking #${updated.id} was declined. You have ${chargeAmount} credits — pick a new space or equipment to rebook.`,
+          relatedBookingId: updated.id,
+        },
+      });
+    }
+
+    await tx.activityLog.create({
+      data: {
+        userId: updated.userId,
+        actionType: credit ? ActivityActionType.booking_declined_pending_resolution : ActivityActionType.booking_declined,
+        description: credit
+          ? `Booking #${updated.id} declined by supplier — ${chargeAmount} SGD held as a rebooking credit (expires ${creditExpiresAt.toISOString().slice(0, 10)}, auto-refunded if unresolved); supplier penalty ${supplierPenaltyPercent}% of commission: ${penaltyDeduction} SGD.`
+          : `Booking #${updated.id} declined by supplier — nothing was charged to Stripe, no refund or credit needed; supplier penalty ${supplierPenaltyPercent}% of commission: ${penaltyDeduction} SGD.`,
+        relatedListingId: updated.listingId,
+      },
+    });
+
+    return updated;
+  });
+}
+
+// Resolves an outstanding refundObligated BookingCredit via a real Stripe
+// refund — either the user explicitly chose "refund me instead" (the last
+// card in the rebook-alternatives scroll) or sweepOverdueBookingCredits
+// forced it after BOOKING_CREDIT_REFUND_OBLIGATION_DAYS of inaction. Mirrors
+// the old declineBookingWithRefund's Stripe-refund-then-DB-write shape and
+// accepts the same known, narrow, un-engineered-around race (concurrent
+// resolution attempts) documented on cancelBookingWithRefund above.
+export async function resolveBookingCreditWithRefund(
+  bookingCreditId: bigint,
+  resolvedVia: "user_claim" | "cron_timeout"
+): Promise<void> {
+  const credit = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: bookingCreditId } });
+  if (credit.status !== BookingCreditStatus.available) {
+    throw new BookingCreditNotResolvableError(credit.status);
+  }
+
+  const paymentTransaction = await prisma.transaction.findFirst({
+    where: { bookingId: credit.sourceBookingId, type: TransactionType.booking_payment },
+  });
+  const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
+
+  if (credit.amount.gt(0) && paymentIntentId !== null) {
     try {
-      await stripe.refunds.create({ payment_intent: paymentIntentId, amount: toStripeCents(stripeRefundAmount) });
+      await stripe.refunds.create({ payment_intent: paymentIntentId, amount: toStripeCents(credit.amount) });
     } catch (error) {
       throw new StripeRefundFailedError(error);
     }
   }
 
   try {
-    return await prisma.$transaction(async (tx) => {
-      const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });
-      if (booking.status !== BookingStatus.pending && booking.status !== BookingStatus.confirmed) {
-        throw new BookingNotDeclinableError(booking.status);
+    await prisma.$transaction(async (tx) => {
+      const freshCredit = await tx.bookingCredit.findUniqueOrThrow({ where: { id: bookingCreditId } });
+      if (freshCredit.status !== BookingCreditStatus.available) {
+        throw new BookingCreditNotResolvableError(freshCredit.status);
       }
 
-      const updated = await tx.booking.update({
-        where: { id: bookingId },
-        data: {
-          status: "cancelled",
-          cancelledAt,
-          cancelledBy: BookingCancelledBy.supplier,
-          cancellationReason: cancellationReason ?? null,
-          userRefundPercent,
-          supplierPenaltyPercent,
-        },
-        include: bookingWithRelationsArgs.include,
+      await tx.bookingCredit.update({ where: { id: bookingCreditId }, data: { status: BookingCreditStatus.refunded } });
+
+      await tx.booking.update({
+        where: { id: credit.sourceBookingId },
+        data: { status: BookingStatus.cancelled, cancelledAt: new Date(), userRefundPercent: new Prisma.Decimal(100) },
       });
 
-      if (stripeRefundAmount.gt(0)) {
-        await tx.transaction.create({
-          data: {
-            userId: updated.userId,
-            bookingId: updated.id,
-            type: TransactionType.refund,
-            amount: stripeRefundAmount,
-            stripePaymentIntentId: paymentIntentId,
-            description: `Booking #${updated.id} declined — ${userRefundPercent}% cancellation-window refund of ${stripeRefundAmount} SGD issued via Stripe.`,
-          },
-        });
-      }
-
-      if (earnedReversalAmount.gt(0)) {
-        await tx.transaction.create({
-          data: {
-            userId: updated.userId,
-            bookingId: updated.id,
-            rewardGrantId: earnedSpendTransaction?.rewardGrantId ?? null,
-            type: TransactionType.earned_grant,
-            amount: earnedReversalAmount,
-            description: `Booking #${updated.id} declined — ${userRefundPercent}% reversal of the ${existing.earnedCreditsApplied} SGD reward discount applied at creation.`,
-          },
-        });
-      }
-
-      await tx.supplierPayable.create({
+      await tx.transaction.create({
         data: {
-          companyId: existing.listing.companyId,
-          bookingId: updated.id,
-          grossAmount: new Prisma.Decimal(0),
-          penaltyDeduction,
-          netAmount: penaltyDeduction.negated(),
-          invoicingCadence,
+          userId: credit.userId,
+          bookingId: credit.sourceBookingId,
+          bookingCreditId: credit.id,
+          type: TransactionType.refund,
+          amount: credit.amount,
+          stripePaymentIntentId: paymentIntentId,
+          description: `Booking #${credit.sourceBookingId} — ${credit.amount} SGD refunded via Stripe (${
+            resolvedVia === "user_claim" ? "user chose a refund instead of rebooking" : "auto-resolved after 7 days of inaction"
+          }).`,
         },
       });
 
       await tx.activityLog.create({
         data: {
-          userId: updated.userId,
-          actionType: ActivityActionType.booking_declined,
-          description: `Booking #${updated.id} declined (${userRefundPercent}% refund: ${stripeRefundAmount} SGD${
-            earnedReversalAmount.gt(0) ? ` + ${earnedReversalAmount} SGD in reversed reward credit` : ""
-          }; supplier penalty ${supplierPenaltyPercent}% of commission: ${penaltyDeduction} SGD).`,
-          relatedListingId: updated.listingId,
+          userId: credit.userId,
+          actionType: ActivityActionType.booking_credit_refunded,
+          description: `Booking #${credit.sourceBookingId} credit (${credit.amount} SGD) refunded via Stripe (${resolvedVia}).`,
         },
       });
 
-      return updated;
+      await tx.notification.deleteMany({ where: { relatedBookingId: credit.sourceBookingId, pinned: true } });
     });
   } catch (error) {
-    if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
+    if (credit.amount.gt(0) && paymentIntentId !== null) {
       console.error(
-        `declineBookingWithRefund: Stripe refund for PaymentIntent ${paymentIntentId} already succeeded, but the DB write failed afterward. Manual reconciliation required.`,
+        `resolveBookingCreditWithRefund: Stripe refund for PaymentIntent ${paymentIntentId} already succeeded, but the DB write failed afterward. Manual reconciliation required.`,
         error
       );
     }
     throw error;
   }
+}
+
+// Cron entry point (see app/api/cron/resolve-pending-booking-credits/route.ts)
+// — forces resolution on anything that's sat unresolved past its deadline.
+// Two independent sweeps, matching BookingCredit.refundObligated's own
+// branching: an obligated credit past its 7-day deadline gets a real forced
+// Stripe refund (real money can't just evaporate); a non-obligated
+// (admin-goodwill) credit past its 90-day deadline just lapses to `expired`
+// with no refund owed, a plain bulk update. Sequential, not Promise.all, so
+// one failed Stripe refund doesn't abort the rest of the batch and errors
+// stay attributable to a single credit.
+export async function sweepOverdueBookingCredits(): Promise<{ refunded: number; failed: number; expired: number }> {
+  const overdueObligated = await prisma.bookingCredit.findMany({
+    where: { status: BookingCreditStatus.available, refundObligated: true, expiresAt: { lte: new Date() } },
+    select: { id: true },
+  });
+
+  let refunded = 0;
+  let failed = 0;
+  for (const { id } of overdueObligated) {
+    try {
+      await resolveBookingCreditWithRefund(id, "cron_timeout");
+      refunded += 1;
+    } catch (error) {
+      failed += 1;
+      console.error(`sweepOverdueBookingCredits: failed to resolve BookingCredit ${id}`, error);
+    }
+  }
+
+  const expiredGoodwill = await prisma.bookingCredit.updateMany({
+    where: { status: BookingCreditStatus.available, refundObligated: false, expiresAt: { lte: new Date() } },
+    data: { status: BookingCreditStatus.expired },
+  });
+
+  return { refunded, failed, expired: expiredGoodwill.count };
+}
+
+// Admin manual "goodwill" grant — the only OTHER way a BookingCredit gets
+// issued, besides declineBookingPendingResolution above. No real Stripe
+// charge backs this money, so refundObligated stays false: it can simply
+// lapse to `expired` if unused (see sweepOverdueBookingCredits), no refund
+// owed. Still requires a sourceBookingId (schema's NOT NULL, unchanged) —
+// a goodwill grant is tied to a specific past booking of the recipient's
+// (the thing that prompted the goodwill), not a free-floating balance.
+export async function grantBookingCredit(params: {
+  userId: string;
+  sourceBookingId: bigint;
+  amount: Prisma.Decimal;
+}): Promise<BookingCredit> {
+  const sourceBooking = await prisma.booking.findUniqueOrThrow({ where: { id: params.sourceBookingId } });
+  if (sourceBooking.userId !== params.userId) {
+    throw new ApiValidationError({ sourceBookingId: ["This booking does not belong to the specified user."] });
+  }
+
+  const expiresAt = new Date(Date.now() + BOOKING_CREDIT_GOODWILL_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+
+  return prisma.$transaction(async (tx) => {
+    const credit = await tx.bookingCredit.create({
+      data: {
+        userId: params.userId,
+        sourceBookingId: params.sourceBookingId,
+        amount: params.amount,
+        refundObligated: false,
+        expiresAt,
+      },
+    });
+
+    await tx.activityLog.create({
+      data: {
+        userId: params.userId,
+        actionType: ActivityActionType.booking_credit_granted,
+        description: `Admin-granted booking credit #${credit.id}: ${params.amount} SGD (tied to booking #${params.sourceBookingId}, expires ${expiresAt.toISOString().slice(0, 10)}).`,
+        relatedListingId: sourceBooking.listingId,
+      },
+    });
+
+    return credit;
+  });
+}
+
+// The caller's own bookings still awaiting a refund-or-rebook resolution,
+// each with its available credit — powers both the login modal and the
+// pinned notification's data. Sweeps the caller's OWN overdue credits first
+// (a dev-time safety net matching this codebase's existing "no cron infra,
+// so lazy-check on read" idiom elsewhere — e.g. CreditHold's 7-day lazy
+// expiry) so a stale row never surfaces here even if the real cron hasn't
+// run yet; the real cron (see app/api/cron/.../route.ts) is what guarantees
+// resolution for a user who never logs back in at all.
+export async function getPendingResolutionBookings(userId: string): Promise<BookingWithRelations[]> {
+  const overdueOwn = await prisma.bookingCredit.findMany({
+    where: { userId, status: BookingCreditStatus.available, refundObligated: true, expiresAt: { lte: new Date() } },
+    select: { id: true },
+  });
+  for (const { id } of overdueOwn) {
+    await resolveBookingCreditWithRefund(id, "cron_timeout").catch((error) =>
+      console.error(`getPendingResolutionBookings: lazy sweep failed for BookingCredit ${id}`, error)
+    );
+  }
+
+  return prisma.booking.findMany({
+    where: { userId, status: BookingStatus.declined_pending_resolution },
+    orderBy: { updatedAt: "desc" },
+    ...bookingWithRelationsArgs,
+  });
 }
 
 // Thrown inside cancelBookingWithRefund when the booking isn't `pending` or

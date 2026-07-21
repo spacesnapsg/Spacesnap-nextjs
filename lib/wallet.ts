@@ -74,6 +74,15 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal): Promi
       },
     });
 
+    await tx.notification.create({
+      data: {
+        userId,
+        type: "credit_topup",
+        title: "Credit top-up received",
+        message: `$${amount.toFixed(2)} was added to your credit wallet.`,
+      },
+    });
+
     const balance = await getCreditBalance(userId, tx);
 
     return { transaction, balance };

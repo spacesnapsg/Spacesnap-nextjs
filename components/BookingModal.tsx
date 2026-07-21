@@ -28,13 +28,34 @@ const DURATIONS = [
 
 type DurationKey = (typeof DURATIONS)[number]["key"];
 
+// A BookingCredit being redeemed against this booking — see
+// PendingBookingCreditModal, which is the only caller that ever passes this.
+// Purely a client-side preview of the same math createBookingWithDebit
+// actually runs (lib/bookings.ts): a card is still always collected (same
+// pattern as a reward-grant-covered booking, which also may end up
+// charging nothing) since the server, not the client, decides whether
+// there's anything left to charge.
+export interface AppliedBookingCredit {
+  id: string;
+  amount: number;
+}
+
 interface BookingModalProps {
   open: boolean;
   onClose: () => void;
   listing: Listing | null;
+  appliedCredit?: AppliedBookingCredit | null;
 }
 
-function BookingModalContent({ onClose, listing }: { onClose: () => void; listing: Listing }) {
+function BookingModalContent({
+  onClose,
+  listing,
+  appliedCredit,
+}: {
+  onClose: () => void;
+  listing: Listing;
+  appliedCredit?: AppliedBookingCredit | null;
+}) {
   const [duration, setDuration] = useState<DurationKey>("daily");
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [cardError, setCardError] = useState<string | null>(null);
@@ -46,6 +67,10 @@ function BookingModalContent({ onClose, listing }: { onClose: () => void; listin
 
   const selectedPrice =
     duration === "daily" ? listing.priceDay : duration === "weekly" ? listing.priceWeek : listing.priceMonth;
+
+  const creditApplied = appliedCredit ? Math.min(appliedCredit.amount, selectedPrice ?? 0) : 0;
+  const creditLeftover = appliedCredit ? Math.max(appliedCredit.amount - (selectedPrice ?? 0), 0) : 0;
+  const amountDue = Math.max((selectedPrice ?? 0) - creditApplied, 0);
 
   const isSubmitting = isCollectingCard || createBooking.isPending;
 
@@ -75,6 +100,7 @@ function BookingModalContent({ onClose, listing }: { onClose: () => void; listin
         startDate: toDateString(selectedDate),
         endDate: toDateString(endDate),
         paymentMethodId,
+        ...(appliedCredit ? { bookingCreditId: appliedCredit.id } : {}),
       },
       { onSuccess: onClose }
     );
@@ -130,6 +156,25 @@ function BookingModalContent({ onClose, listing }: { onClose: () => void; listin
             ))}
           </div>
           <p className="text-body-text font-medium mt-3">{selectedPrice} credits</p>
+          {appliedCredit && (
+            <div className="mt-3 rounded-lg bg-background/60 border border-border/40 px-3 py-2.5 text-sm">
+              <p className="text-muted-text">
+                Rebooking credit: <span className="text-body-text font-medium">{appliedCredit.amount.toFixed(2)} credits</span>
+              </p>
+              {amountDue > 0 ? (
+                <p className="text-body-text mt-1">
+                  Covers {creditApplied.toFixed(2)} credits — you&apos;ll be charged{" "}
+                  <span className="font-medium">{amountDue.toFixed(2)} credits</span> to top up the rest.
+                </p>
+              ) : creditLeftover > 0 ? (
+                <p className="text-success-green mt-1">
+                  Fully covers this booking — the remaining {creditLeftover.toFixed(2)} credits will be refunded to your card.
+                </p>
+              ) : (
+                <p className="text-success-green mt-1">Fully covers this booking — nothing else charged.</p>
+              )}
+            </div>
+          )}
         </div>
 
         <BookingDatePicker
@@ -157,14 +202,14 @@ function BookingModalContent({ onClose, listing }: { onClose: () => void; listin
   );
 }
 
-export default function BookingModal({ open, onClose, listing }: BookingModalProps) {
+export default function BookingModal({ open, onClose, listing, appliedCredit }: BookingModalProps) {
   if (!open || !listing) return null;
 
   // Content (state included) mounts fresh per open and unmounts on close, so
   // the old handleClose reset bookkeeping is no longer needed.
   return (
     <StripeElementsProvider>
-      <BookingModalContent onClose={onClose} listing={listing} />
+      <BookingModalContent onClose={onClose} listing={listing} appliedCredit={appliedCredit} />
     </StripeElementsProvider>
   );
 }

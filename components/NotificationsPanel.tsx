@@ -11,67 +11,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import Card from "./Card";
-
-export interface Notification {
-  id: string;
-  title?: string;
-  message: string;
-  type?: string;
-  is_read: boolean;
-  created_at: string;
-}
+import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/lib/hooks/useNotifications";
 
 const TYPE_META: Record<string, { icon: LucideIcon; color: string }> = {
   cert_earned: { icon: CheckCircle2, color: "text-success-green" },
   cert_expiry: { icon: AlertTriangle, color: "text-amber" },
   booking_confirmed: { icon: CalendarCheck2, color: "text-success-green" },
   credit_topup: { icon: Wallet, color: "text-success-green" },
+  booking_credit_pending: { icon: AlertTriangle, color: "text-error-red" },
 };
 
 const DEFAULT_TYPE_META = { icon: Info, color: "text-muted-text" };
-
-const MOCK_NOTIFICATIONS: Notification[] = [
-  {
-    id: "1",
-    title: "Certification earned",
-    message: 'You earned the "Fragile Handling" certification.',
-    type: "cert_earned",
-    is_read: false,
-    created_at: "2026-07-18T07:15:00.000Z",
-  },
-  {
-    id: "2",
-    title: "Upcoming booking",
-    message: "Your booking at Downtown Storage starts tomorrow at 10:00 AM.",
-    type: "booking_confirmed",
-    is_read: false,
-    created_at: "2026-07-18T04:00:00.000Z",
-  },
-  {
-    id: "3",
-    title: "Certification expiring",
-    message: '"Cold Chain Basics" certification expires in 7 days.',
-    type: "cert_expiry",
-    is_read: false,
-    created_at: "2026-07-17T10:00:00.000Z",
-  },
-  {
-    id: "4",
-    title: "Booking confirmed",
-    message: "Your booking for Riverside Depot on Aug 3 is confirmed.",
-    type: "booking_confirmed",
-    is_read: true,
-    created_at: "2026-07-16T09:30:00.000Z",
-  },
-  {
-    id: "5",
-    title: "Credit top-up received",
-    message: "$50.00 was added to your credit wallet.",
-    type: "credit_topup",
-    is_read: true,
-    created_at: "2026-07-14T09:30:00.000Z",
-  },
-];
 
 function formatRelativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -91,10 +41,13 @@ interface NotificationsPanelProps {
 
 export default function NotificationsPanel({ accentGradient }: NotificationsPanelProps) {
   const [open, setOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>(MOCK_NOTIFICATIONS);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { data: notifications } = useNotifications();
+  const markRead = useMarkNotificationRead();
+  const markAllRead = useMarkAllNotificationsRead();
 
-  const unreadCount = notifications.filter((notification) => !notification.is_read).length;
+  const list = notifications ?? [];
+  const unreadCount = list.filter((n) => !n.isRead).length;
 
   useEffect(() => {
     if (!open) return;
@@ -108,10 +61,6 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
-
-  function handleMarkAllRead() {
-    setNotifications((prev) => prev.map((notification) => ({ ...notification, is_read: true })));
-  }
 
   return (
     <div className="relative" ref={containerRef}>
@@ -137,7 +86,7 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
             {unreadCount > 0 && (
               <button
                 type="button"
-                onClick={handleMarkAllRead}
+                onClick={() => markAllRead.mutate()}
                 className={`text-xs font-medium bg-gradient-to-r ${accentGradient} bg-clip-text text-transparent hover:opacity-80 transition-opacity`}
               >
                 Mark all as read
@@ -145,18 +94,19 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
             )}
           </div>
 
-          {notifications.length === 0 ? (
+          {list.length === 0 ? (
             <p className="text-sm text-muted-text text-center py-6">You&apos;re all caught up.</p>
           ) : (
             <ul className="flex flex-col gap-1 max-h-96 overflow-y-auto">
-              {notifications.map((notification) => {
+              {list.map((notification) => {
                 const meta = TYPE_META[notification.type ?? ""] ?? DEFAULT_TYPE_META;
                 const Icon = meta.icon;
                 return (
                   <li
                     key={notification.id}
-                    className={`flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-background ${
-                      notification.is_read ? "" : "bg-background/60"
+                    onClick={() => !notification.isRead && markRead.mutate(notification.id)}
+                    className={`flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-background cursor-pointer ${
+                      notification.pinned ? "bg-error-red/5 border border-error-red/20" : notification.isRead ? "" : "bg-background/60"
                     }`}
                   >
                     <Icon size={16} className={`mt-0.5 shrink-0 ${meta.color}`} />
@@ -164,18 +114,22 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
                       {notification.title && (
                         <p
                           className={`text-sm leading-snug ${
-                            notification.is_read ? "text-muted-text font-normal" : "text-body-text font-semibold"
+                            notification.isRead && !notification.pinned ? "text-muted-text font-normal" : "text-body-text font-semibold"
                           }`}
                         >
                           {notification.title}
                         </p>
                       )}
-                      <p className={`text-sm leading-snug ${notification.is_read ? "text-muted-text" : "text-body-text"}`}>
+                      <p
+                        className={`text-sm leading-snug ${notification.isRead && !notification.pinned ? "text-muted-text" : "text-body-text"}`}
+                      >
                         {notification.message}
                       </p>
-                      <span className="text-xs text-hint-text">{formatRelativeTime(notification.created_at)}</span>
+                      <span className="text-xs text-hint-text">
+                        {notification.pinned ? "Action needed" : formatRelativeTime(notification.createdAt)}
+                      </span>
                     </div>
-                    {!notification.is_read && (
+                    {!notification.isRead && !notification.pinned && (
                       <span className={`mt-1.5 h-2 w-2 rounded-full bg-gradient-to-r ${accentGradient} shrink-0`} />
                     )}
                   </li>

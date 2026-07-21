@@ -47,6 +47,7 @@ const BOOKING_STATUS_STYLES: Record<BookingStatus, string> = {
   active: "bg-sky-500/15 text-sky-400 border-sky-500/30",
   completed: "bg-white/10 text-body-text border-white/20",
   cancelled: "bg-error-red/15 text-error-red border-error-red/30",
+  declined_pending_resolution: "bg-error-red/15 text-error-red border-error-red/30",
 };
 
 const BULK_ORDER_STATUS_STYLES: Record<BulkOrderStatus, string> = {

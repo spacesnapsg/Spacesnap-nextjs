@@ -5,16 +5,18 @@ import { forbiddenResponse, notFoundResponse } from "@/lib/api-errors";
 import { parseBigIntParam } from "@/lib/listings";
 import {
   serializeBooking,
-  declineBookingWithRefund,
+  declineBookingPendingResolution,
   BookingNotDeclinableError,
-  StripeRefundFailedError,
 } from "@/lib/bookings";
 
 // Mirrors old SupplierBookingController::decline's status-guard and
-// company-ownership check, plus Sprint 3.5 known-gap #3: decline now issues a
-// real Stripe refund (sized by the cancellation-window policy) via
-// declineBookingWithRefund (see lib/bookings.ts), rather than the old flat
-// combined-ledger credit.
+// company-ownership check. As of the BookingCredit rebook-or-refund feature
+// (2026-07-21), decline no longer fires an immediate Stripe refund — it
+// issues a refundObligated BookingCredit and leaves the booking
+// `declined_pending_resolution` until the user resolves it (rebook via
+// POST /api/bookings' bookingCreditId, or claim a refund via
+// POST /api/bookings/[id]/claim-refund) — see
+// declineBookingPendingResolution's own header comment in lib/bookings.ts.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSupplier();
   if ("error" in auth) return auth.error;
@@ -36,14 +38,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       : undefined;
 
   try {
-    const updated = await declineBookingWithRefund(bookingId, reason);
+    const updated = await declineBookingPendingResolution(bookingId, reason);
     return NextResponse.json({ booking: serializeBooking(updated) });
   } catch (error) {
     if (error instanceof BookingNotDeclinableError) {
       return NextResponse.json({ message: error.message }, { status: 422 });
-    }
-    if (error instanceof StripeRefundFailedError) {
-      return NextResponse.json({ message: error.message }, { status: 502 });
     }
     throw error;
   }

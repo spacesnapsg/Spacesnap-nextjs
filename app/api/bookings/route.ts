@@ -10,8 +10,10 @@ import {
   missingCertificateIds,
   parseBookingCreateFields,
   RewardGrantNotRedeemableError,
+  BookingCreditNotApplicableError,
   serializeBooking,
   StripeChargeFailedError,
+  StripeRefundFailedError,
 } from "@/lib/bookings";
 
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
@@ -116,6 +118,7 @@ export async function POST(request: NextRequest) {
       cost,
       paymentMethodId: fields.paymentMethodId,
       rewardGrantId: fields.rewardGrantId,
+      bookingCreditId: fields.bookingCreditId,
     });
 
     return NextResponse.json({ booking: serializeBooking(booking) }, { status: 201 });
@@ -123,8 +126,14 @@ export async function POST(request: NextRequest) {
     if (error instanceof RewardGrantNotRedeemableError) {
       return validationErrorResponse(new ApiValidationError({ rewardGrantId: [error.message] }));
     }
+    if (error instanceof BookingCreditNotApplicableError) {
+      return validationErrorResponse(new ApiValidationError({ bookingCreditId: [error.message] }));
+    }
     if (error instanceof StripeChargeFailedError) {
       return NextResponse.json({ message: error.message }, { status: 402 });
+    }
+    if (error instanceof StripeRefundFailedError) {
+      return NextResponse.json({ message: error.message }, { status: 502 });
     }
     // Race window between the app-layer check above and this insert: the DB
     // constraint (bookings_no_overlap) is the actual source of truth and

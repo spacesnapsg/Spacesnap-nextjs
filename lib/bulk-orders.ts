@@ -216,7 +216,7 @@ export class BulkOrderNotDeclinableError extends Error {
   }
 }
 
-// No refund path needed (unlike declineBookingWithRefund) — nothing was ever
+// No refund path needed (unlike declineBookingPendingResolution) — nothing was ever
 // debited for a pending/confirmed bulk order. Releases the hold if declining
 // from `confirmed` (a `pending` decline never had one — releaseHoldForBulkOrder
 // is a no-op in that case).

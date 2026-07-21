@@ -13,15 +13,20 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, ListingType, BookingType, TransactionType, RewardGrantType } from "../app/generated/prisma/client";
+import { PrismaClient, ListingType, BookingType, TransactionType, RewardGrantType, Prisma } from "../app/generated/prisma/client";
 import { getCreditBalance } from "./credits";
 import {
   hasOverlappingBooking,
   createBookingWithDebit,
   confirmBookingWithAudit,
   BookingNotConfirmableError,
-  declineBookingWithRefund,
+  declineBookingPendingResolution,
   BookingNotDeclinableError,
+  resolveBookingCreditWithRefund,
+  BookingCreditNotResolvableError,
+  BookingCreditNotApplicableError,
+  sweepOverdueBookingCredits,
+  grantBookingCredit,
   cancelBookingWithRefund,
   BookingNotCancellableError,
   StripeChargeFailedError,
@@ -59,7 +64,7 @@ async function createUser() {
   });
 }
 
-function createSpaceListing(companyId: bigint) {
+function createSpaceListing(companyId: bigint, overrides: { priceDay?: string; priceWeek?: string; priceMonth?: string } = {}) {
   return prisma.listing.create({
     data: {
       companyId,
@@ -68,6 +73,7 @@ function createSpaceListing(companyId: bigint) {
       priceDay: "10.00",
       priceWeek: "60.00",
       priceMonth: "200.00",
+      ...overrides,
     },
   });
 }
@@ -591,20 +597,12 @@ describe("confirmBookingWithAudit (Sprint 3.5, known gap #2)", () => {
 // design instead reads the refund amount straight off the Booking row's
 // stored `sgdAmount` field, so a price change on the listing after booking
 // creation can't skew the refund.
-describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
-  test("declines a pending booking, refunds exactly the amount debited at creation, and writes exactly one refund Transaction row", async () => {
+describe("declineBookingPendingResolution (2026-07-21 rebook-or-refund redesign)", () => {
+  test("declines a pending booking, leaves it declined_pending_resolution, and issues a refundObligated BookingCredit for the full charged amount instead of an immediate refund", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
       const listing = await createSpaceListing(company.id); // priceDay 10.00
-      // Establishes a baseline combined-ledger balance so the refund
-      // arithmetic below is visible — createBookingWithDebit no longer
-      // requires or checks any wallet balance to succeed (it charges Stripe
-      // directly), this topup is purely for the assertion's readability.
-      await prisma.transaction.create({
-        data: { userId: user.id, type: TransactionType.topup, amount: "50.00" },
-      });
-
       const booking = await createBookingWithDebit({
         userId: user.id,
         listingId: listing.id,
@@ -615,35 +613,35 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
 
-      const balanceAfterBooking = await getCreditBalance(user.id);
-      assert.equal(balanceAfterBooking.toString(), "40");
+      const updated = await declineBookingPendingResolution(booking.id);
+      assert.equal(updated.status, "declined_pending_resolution");
+      assert.equal(updated.cancelledAt, null); // not finalized yet — that's resolveBookingCreditWithRefund's job
 
-      const updated = await declineBookingWithRefund(booking.id);
-      assert.equal(updated.status, "cancelled");
+      // No Stripe refund fired yet — no `refund` Transaction at all.
+      const refunds = await prisma.transaction.findMany({ where: { bookingId: booking.id, type: TransactionType.refund } });
+      assert.equal(refunds.length, 0);
 
-      const balanceAfterDecline = await getCreditBalance(user.id);
-      assert.equal(balanceAfterDecline.toString(), "50");
+      const credit = await prisma.bookingCredit.findFirst({ where: { sourceBookingId: booking.id } });
+      assert.ok(credit);
+      assert.equal(credit!.userId, user.id);
+      assert.equal(credit!.amount.toString(), "10");
+      assert.equal(credit!.status, "available");
+      assert.equal(credit!.refundObligated, true);
+      assert.ok(credit!.expiresAt > new Date());
 
-      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
-      assert.equal(transactions.length, 2); // the create-time debit + the decline refund
-      const refunds = transactions.filter((t) => t.type === TransactionType.refund);
-      assert.equal(refunds.length, 1);
-      assert.equal(refunds[0].amount.toString(), "10");
-      assert.equal(refunds[0].userId, user.id);
+      const pinnedNotification = await prisma.notification.findFirst({ where: { relatedBookingId: booking.id, pinned: true } });
+      assert.ok(pinnedNotification);
+      assert.equal(pinnedNotification!.type, "booking_credit_pending");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });
 
-  test("a confirmed booking can still be declined and refunded", async () => {
+  test("a confirmed booking can still be declined this way", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
       const listing = await createSpaceListing(company.id); // priceDay 10.00
-      await prisma.transaction.create({
-        data: { userId: user.id, type: TransactionType.topup, amount: "10.00" },
-      });
-
       const booking = await createBookingWithDebit({
         userId: user.id,
         listingId: listing.id,
@@ -655,17 +653,18 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
       });
       await confirmBookingWithAudit(booking.id);
 
-      const updated = await declineBookingWithRefund(booking.id);
-      assert.equal(updated.status, "cancelled");
+      const updated = await declineBookingPendingResolution(booking.id);
+      assert.equal(updated.status, "declined_pending_resolution");
 
-      const balanceAfterDecline = await getCreditBalance(user.id);
-      assert.equal(balanceAfterDecline.toString(), "10");
+      const credit = await prisma.bookingCredit.findFirst({ where: { sourceBookingId: booking.id } });
+      assert.ok(credit);
+      assert.equal(credit!.amount.toString(), "10");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });
 
-  test("declining an already-cancelled booking rejects cleanly and does not touch the ledger", async () => {
+  test("declining an already-cancelled booking rejects cleanly and issues no credit", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -682,10 +681,10 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
         },
       });
 
-      await assert.rejects(() => declineBookingWithRefund(booking.id), BookingNotDeclinableError);
+      await assert.rejects(() => declineBookingPendingResolution(booking.id), BookingNotDeclinableError);
 
-      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
-      assert.equal(transactions.length, 0);
+      const credits = await prisma.bookingCredit.findMany({ where: { sourceBookingId: booking.id } });
+      assert.equal(credits.length, 0);
 
       const bookingRow = await prisma.booking.findUnique({ where: { id: booking.id } });
       assert.equal(bookingRow!.status, "cancelled");
@@ -694,15 +693,11 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
     }
   });
 
-  test("declining a booking twice rejects the second call cleanly, with no second refund", async () => {
+  test("declining a booking twice rejects the second call cleanly, with only one credit ever issued", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
       const listing = await createSpaceListing(company.id); // priceDay 10.00
-      await prisma.transaction.create({
-        data: { userId: user.id, type: TransactionType.topup, amount: "10.00" },
-      });
-
       const booking = await createBookingWithDebit({
         userId: user.id,
         listingId: listing.id,
@@ -713,14 +708,43 @@ describe("declineBookingWithRefund (Sprint 3.5, known gap #3)", () => {
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
 
-      await declineBookingWithRefund(booking.id);
-      await assert.rejects(() => declineBookingWithRefund(booking.id), BookingNotDeclinableError);
+      await declineBookingPendingResolution(booking.id);
+      await assert.rejects(() => declineBookingPendingResolution(booking.id), BookingNotDeclinableError);
 
-      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
-      assert.equal(transactions.length, 2); // the create-time debit + exactly one refund
+      const credits = await prisma.bookingCredit.findMany({ where: { sourceBookingId: booking.id } });
+      assert.equal(credits.length, 1);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
 
-      const balanceAfter = await getCreditBalance(user.id);
-      assert.equal(balanceAfter.toString(), "10");
+  test("nothing charged to Stripe (fully reward-discounted booking) finalizes straight to cancelled — no credit, no user decision needed", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const grant = await prisma.rewardGrant.create({
+        data: { userId: user.id, type: RewardGrantType.booking_discount_pct, value: "100", grantedVia: "test-fixture" },
+      });
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-06",
+        endDate: "2027-11-06",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        rewardGrantId: grant.id,
+      });
+      assert.equal(booking.earnedCreditsApplied.toString(), "10"); // 100% off — nothing charged to Stripe
+
+      const updated = await declineBookingPendingResolution(booking.id);
+      assert.equal(updated.status, "cancelled"); // finalized immediately, not declined_pending_resolution
+      assert.ok(updated.cancelledAt);
+      assert.equal(updated.userRefundPercent!.toString(), "100");
+
+      const credits = await prisma.bookingCredit.findMany({ where: { sourceBookingId: booking.id } });
+      assert.equal(credits.length, 0);
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -738,10 +762,11 @@ function daysFromNow(days: number): string {
 // tier no longer sizes the USER's refund on a supplier-initiated decline —
 // they didn't cause it, so they're always made whole. It now sizes the
 // SUPPLIER's penalty against SpaceSnap's commission portion instead, which
-// resolves into a real SupplierPayable row. See lib/booking-payments.ts and
-// declineBookingWithRefund's header comment for the full design.
-describe("declineBookingWithRefund — supplier penalty against commission (2026-07-21 correction)", () => {
-  test("declining >=7 days before start refunds the user 100% and writes a zero-penalty SupplierPayable", async () => {
+// resolves into a real SupplierPayable row — unaffected by the same-day
+// rebook-or-refund redesign above, since the penalty fires immediately at
+// decline regardless of how the user later resolves their own credit.
+describe("declineBookingPendingResolution — supplier penalty against commission (2026-07-21 correction)", () => {
+  test("declining >=7 days before start writes a zero-penalty SupplierPayable, credit issued for the full amount", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -756,24 +781,21 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
 
-      const updated = await declineBookingWithRefund(booking.id, "Change of plans");
-      assert.equal(updated.status, "cancelled");
+      const updated = await declineBookingPendingResolution(booking.id, "Change of plans");
+      assert.equal(updated.status, "declined_pending_resolution");
       assert.equal(updated.cancelledBy, "supplier");
       assert.equal(updated.cancellationReason, "Change of plans");
-      assert.ok(updated.cancelledAt);
-      assert.equal(updated.userRefundPercent!.toString(), "100");
       assert.equal(updated.supplierPenaltyPercent!.toString(), "0");
 
-      const refund = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: TransactionType.refund } });
-      assert.ok(refund);
-      assert.equal(refund!.amount.toString(), "10");
-      assert.ok(refund!.stripePaymentIntentId);
+      const credit = await prisma.bookingCredit.findFirst({ where: { sourceBookingId: booking.id } });
+      assert.ok(credit);
+      assert.equal(credit!.amount.toString(), "10");
 
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
       assert.equal(payable!.companyId, company.id);
-      // The booking earned nothing (fully refunded) — this is a zero-effect
-      // audit row, not a fabricated payout.
+      // The booking earned nothing (fully credited/refunded either way) —
+      // this is a zero-effect audit row, not a fabricated payout.
       assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "0");
       assert.equal(payable!.netAmount.toString(), "0");
@@ -783,7 +805,7 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
     }
   });
 
-  test("declining 3-6 days before start still refunds the user 100%, but penalizes the supplier 50% of commission", async () => {
+  test("declining 3-6 days before start penalizes the supplier 50% of commission, unaffected by the user's own resolution", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -798,17 +820,12 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
 
-      const updated = await declineBookingWithRefund(booking.id);
-      assert.equal(updated.userRefundPercent!.toString(), "100");
+      const updated = await declineBookingPendingResolution(booking.id);
       assert.equal(updated.supplierPenaltyPercent!.toString(), "50");
-
-      const refund = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: TransactionType.refund } });
-      assert.ok(refund);
-      assert.equal(refund!.amount.toString(), "10"); // user made whole regardless of timing
 
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
-      // Pure penalty debit — no gross earning for a refunded booking.
+      // Pure penalty debit — no gross earning for a declined booking.
       assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "0.5"); // 50% of the 1.00 commission
       assert.equal(payable!.netAmount.toString(), "-0.5");
@@ -817,7 +834,7 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
     }
   });
 
-  test("declining <3 days before start still refunds the user 100%, and penalizes the supplier the full commission", async () => {
+  test("declining <3 days before start penalizes the supplier the full commission", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -832,14 +849,9 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
 
-      const updated = await declineBookingWithRefund(booking.id);
-      assert.equal(updated.status, "cancelled");
-      assert.equal(updated.userRefundPercent!.toString(), "100");
+      const updated = await declineBookingPendingResolution(booking.id);
+      assert.equal(updated.status, "declined_pending_resolution");
       assert.equal(updated.supplierPenaltyPercent!.toString(), "100");
-
-      const refund = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: TransactionType.refund } });
-      assert.ok(refund);
-      assert.equal(refund!.amount.toString(), "10");
 
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
@@ -851,7 +863,7 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
     }
   });
 
-  test("earned-credit discount is reversed in full on decline, regardless of cancellation timing", async () => {
+  test("earned-credit discount is reversed immediately on decline (unaffected by the deferred Stripe portion)", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -864,7 +876,7 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
         userId: user.id,
         listingId: listing.id,
         bookingType: BookingType.daily,
-        startDate: daysFromNow(1), // worst tier for the supplier's penalty — irrelevant to the user's refund now
+        startDate: daysFromNow(1), // worst tier for the supplier's penalty — irrelevant to the credit amount
         endDate: daysFromNow(1),
         cost: listing.priceDay!,
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
@@ -873,17 +885,18 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
       // 20% off 10.00 = 2.00 discount; Stripe charged for 8.00.
       assert.equal(booking.earnedCreditsApplied.toString(), "2");
 
-      await declineBookingWithRefund(booking.id);
+      await declineBookingPendingResolution(booking.id);
 
-      const refund = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: TransactionType.refund } });
-      assert.ok(refund);
-      assert.equal(refund!.amount.toString(), "8"); // full amount actually charged to Stripe
+      // Credit is issued for exactly the real-SGD portion, not the full sgdAmount.
+      const credit = await prisma.bookingCredit.findFirst({ where: { sourceBookingId: booking.id } });
+      assert.ok(credit);
+      assert.equal(credit!.amount.toString(), "8");
 
       const earnedReversal = await prisma.transaction.findFirst({
         where: { bookingId: booking.id, type: TransactionType.earned_grant },
       });
       assert.ok(earnedReversal);
-      assert.equal(earnedReversal!.amount.toString(), "2"); // full discount reversed
+      assert.equal(earnedReversal!.amount.toString(), "2"); // full discount reversed, fires immediately
       assert.equal(earnedReversal!.rewardGrantId?.toString(), grant.id.toString());
 
       // The grant itself stays `redeemed` — only the ledger reverses.
@@ -891,6 +904,405 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
       assert.equal(grantAfter!.status, "redeemed");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("resolveBookingCreditWithRefund — user claims a refund instead of rebooking", () => {
+  test("explicit user_claim: refunds the credit's full amount via Stripe, finalizes the source booking to cancelled, clears the pinned notification", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-10",
+        endDate: "2027-11-10",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(booking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: booking.id } });
+
+      await resolveBookingCreditWithRefund(credit.id, "user_claim");
+
+      const creditAfter = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: credit.id } });
+      assert.equal(creditAfter.status, "refunded");
+
+      const bookingAfter = await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } });
+      assert.equal(bookingAfter.status, "cancelled");
+      assert.ok(bookingAfter.cancelledAt);
+      assert.equal(bookingAfter.userRefundPercent!.toString(), "100");
+
+      const refund = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: TransactionType.refund } });
+      assert.ok(refund);
+      assert.equal(refund!.amount.toString(), "10");
+      assert.ok(refund!.stripePaymentIntentId);
+      assert.equal(refund!.bookingCreditId?.toString(), credit.id.toString());
+
+      const pinnedAfter = await prisma.notification.findFirst({ where: { relatedBookingId: booking.id, pinned: true } });
+      assert.equal(pinnedAfter, null);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("resolving an already-resolved credit rejects cleanly, no second refund", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-11",
+        endDate: "2027-11-11",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(booking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: booking.id } });
+
+      await resolveBookingCreditWithRefund(credit.id, "user_claim");
+      await assert.rejects(() => resolveBookingCreditWithRefund(credit.id, "user_claim"), BookingCreditNotResolvableError);
+
+      const refunds = await prisma.transaction.findMany({ where: { bookingId: booking.id, type: TransactionType.refund } });
+      assert.equal(refunds.length, 1);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("createBookingWithDebit — bookingCreditId redemption", () => {
+  test("new booking costs more than the credit: credit fully applied, Stripe charged the difference (top-up case)", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const declinedBooking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-12",
+        endDate: "2027-11-12",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(declinedBooking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: declinedBooking.id } }); // 10.00
+
+      const otherListing = await createSpaceListing(company.id, { priceWeek: "35.00" });
+      const newBooking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: otherListing.id,
+        bookingType: BookingType.weekly,
+        startDate: "2027-11-20",
+        endDate: "2027-11-26",
+        cost: otherListing.priceWeek!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        bookingCreditId: credit.id,
+      });
+
+      const payment = await prisma.transaction.findFirst({
+        where: { bookingId: newBooking.id, type: TransactionType.booking_payment },
+      });
+      assert.ok(payment);
+      assert.equal(payment!.amount.toString(), "-25"); // 35 - 10 credit
+      assert.ok(payment!.stripePaymentIntentId);
+      assert.equal(payment!.bookingCreditId?.toString(), credit.id.toString());
+
+      const creditAfter = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: credit.id } });
+      assert.equal(creditAfter.status, "applied");
+      assert.equal(creditAfter.appliedToBookingId?.toString(), newBooking.id.toString());
+
+      // No leftover refund — the credit didn't cover more than the new cost.
+      const leftoverRefunds = await prisma.transaction.findMany({
+        where: { bookingId: declinedBooking.id, type: TransactionType.refund },
+      });
+      assert.equal(leftoverRefunds.length, 0);
+
+      const sourceBookingAfter = await prisma.booking.findUniqueOrThrow({ where: { id: declinedBooking.id } });
+      assert.equal(sourceBookingAfter.status, "cancelled");
+      assert.equal(sourceBookingAfter.userRefundPercent!.toString(), "100");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("new booking costs less than the credit: fully covered, no Stripe charge, leftover refunded against the source booking's PaymentIntent", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id, { priceDay: "30.00" });
+      const declinedBooking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-13",
+        endDate: "2027-11-13",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(declinedBooking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: declinedBooking.id } }); // 30.00
+
+      const cheaperListing = await createSpaceListing(company.id, { priceDay: "12.00" });
+      const newBooking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: cheaperListing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-21",
+        endDate: "2027-11-21",
+        cost: cheaperListing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        bookingCreditId: credit.id,
+      });
+
+      const payment = await prisma.transaction.findFirst({
+        where: { bookingId: newBooking.id, type: TransactionType.booking_payment },
+      });
+      assert.ok(payment);
+      assert.equal(payment!.amount.toString(), "0");
+      assert.equal(payment!.stripePaymentIntentId, null); // no PaymentIntent for a zero charge
+
+      const leftoverRefund = await prisma.transaction.findFirst({
+        where: { bookingId: declinedBooking.id, type: TransactionType.refund },
+      });
+      assert.ok(leftoverRefund);
+      assert.equal(leftoverRefund!.amount.toString(), "18"); // 30 credit - 12 new booking
+      assert.ok(leftoverRefund!.stripePaymentIntentId);
+
+      const creditAfter = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: credit.id } });
+      assert.equal(creditAfter.status, "applied"); // fully consumed either way, never left as a smaller credit
+      assert.equal(creditAfter.appliedToBookingId?.toString(), newBooking.id.toString());
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("an already-applied credit cannot be redeemed a second time", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const declinedBooking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-14",
+        endDate: "2027-11-14",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(declinedBooking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: declinedBooking.id } });
+
+      await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-22",
+        endDate: "2027-11-22",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        bookingCreditId: credit.id,
+      });
+
+      await assert.rejects(
+        () =>
+          createBookingWithDebit({
+            userId: user.id,
+            listingId: listing.id,
+            bookingType: BookingType.daily,
+            startDate: "2027-11-23",
+            endDate: "2027-11-23",
+            cost: listing.priceDay!,
+            paymentMethodId: TEST_PAYMENT_METHOD_ID,
+            bookingCreditId: credit.id,
+          }),
+        BookingCreditNotApplicableError
+      );
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a different user's credit cannot be redeemed", async () => {
+    const company = await createCompany();
+    const owner = await createUser();
+    const stranger = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const declinedBooking = await createBookingWithDebit({
+        userId: owner.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-15",
+        endDate: "2027-11-15",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(declinedBooking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: declinedBooking.id } });
+
+      await assert.rejects(
+        () =>
+          createBookingWithDebit({
+            userId: stranger.id,
+            listingId: listing.id,
+            bookingType: BookingType.daily,
+            startDate: "2027-11-24",
+            endDate: "2027-11-24",
+            cost: listing.priceDay!,
+            paymentMethodId: TEST_PAYMENT_METHOD_ID,
+            bookingCreditId: credit.id,
+          }),
+        BookingCreditNotApplicableError
+      );
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [owner.id, stranger.id]);
+    }
+  });
+});
+
+describe("sweepOverdueBookingCredits — 1-week forced refund / 90-day goodwill expiry", () => {
+  test("an overdue refundObligated credit is force-refunded", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-16",
+        endDate: "2027-11-16",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(booking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: booking.id } });
+      // Backdate expiresAt to simulate the 7-day window having already passed.
+      await prisma.bookingCredit.update({ where: { id: credit.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+
+      const result = await sweepOverdueBookingCredits();
+      assert.ok(result.refunded >= 1);
+
+      const creditAfter = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: credit.id } });
+      assert.equal(creditAfter.status, "refunded");
+
+      const bookingAfter = await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } });
+      assert.equal(bookingAfter.status, "cancelled");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a not-yet-overdue credit is left untouched", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-17",
+        endDate: "2027-11-17",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(booking.id);
+      const credit = await prisma.bookingCredit.findFirstOrThrow({ where: { sourceBookingId: booking.id } });
+
+      await sweepOverdueBookingCredits();
+
+      const creditAfter = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: credit.id } });
+      assert.equal(creditAfter.status, "available"); // untouched — not overdue yet
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("an overdue non-obligated (admin goodwill) credit lapses to expired, no Stripe refund", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-18",
+        endDate: "2027-11-18",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      const goodwill = await grantBookingCredit({ userId: user.id, sourceBookingId: booking.id, amount: new Prisma.Decimal(5) });
+      await prisma.bookingCredit.update({ where: { id: goodwill.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+
+      await sweepOverdueBookingCredits();
+
+      const goodwillAfter = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: goodwill.id } });
+      assert.equal(goodwillAfter.status, "expired");
+
+      const refunds = await prisma.transaction.findMany({ where: { bookingId: booking.id, type: TransactionType.refund } });
+      assert.equal(refunds.length, 0); // no real money backed this credit
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("grantBookingCredit — admin manual goodwill grant", () => {
+  test("issues a non-obligated credit tied to a specific booking of the recipient's", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-19",
+        endDate: "2027-11-19",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      const credit = await grantBookingCredit({ userId: user.id, sourceBookingId: booking.id, amount: new Prisma.Decimal(7.5) });
+      assert.equal(credit.amount.toString(), "7.5");
+      assert.equal(credit.refundObligated, false);
+      assert.equal(credit.status, "available");
+      assert.ok(credit.expiresAt > new Date());
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("rejects a sourceBookingId that doesn't belong to the target user", async () => {
+    const company = await createCompany();
+    const owner = await createUser();
+    const stranger = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: owner.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-11-25",
+        endDate: "2027-11-25",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      await assert.rejects(() => grantBookingCredit({ userId: stranger.id, sourceBookingId: booking.id, amount: new Prisma.Decimal(5) }));
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [owner.id, stranger.id]);
     }
   });
 });

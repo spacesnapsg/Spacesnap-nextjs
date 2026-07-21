@@ -9,7 +9,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, BookingType, type Listing } from "../app/generated/prisma/client";
-import { createBookingWithDebit, confirmBookingWithAudit, declineBookingWithRefund } from "./bookings";
+import { createBookingWithDebit, confirmBookingWithAudit, declineBookingPendingResolution } from "./bookings";
 import { createCheckIn, checkOutCheckIn } from "./check-ins";
 import { getSupplierPendingPayableBalance } from "./supplier-payables";
 
@@ -133,7 +133,7 @@ describe("getSupplierPendingPayableBalance", () => {
         cost: listing.priceDay!,
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
-      const declined = await declineBookingWithRefund(declinedBooking.id);
+      const declined = await declineBookingPendingResolution(declinedBooking.id);
       assert.equal(declined.supplierPenaltyPercent!.toString(), "100");
 
       const payables = await prisma.supplierPayable.findMany({ where: { companyId: company.id } });
@@ -181,7 +181,7 @@ describe("getSupplierPendingPayableBalance", () => {
         cost: listing.priceDay!,
         paymentMethodId: TEST_PAYMENT_METHOD_ID,
       });
-      await declineBookingWithRefund(decliningBooking.id);
+      await declineBookingPendingResolution(decliningBooking.id);
 
       // No completed bookings at all this time — the penalty is the only
       // ledger event for this company.

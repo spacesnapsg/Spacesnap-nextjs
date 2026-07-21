@@ -48,5 +48,16 @@ export async function issueCredential(
     },
   });
 
+  const certificate = await tx.certificate.findUniqueOrThrow({ where: { id: params.certificateId } });
+  await tx.notification.create({
+    data: {
+      userId: params.userId,
+      type: "cert_earned",
+      title: "Certification earned",
+      message: `You earned the "${certificate.name}" certification.`,
+      relatedCertificateId: params.certificateId,
+    },
+  });
+
   return credential;
 }

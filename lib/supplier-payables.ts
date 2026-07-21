@@ -6,7 +6,7 @@ import { invoicingCadenceForSupplierTier } from "@/lib/booking-payments";
 // principle as getCreditBalance (lib/credits.ts). A company's pending
 // payable balance is the sum of every pending SupplierPayable row: normal
 // booking-completion credits (createCompletedBookingPayable below) and
-// supplier-cancellation-penalty debits (declineBookingWithRefund,
+// supplier-cancellation-penalty debits (declineBookingPendingResolution,
 // lib/bookings.ts) net together automatically here — a penalty from one
 // booking is absorbed by earnings from others without any explicit "check
 // the balance, then deduct" step, the same way a Transaction ledger SUM

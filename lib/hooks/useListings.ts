@@ -58,6 +58,7 @@ interface CreateBookingInput {
   endDate: string;
   paymentMethodId: string;
   rewardGrantId?: string;
+  bookingCreditId?: string;
 }
 
 export function useCreateBooking() {
@@ -67,6 +68,9 @@ export function useCreateBooking() {
       apiFetch("/api/bookings", { method: "POST", body: JSON.stringify(input) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["listings"] });
+      // A bookingCreditId redemption resolves the source booking too — keep
+      // the pending-resolution modal/notification in sync without a reload.
+      queryClient.invalidateQueries({ queryKey: ["bookings", "pending-resolution"] });
     },
   });
 }

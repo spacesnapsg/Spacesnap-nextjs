@@ -38,7 +38,11 @@ export type ActivityActionType =
   | "signoff_requested"
   | "signoff_reviewed"
   | "instant_purchase_completed"
-  | "bulk_order_confirmed_despite_insufficient_credit";
+  | "bulk_order_confirmed_despite_insufficient_credit"
+  | "booking_declined_pending_resolution"
+  | "booking_credit_granted"
+  | "booking_credit_redeemed"
+  | "booking_credit_refunded";
 
 export interface ActivityEntry {
   id: string;
@@ -57,7 +61,18 @@ export type ActivityCategory = "bookings" | "bulk_orders" | "purchases" | "walle
 export const ACTIVITY_CATEGORIES: Record<ActivityCategory, { label: string; types: ActivityActionType[] }> = {
   bookings: {
     label: "Bookings",
-    types: ["booking_created", "booking_confirmed", "booking_declined", "booking_cancelled", "booking_modified", "booking_completed"],
+    types: [
+      "booking_created",
+      "booking_confirmed",
+      "booking_declined",
+      "booking_cancelled",
+      "booking_modified",
+      "booking_completed",
+      "booking_declined_pending_resolution",
+      "booking_credit_granted",
+      "booking_credit_redeemed",
+      "booking_credit_refunded",
+    ],
   },
   bulk_orders: {
     label: "Bulk Orders",

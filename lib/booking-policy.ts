@@ -21,7 +21,7 @@
 //     of the booking — not the full sgdAmount — follows the day tier below).
 // A caller must never apply the "wrong" function to a cancellation it didn't
 // cause (e.g. penalizing the supplier for a user-initiated cancel) — see
-// lib/bookings.ts's declineBookingWithRefund (supplier-caused: 100% user
+// lib/bookings.ts's declineBookingPendingResolution (supplier-caused: 100% user
 // refund + day-tier supplier penalty) vs cancelBookingWithRefund
 // (user-caused: day-tier user refund + zero supplier penalty).
 //

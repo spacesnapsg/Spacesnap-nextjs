@@ -73,6 +73,14 @@ enum BookingStatus {
   active
   completed
   cancelled
+  // Supplier declined this booking, a real Stripe refund is genuinely owed,
+  // but which SHAPE that refund takes (cash back, or applied as a
+  // BookingCredit toward a different listing) is the user's call, not
+  // automatic. See declineBookingPendingResolution/resolveBookingCreditWithRefund/
+  // createBookingWithDebit's bookingCreditId param (lib/bookings.ts). Never
+  // set when chargeAmount was 0 (nothing to refund) — that case finalizes
+  // straight to `cancelled` instead, no user decision needed.
+  declined_pending_resolution
 
   @@map("booking_status")
 }
@@ -208,6 +216,14 @@ enum ActivityActionType {
   booking_completed
   bulk_order_confirmed_despite_insufficient_credit
 
+  // BookingCredit lifecycle (see lib/bookings.ts) — kept distinct from the
+  // existing booking_declined/booking_cancelled above since none of those
+  // describe "declined, refund deferred pending the user's own choice."
+  booking_declined_pending_resolution
+  booking_credit_granted
+  booking_credit_redeemed
+  booking_credit_refunded
+
   @@map("activity_action_type")
 }
 
@@ -340,6 +356,15 @@ enum BookingCancelledBy {
 enum BookingCreditStatus {
   available
   applied
+  // Resolved via a real Stripe refund — either the user explicitly chose
+  // "refund me" (see resolveBookingCreditWithRefund, lib/bookings.ts) or the
+  // 1-week forced-resolution cron swept it (sweepOverdueBookingCredits). Only
+  // ever reached by a refundObligated credit — this codebase never lets real
+  // owed money simply evaporate.
+  refunded
+  // Timed out with nothing owed on it — only reachable by a NON-obligated
+  // (admin-goodwill) credit forfeiting after its 90-day window. A
+  // refundObligated credit is never "expired" to nothing; see `refunded`.
   expired
 
   @@map("booking_credit_status")
@@ -352,12 +377,22 @@ model BookingCredit {
   amount             Decimal             @db.Decimal(10, 2)
   status             BookingCreditStatus @default(available)
   appliedToBookingId BigInt?             @map("applied_to_booking_id")
+  // True for a supplier-decline-issued credit: this is real money the user
+  // is genuinely owed, so it must resolve to either a real booking (via
+  // createBookingWithDebit's bookingCreditId param) or a real Stripe refund
+  // (resolveBookingCreditWithRefund) within expiresAt — never just forfeited.
+  // False for an admin-granted goodwill credit (grantBookingCredit): no real
+  // charge backs it, so it can simply expire unused after expiresAt with no
+  // refund obligation. Drives which branch sweepOverdueBookingCredits takes
+  // for a given overdue row.
+  refundObligated    Boolean             @default(false) @map("refund_obligated")
   expiresAt          DateTime            @map("expires_at")
   createdAt          DateTime            @default(now()) @map("created_at")
 
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sourceBooking    Booking  @relation("BookingCreditSource", fields: [sourceBookingId], references: [id], onDelete: Cascade)
-  appliedToBooking Booking? @relation("BookingCreditAppliedTo", fields: [appliedToBookingId], references: [id], onDelete: SetNull)
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceBooking    Booking       @relation("BookingCreditSource", fields: [sourceBookingId], references: [id], onDelete: Cascade)
+  appliedToBooking Booking?      @relation("BookingCreditAppliedTo", fields: [appliedToBookingId], references: [id], onDelete: SetNull)
+  transactions     Transaction[]
 
   @@map("booking_credits")
 }
@@ -600,6 +635,7 @@ model User {
   gigAssignments          GigAssignment[]             @relation("GigAssignmentWorker")
   rewardGrants            RewardGrant[]
   bookingCredits          BookingCredit[]
+  notifications           Notification[]
 
   @@map("users")
 }
@@ -629,6 +665,7 @@ model Certificate {
   trainingVideos      TrainingVideo[]
   trainingSessions    TrainingSession[]
   signoffRequests     CertificateSignoffRequest[]
+  notifications       Notification[]
 
   @@map("certificates")
 }
@@ -667,6 +704,7 @@ model Listing {
   checkIns             CheckIn[]
   activityLogs         ActivityLog[]
   ratings              Rating[]
+  notifications        Notification[]
 
   @@map("listings")
 }
@@ -892,6 +930,7 @@ model Booking {
   bookingCreditsIssued BookingCredit[]  @relation("BookingCreditSource")
   bookingCreditsSpent  BookingCredit[]  @relation("BookingCreditAppliedTo")
   supplierPayable      SupplierPayable?
+  notifications        Notification[]
 
   @@map("bookings")
 }
@@ -1118,6 +1157,12 @@ model Transaction {
   // model's own comment. Nullable: most Transaction rows (topups, purchased_spend,
   // booking_payment, refunds) have no grant involved at all.
   rewardGrantId         BigInt?         @map("reward_grant_id")
+  // Set on the Transaction rows a BookingCredit's own lifecycle writes — the
+  // zero-amount audit row when it's applied to a new booking, and the
+  // leftover-refund row if it covered less than the credit's full amount.
+  // Same "trace the ledger row back to what authorized it" pattern as
+  // rewardGrantId above. Nullable: unrelated to every other Transaction type.
+  bookingCreditId       BigInt?         @map("booking_credit_id")
   type                  TransactionType
   amount                Decimal         @db.Decimal(10, 2)
   stripePaymentIntentId String?         @map("stripe_payment_intent_id")
@@ -1130,6 +1175,7 @@ model Transaction {
   bulkOrderRequest BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: SetNull)
   purchase         Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
   rewardGrant      RewardGrant?      @relation(fields: [rewardGrantId], references: [id], onDelete: SetNull)
+  bookingCredit    BookingCredit?    @relation(fields: [bookingCreditId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
 }
@@ -1234,4 +1280,54 @@ model CertificateSignoffRequest {
 
   @@unique([userId, certificateId])
   @@map("certificate_signoff_requests")
+}
+
+// Real notification rows — replaces components/NotificationsPanel.tsx's
+// MOCK_NOTIFICATIONS. One value per event actually hooked into (same
+// "don't invent a type nothing writes to" discipline as ActivityActionType),
+// covering the mock's original four plus the new pinned booking-credit case.
+enum NotificationType {
+  cert_earned
+  cert_expiry
+  booking_confirmed
+  credit_topup
+  // Pinned, not read-state-driven — see Notification.pinned below. Created
+  // by declineBookingPendingResolution the moment a supplier decline leaves
+  // a real refund unresolved; deleted the moment that resolves (rebooked or
+  // refunded), never just marked read. lib/bookings.ts is what writes these.
+  booking_credit_pending
+
+  @@map("notification_type")
+}
+
+model Notification {
+  id                   BigInt            @id @default(autoincrement())
+  userId               String            @map("user_id")
+  title                String?
+  message              String
+  type                 NotificationType?
+  // Pinned notifications sort first regardless of createdAt and are not
+  // cleared by "mark as read" — only by the row being deleted once whatever
+  // it's tracking actually resolves (see booking_credit_pending above). Every
+  // other notification type leaves this false and behaves like a normal
+  // read/unread item.
+  pinned               Boolean           @default(false)
+  isRead               Boolean           @default(false) @map("is_read")
+  relatedBookingId     BigInt?           @map("related_booking_id")
+  relatedListingId     BigInt?           @map("related_listing_id")
+  // Also used by cert_earned (no dedup needed there — re-earning/renewing a
+  // certificate is a genuinely new event each time, so no uniqueness
+  // constraint on this column: sweepExpiringCertificateNotifications
+  // (lib/notifications.ts) dedups cert_expiry rows with an app-layer
+  // findFirst-then-create check instead, deliberately not a DB constraint,
+  // since it would otherwise also block a legitimate second cert_earned row.
+  relatedCertificateId BigInt?           @map("related_certificate_id")
+  createdAt            DateTime          @default(now()) @map("created_at")
+
+  user               User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  relatedBooking     Booking?     @relation(fields: [relatedBookingId], references: [id], onDelete: Cascade)
+  relatedListing     Listing?     @relation(fields: [relatedListingId], references: [id], onDelete: SetNull)
+  relatedCertificate Certificate? @relation(fields: [relatedCertificateId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
 }
