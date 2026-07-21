@@ -161,6 +161,16 @@ enum TransactionType {
 
   gig_payout_sgd
 
+  // Sprint 4.75 addition (2026-07-21) — the 20% fee charged when a user
+  // reschedules a booking 3-7 days before its (pre-modification) start date.
+  // Distinct from booking_payment (the original full-price charge): reusing
+  // that value would conflate "what the stay costs" with "what rescheduling
+  // it cost," which is a genuinely different ledger event, same reasoning as
+  // why gig_payout_sgd got its own value above instead of overloading an
+  // existing one. See calculateModificationTerms, lib/booking-payments.ts,
+  // and modifyBookingWithFee, lib/bookings.ts.
+  booking_modification_fee
+
   @@map("transaction_type")
 }
 
@@ -174,6 +184,7 @@ enum ActivityActionType {
   booking_confirmed
   booking_declined
   booking_cancelled
+  booking_modified
   bulk_order_created
   bulk_order_confirmed
   bulk_order_declined
@@ -848,6 +859,27 @@ model Booking {
   cancellationReason        String?             @map("cancellation_reason")
   userRefundPercent         Decimal?            @map("user_refund_percent") @db.Decimal(5, 2)
   supplierPenaltyPercent    Decimal?            @map("supplier_penalty_percent") @db.Decimal(5, 2)
+  // Sprint 4.75 addition (2026-07-21) — user-initiated reschedule
+  // ("Modify Booking"), see modifyBookingWithFee (lib/bookings.ts) and
+  // calculateModificationTerms (lib/booking-payments.ts).
+  // originalStartDate is set once, the first time a booking is modified —
+  // preserves the pre-modification date for history/audit display even
+  // across repeat modifications; startDate/endDate above always hold the
+  // CURRENT (possibly-modified) schedule and are what every other part of
+  // this codebase (overlap check, cancellation-window day tiers) already
+  // reads, unchanged.
+  originalStartDate         DateTime?           @map("original_start_date") @db.Date
+  // Set true the first time a modification lands in the 3-7 day fee tier
+  // (per the product brief's own pseudocode — a free, >7-day-out
+  // modification does not set this). Never reset back to false.
+  isModified                Boolean             @default(false) @map("is_modified")
+  // Caps this booking's OWN later user-initiated cancellation refund (the
+  // "Refund Cap Engine": final % = min(standard day-tier %, this value)) —
+  // see cancelBookingWithRefund, lib/bookings.ts. Null means uncapped
+  // (a never-modified booking behaves exactly as before this feature).
+  // Re-set on every modification per the tier that modification landed in
+  // (a later free modification restores it to 100, not left at a stale 50).
+  maxRefundablePercent      Decimal?            @map("max_refundable_percent") @db.Decimal(5, 2)
   createdAt                 DateTime            @default(now()) @map("created_at")
   updatedAt                 DateTime            @updatedAt @map("updated_at")
 

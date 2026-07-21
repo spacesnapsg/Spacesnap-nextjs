@@ -264,6 +264,27 @@ belong to.
   screen until the tier thresholds/spend-window/referral-bonus numbers in
   Sprint 6.5 are confirmed with the product owner — there's nothing concrete
   to lay out yet.
+- [x] **Modify Booking (reschedule) — backend, closed 2026-07-21.** New
+  feature, added as a Sprint 4.75 item per the product owner's own pseudocode
+  spec (Modification Request Engine + Cancellation Refund Cap Engine). `PATCH
+  /api/bookings/[id]/modify` (`modifyBookingWithFee`, `lib/bookings.ts`) lets
+  the booking's own user reschedule its `startDate` (duration preserved):
+  more than 7 days' notice is free and resets `maxRefundablePercent` to 100;
+  3-7 days' notice charges a real 20% Stripe fee (of `sgdAmount`) and sets
+  `isModified = true` + `maxRefundablePercent = 50`; under 3 days' notice is
+  rejected outright. `Booking.maxRefundablePercent` now caps
+  `cancelBookingWithRefund`'s day-tier refund via a new `applyRefundCap`
+  helper (`lib/booking-payments.ts`) — a never-modified booking is
+  unaffected (cap is `null`, a no-op). See CLAUDE1.md "Sprint 4.75 — Modify
+  Booking (Reschedule) Backend" for the full design, flagged assumptions
+  (what "booking_fee" means, duration-preserving reschedule, why the cap
+  only applies to user-initiated cancellation and not supplier decline), and
+  live-verification transcript. **Frontend UI not built this session** — no
+  "Modify Booking" control exists in the app yet, same "backend first,
+  flagged not guessed" pattern as the Sprint 6 cancellation route before its
+  own UI landed. A future session should add it once product/design specs
+  the entry point (likely alongside wherever Cancel Booking eventually
+  surfaces, still itself unbuilt per the Sprint 4.75 item above).
 
 ---
 

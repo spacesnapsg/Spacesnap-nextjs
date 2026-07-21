@@ -16,6 +16,8 @@ import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemable
 import {
   calculateUserCancellationRefund,
   calculateSupplierCancellationPenalty,
+  calculateModificationTerms,
+  applyRefundCap,
   PLATFORM_COMMISSION_PERCENT_BOOKINGS,
   invoicingCadenceForSupplierTier,
 } from "@/lib/booking-payments";
@@ -64,6 +66,9 @@ export function serializeBooking(booking: Booking | BookingWithRelations | Booki
     sgdAmount: Number(booking.sgdAmount),
     earnedCreditsApplied: Number(booking.earnedCreditsApplied),
     status: booking.status,
+    isModified: booking.isModified,
+    originalStartDate: booking.originalStartDate ? booking.originalStartDate.toISOString().slice(0, 10) : null,
+    maxRefundablePercent: booking.maxRefundablePercent ? Number(booking.maxRefundablePercent) : null,
     createdAt: booking.createdAt.toISOString(),
     updatedAt: booking.updatedAt.toISOString(),
     ...("listing" in booking
@@ -166,6 +171,46 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
   };
 }
 
+interface ParsedModifyBookingFields {
+  newStartDate: string;
+  paymentMethodId?: string;
+}
+
+// Sprint 4.75 — "Modify Booking." Mirrors parseBookingCreateFields's shape
+// (validate-then-throw ApiValidationError). paymentMethodId is optional at
+// the parse layer — whether it's actually required depends on which notice-
+// day fee tier the booking lands in, which parsing alone can't know (that's
+// modifyBookingWithFee's job, via ModificationPaymentMethodRequiredError).
+export function parseModifyBookingFields(body: unknown): ParsedModifyBookingFields {
+  const errors: Record<string, string[]> = {};
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+
+  if (!isDateString(b.newStartDate)) {
+    errors.newStartDate = ["newStartDate is required."];
+  } else {
+    const todayUtcMidnight = new Date();
+    todayUtcMidnight.setUTCHours(0, 0, 0, 0);
+    if (Date.parse(b.newStartDate as string) < todayUtcMidnight.getTime()) {
+      errors.newStartDate = ["newStartDate cannot be in the past."];
+    }
+  }
+
+  let paymentMethodId: string | undefined;
+  if (b.paymentMethodId !== undefined && b.paymentMethodId !== null) {
+    if (typeof b.paymentMethodId !== "string" || b.paymentMethodId.length === 0) {
+      errors.paymentMethodId = ["paymentMethodId must be a non-empty string."];
+    } else {
+      paymentMethodId = b.paymentMethodId;
+    }
+  }
+
+  if (Object.keys(errors).length > 0) {
+    throw new ApiValidationError(errors);
+  }
+
+  return { newStartDate: b.newStartDate as string, paymentMethodId };
+}
+
 // Fetches the required/held certificate ids and delegates the actual gating
 // decision (required minus held-and-not-expired) to the pure set-difference
 // module — see lib/certificate-gating.ts. Mirrors BookingController::store
@@ -194,13 +239,23 @@ export async function missingCertificateIds(listingId: bigint, userId: string): 
 // slot." Lets the common case return a clean error without ever reaching
 // Postgres's 23P01 — the DB constraint stays as the last line of defense for
 // the race between this check and the insert (see route.ts).
-export async function hasOverlappingBooking(listingId: bigint, startDate: string, endDate: string): Promise<boolean> {
+// `excludeBookingId` (added for modifyBookingWithFee below): a booking being
+// rescheduled still holds its OWN old row until the update commits, so
+// checking a new date range against the table as-is would otherwise compare
+// the booking against itself.
+export async function hasOverlappingBooking(
+  listingId: bigint,
+  startDate: string,
+  endDate: string,
+  excludeBookingId?: bigint
+): Promise<boolean> {
   const overlapping = await prisma.booking.findFirst({
     where: {
       listingId,
       status: { not: "cancelled" },
       startDate: { lte: new Date(endDate) },
       endDate: { gte: new Date(startDate) },
+      ...(excludeBookingId !== undefined ? { id: { not: excludeBookingId } } : {}),
     },
     select: { id: true },
   });
@@ -648,6 +703,14 @@ export class BookingNotCancellableError extends Error {
 // Mirrors declineBookingWithRefund's structure (Stripe refund before the
 // status-guarded DB write, same narrow race accepted, same reward-grant
 // reversal idiom) — only the refund/penalty math and cancelledBy differ.
+//
+// Sprint 4.75 addition: the standard day-tier refund is now run through the
+// Refund Cap Engine (applyRefundCap, lib/booking-payments.ts) against
+// Booking.maxRefundablePercent — a booking previously modified 3-7 days out
+// carries a 50% cap here, per the "Modify Booking" feature's own design (see
+// modifyBookingWithFee below). `maxRefundablePercent` is null for any booking
+// this feature hasn't touched, so applyRefundCap is a no-op and this is
+// unchanged for every booking that was never modified.
 export async function cancelBookingWithRefund(
   bookingId: bigint,
   cancellationReason?: string
@@ -666,7 +729,12 @@ export async function cancelBookingWithRefund(
   ]);
 
   const cancelledAt = new Date();
-  const userRefundPercent = new Prisma.Decimal(calculateUserCancellationRefund(existing, cancelledAt));
+  const standardRefundPercent = calculateUserCancellationRefund(existing, cancelledAt);
+  const cappedRefundPercent = applyRefundCap(
+    standardRefundPercent,
+    existing.maxRefundablePercent ? Number(existing.maxRefundablePercent) : null
+  );
+  const userRefundPercent = new Prisma.Decimal(cappedRefundPercent);
   const supplierPenaltyPercent = new Prisma.Decimal(0);
 
   const chargeAmount = existing.sgdAmount.sub(existing.earnedCreditsApplied);
@@ -760,6 +828,211 @@ export async function cancelBookingWithRefund(
         `cancelBookingWithRefund: Stripe refund for PaymentIntent ${paymentIntentId} already succeeded, but the DB write failed afterward. Manual reconciliation required.`,
         error
       );
+    }
+    throw error;
+  }
+}
+
+// Thrown inside modifyBookingWithFee when the booking isn't `pending` or
+// `confirmed`. Distinct from BookingNotCancellableError/BookingNotDeclinableError
+// so each route's error message stays accurate to the action attempted.
+export class BookingNotModifiableError extends Error {
+  constructor(public readonly status: BookingStatus) {
+    super(`Booking is already ${status} and cannot be modified.`);
+  }
+}
+
+// Thrown when the request comes in under 3 days' notice — per the brief,
+// this is a hard reject, not a reduced-fee tier: the user must either
+// fulfil the booking as scheduled or cancel it (subject to the normal
+// cancellation-window refund).
+export class BookingModificationNotEligibleError extends Error {
+  constructor(public readonly noticeDays: number) {
+    super("This booking starts too soon to be modified — please fulfil it as scheduled, or cancel it instead.");
+  }
+}
+
+// Thrown when the newly-requested date range collides with another
+// non-cancelled booking on the same listing. Mirrors BOOKING_OVERLAP_MESSAGE
+// so this reads identically to the create-booking overlap error.
+export class BookingModificationOverlapError extends Error {
+  constructor() {
+    super(BOOKING_OVERLAP_MESSAGE);
+  }
+}
+
+// Thrown when the notice-day tier requires a modification fee but the
+// caller didn't supply a paymentMethodId. Kept distinct from
+// ApiValidationError since it's only knowable after reading the booking's
+// own current startDate (parseModifyBookingFields can't decide this on
+// request shape alone).
+export class ModificationPaymentMethodRequiredError extends Error {
+  constructor() {
+    super("A payment method is required to cover this booking's modification fee.");
+  }
+}
+
+interface ModifyBookingWithFeeParams {
+  bookingId: bigint;
+  newStartDate: string;
+  paymentMethodId?: string;
+}
+
+// Sprint 4.75 addition (2026-07-21) — "Modify Booking," per the product
+// brief's own pseudocode (Step A: Modification Request Engine). See
+// calculateModificationTerms (lib/booking-payments.ts) for the notice-day
+// eligibility/fee/cap tiers this wires up.
+//
+// Build-time decisions made here, not spelled out in the brief — flagged
+// per this codebase's own convention rather than guessed at silently:
+// - "booking_fee" in the brief is read as Booking.sgdAmount (the booking's
+//   full nominal price snapshotted at creation), not the net amount actually
+//   charged to Stripe after any earned-credit discount — the modification
+//   fee is a flat cost of changing THIS booking, not scaled by how it
+//   happened to be paid for. Not confirmed with the product owner.
+// - The new date range preserves the booking's existing duration (new
+//   endDate = newStartDate + the same day-span as the current
+//   startDate..endDate) — the brief only mentions a single "new requested
+//   date," and this is the only reading that doesn't require the client to
+//   separately re-quote a price for a different-length stay.
+// - is_modified is set true only the first time a modification lands in the
+//   FEE tier, exactly matching the brief's own pseudocode (the free, >7-day
+//   tier's action list does not mention it) — not reset back to false by a
+//   later free modification.
+// - max_refundable_percent IS reset on every modification, including a free
+//   one restoring it to 100 — also per the brief's own pseudocode ("Set to
+//   1.00").
+// - The Refund Cap Engine this sets up (applyRefundCap) is wired into
+//   cancelBookingWithRefund (user-initiated cancellation) ONLY, not
+//   declineBookingWithRefund (supplier-initiated). This codebase's existing
+//   at-fault-party design (see declineBookingWithRefund's own header
+//   comment) makes the user whole when the SUPPLIER cancels, regardless of
+//   cause — capping that refund because the user separately chose to
+//   reschedule earlier would penalize the user for something the supplier
+//   caused, not something this feature should introduce.
+// - The fee is real money movement (Stripe), charged before the DB
+//   transaction opens with the same pre-transaction-charge /
+//   compensating-refund-on-failure discipline createBookingWithDebit uses —
+//   Prisma's $transaction can't roll back an external API call. It is
+//   deliberately non-refundable if the booking is later cancelled/declined
+//   (no code path reverses a booking_modification_fee Transaction) — the fee
+//   is for the act of rescheduling, not part of the stay's own price.
+export async function modifyBookingWithFee(params: ModifyBookingWithFeeParams): Promise<BookingWithRelations> {
+  const existing = await prisma.booking.findUniqueOrThrow({ where: { id: params.bookingId } });
+  if (existing.status !== BookingStatus.pending && existing.status !== BookingStatus.confirmed) {
+    throw new BookingNotModifiableError(existing.status);
+  }
+
+  const requestedAt = new Date();
+  const terms = calculateModificationTerms(existing, requestedAt);
+  if (!terms.eligible) {
+    throw new BookingModificationNotEligibleError(terms.noticeDays);
+  }
+
+  const durationMs = existing.endDate.getTime() - existing.startDate.getTime();
+  const newStart = new Date(params.newStartDate);
+  const newEnd = new Date(newStart.getTime() + durationMs);
+
+  const overlapping = await hasOverlappingBooking(
+    existing.listingId,
+    newStart.toISOString().slice(0, 10),
+    newEnd.toISOString().slice(0, 10),
+    existing.id
+  );
+  if (overlapping) {
+    throw new BookingModificationOverlapError();
+  }
+
+  const feeAmount =
+    terms.feePercent > 0 ? existing.sgdAmount.mul(terms.feePercent).div(100).toDecimalPlaces(2) : new Prisma.Decimal(0);
+
+  if (feeAmount.gt(0) && !params.paymentMethodId) {
+    throw new ModificationPaymentMethodRequiredError();
+  }
+
+  let paymentIntentId: string | null = null;
+  if (feeAmount.gt(0)) {
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: toStripeCents(feeAmount),
+        currency: "sgd",
+        payment_method: params.paymentMethodId,
+        payment_method_types: ["card"],
+        confirm: true,
+        description: `SpaceSnap booking #${existing.id} — modification fee`,
+      });
+    } catch (error) {
+      throw new StripeChargeFailedError(error);
+    }
+
+    if (paymentIntent.status !== "succeeded") {
+      throw new StripeChargeFailedError(new Error(`PaymentIntent ${paymentIntent.id} ended in status "${paymentIntent.status}".`));
+    }
+
+    paymentIntentId = paymentIntent.id;
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUniqueOrThrow({ where: { id: params.bookingId } });
+      if (booking.status !== BookingStatus.pending && booking.status !== BookingStatus.confirmed) {
+        throw new BookingNotModifiableError(booking.status);
+      }
+
+      const updated = await tx.booking.update({
+        where: { id: params.bookingId },
+        data: {
+          startDate: newStart,
+          endDate: newEnd,
+          originalStartDate: booking.originalStartDate ?? booking.startDate,
+          isModified: terms.feePercent > 0 ? true : booking.isModified,
+          maxRefundablePercent: new Prisma.Decimal(terms.maxRefundablePercent),
+        },
+        include: bookingWithRelationsArgs.include,
+      });
+
+      if (feeAmount.gt(0)) {
+        await tx.transaction.create({
+          data: {
+            userId: updated.userId,
+            bookingId: updated.id,
+            type: TransactionType.booking_modification_fee,
+            amount: feeAmount.negated(),
+            stripePaymentIntentId: paymentIntentId,
+            description: `Booking #${updated.id} rescheduled (${terms.noticeDays} days notice) — ${terms.feePercent}% modification fee of ${feeAmount} SGD charged via Stripe.`,
+          },
+        });
+      }
+
+      await tx.activityLog.create({
+        data: {
+          userId: updated.userId,
+          actionType: ActivityActionType.booking_modified,
+          description:
+            feeAmount.gt(0)
+              ? `Booking #${updated.id} rescheduled to ${newStart.toISOString().slice(0, 10)} (${terms.noticeDays} days notice, ${feeAmount} SGD modification fee charged).`
+              : `Booking #${updated.id} rescheduled to ${newStart.toISOString().slice(0, 10)} (${terms.noticeDays} days notice, no fee).`,
+          relatedListingId: updated.listingId,
+        },
+      });
+
+      return updated;
+    });
+  } catch (error) {
+    // Same discipline as createBookingWithDebit's own catch: the Stripe
+    // charge above (if there was one) already succeeded, so anything that
+    // fails past this point (a lost overlap race caught by the DB's
+    // bookings_no_overlap exclusion constraint on the update, or any other
+    // DB error) must not leave the user charged a fee with no reschedule to
+    // show for it.
+    if (paymentIntentId !== null) {
+      await stripe.refunds.create({ payment_intent: paymentIntentId }).catch((refundError) => {
+        console.error(
+          `modifyBookingWithFee: DB transaction failed AND the compensating refund also failed for PaymentIntent ${paymentIntentId}. Manual reconciliation required.`,
+          refundError
+        );
+      });
     }
     throw error;
   }

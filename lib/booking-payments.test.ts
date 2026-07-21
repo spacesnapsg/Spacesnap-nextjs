@@ -4,7 +4,12 @@
 // off-by-one here is a real money bug, not just a cosmetic mismatch.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { calculateUserCancellationRefund, calculateSupplierCancellationPenalty } from "./booking-payments";
+import {
+  calculateUserCancellationRefund,
+  calculateSupplierCancellationPenalty,
+  calculateModificationTerms,
+  applyRefundCap,
+} from "./booking-payments";
 
 describe("calculateUserCancellationRefund", () => {
   const startDate = "2026-08-08";
@@ -93,5 +98,78 @@ describe("calculateSupplierCancellationPenalty", () => {
       const penalty = calculateSupplierCancellationPenalty({ startDate }, new Date(cancelledAt));
       assert.equal(penalty, 100 - refund);
     }
+  });
+});
+
+// Sprint 4.75 — "Modify Booking" eligibility/fee/cap engine. The boundary at
+// day 7 is deliberately the OPPOSITE inclusivity from the cancellation tiers
+// above (free tier here is "> 7", not ">= 7"), per the product brief's own
+// pseudocode — covered explicitly so a future session doesn't "fix" it to
+// match cancellation's boundary by mistake.
+describe("calculateModificationTerms", () => {
+  const startDate = "2026-08-08";
+
+  test("8 days before (comfortably inside the free tier): eligible, no fee, 100% cap", () => {
+    const result = calculateModificationTerms({ startDate }, new Date("2026-07-31T00:00:00Z"));
+    assert.deepEqual(result, { eligible: true, noticeDays: 8, feePercent: 0, maxRefundablePercent: 100 });
+  });
+
+  test("exactly 7 days before: NOT the free tier (> 7 required) — falls into the 20% fee tier", () => {
+    const result = calculateModificationTerms({ startDate }, new Date("2026-08-01T00:00:00Z"));
+    assert.deepEqual(result, { eligible: true, noticeDays: 7, feePercent: 20, maxRefundablePercent: 50 });
+  });
+
+  test("exactly 3 days before: still the 20% fee tier (inclusive lower bound)", () => {
+    const result = calculateModificationTerms({ startDate }, new Date("2026-08-05T00:00:00Z"));
+    assert.deepEqual(result, { eligible: true, noticeDays: 3, feePercent: 20, maxRefundablePercent: 50 });
+  });
+
+  test("2 days before (just inside the 3-day boundary): rejected, not eligible", () => {
+    const result = calculateModificationTerms({ startDate }, new Date("2026-08-06T00:00:00Z"));
+    assert.deepEqual(result, { eligible: false, noticeDays: 2 });
+  });
+
+  test("modifying on or after the session's start date: rejected, not eligible", () => {
+    assert.deepEqual(calculateModificationTerms({ startDate }, new Date("2026-08-08T00:00:00Z")), {
+      eligible: false,
+      noticeDays: 0,
+    });
+    assert.deepEqual(calculateModificationTerms({ startDate }, new Date("2026-08-09T00:00:00Z")), {
+      eligible: false,
+      noticeDays: -1,
+    });
+  });
+
+  test("time-of-day on the request timestamp doesn't shift the tier", () => {
+    assert.deepEqual(calculateModificationTerms({ startDate }, new Date("2026-07-31T23:59:59Z")), {
+      eligible: true,
+      noticeDays: 8,
+      feePercent: 0,
+      maxRefundablePercent: 100,
+    });
+  });
+});
+
+describe("applyRefundCap", () => {
+  test("null cap (never modified) is a no-op: standard percentage passes through unchanged", () => {
+    assert.equal(applyRefundCap(100, null), 100);
+    assert.equal(applyRefundCap(50, null), 50);
+    assert.equal(applyRefundCap(0, null), 0);
+  });
+
+  test("cap below the standard refund wins", () => {
+    assert.equal(applyRefundCap(100, 50), 50);
+  });
+
+  test("cap above the standard refund is a no-op (standard already lower)", () => {
+    assert.equal(applyRefundCap(50, 100), 50);
+  });
+
+  test("cap equal to the standard refund is unaffected", () => {
+    assert.equal(applyRefundCap(50, 50), 50);
+  });
+
+  test("cap of 0 zeroes out any standard refund", () => {
+    assert.equal(applyRefundCap(100, 0), 0);
   });
 });

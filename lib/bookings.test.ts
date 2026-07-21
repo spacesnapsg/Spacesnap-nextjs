@@ -26,6 +26,11 @@ import {
   BookingNotCancellableError,
   StripeChargeFailedError,
   RewardGrantNotRedeemableError,
+  modifyBookingWithFee,
+  BookingNotModifiableError,
+  BookingModificationNotEligibleError,
+  BookingModificationOverlapError,
+  ModificationPaymentMethodRequiredError,
 } from "./bookings";
 
 const TEST_PAYMENT_METHOD_ID = "pm_card_visa";
@@ -1091,6 +1096,286 @@ describe("cancelBookingWithRefund — user-initiated, day-tier applies to the us
 
       const payables = await prisma.supplierPayable.findMany({ where: { bookingId: booking.id } });
       assert.equal(payables.length, 1);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// Sprint 4.75 — "Modify Booking." Real Stripe test-mode calls for the fee
+// charge, same "hit the real backing service" convention as the rest of
+// this file — no mocking.
+describe("modifyBookingWithFee — Step A: Modification Request Engine", () => {
+  test("> 7 days notice: free, updates the date, records the original date, does not set is_modified", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(10),
+        endDate: daysFromNow(10),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      const originalStartDate = daysFromNow(10);
+      const newStartDate = daysFromNow(20);
+
+      const updated = await modifyBookingWithFee({ bookingId: booking.id, newStartDate });
+
+      assert.equal(updated.startDate.toISOString().slice(0, 10), newStartDate);
+      assert.equal(updated.endDate.toISOString().slice(0, 10), newStartDate); // 1-day booking, duration preserved
+      assert.equal(updated.originalStartDate?.toISOString().slice(0, 10), originalStartDate);
+      assert.equal(updated.isModified, false);
+      assert.equal(updated.maxRefundablePercent!.toString(), "100");
+
+      const fee = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: "booking_modification_fee" } });
+      assert.equal(fee, null);
+
+      const activity = await prisma.activityLog.findFirst({ where: { relatedListingId: listing.id, actionType: "booking_modified" } });
+      assert.ok(activity);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("3-7 days notice: rejects without a paymentMethodId, charges nothing, leaves the booking untouched", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(5),
+        endDate: daysFromNow(5),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      await assert.rejects(
+        () => modifyBookingWithFee({ bookingId: booking.id, newStartDate: daysFromNow(30) }),
+        ModificationPaymentMethodRequiredError
+      );
+
+      const unchanged = await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } });
+      assert.equal(unchanged.startDate.toISOString().slice(0, 10), daysFromNow(5));
+      assert.equal(unchanged.isModified, false);
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 1); // only the original create-time debit
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("3-7 days notice, with a paymentMethodId: charges 20% of sgdAmount, sets is_modified and a 50% refund cap", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(5),
+        endDate: daysFromNow(5),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      const newStartDate = daysFromNow(30);
+
+      const updated = await modifyBookingWithFee({
+        bookingId: booking.id,
+        newStartDate,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      assert.equal(updated.startDate.toISOString().slice(0, 10), newStartDate);
+      assert.equal(updated.isModified, true);
+      assert.equal(updated.maxRefundablePercent!.toString(), "50");
+
+      const fee = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: "booking_modification_fee" } });
+      assert.ok(fee);
+      assert.equal(fee!.amount.toString(), "-2"); // 20% of 10.00
+      assert.ok(fee!.stripePaymentIntentId);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("< 3 days notice: rejected outright, no partial state written", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(1),
+        endDate: daysFromNow(1),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      await assert.rejects(
+        () => modifyBookingWithFee({ bookingId: booking.id, newStartDate: daysFromNow(30), paymentMethodId: TEST_PAYMENT_METHOD_ID }),
+        BookingModificationNotEligibleError
+      );
+
+      const unchanged = await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } });
+      assert.equal(unchanged.startDate.toISOString().slice(0, 10), daysFromNow(1));
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 1); // only the create-time debit
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("rejects when the requested new date collides with another booking on the same listing", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const bookingToModify = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(10),
+        endDate: daysFromNow(10),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      const blockingBooking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(20),
+        endDate: daysFromNow(20),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      await assert.rejects(
+        () => modifyBookingWithFee({ bookingId: bookingToModify.id, newStartDate: daysFromNow(20) }),
+        BookingModificationOverlapError
+      );
+
+      const unchanged = await prisma.booking.findUniqueOrThrow({ where: { id: bookingToModify.id } });
+      assert.equal(unchanged.startDate.toISOString().slice(0, 10), daysFromNow(10));
+      void blockingBooking;
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a modification request excludes the booking's own current row from the overlap check", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(10),
+        endDate: daysFromNow(10),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      // "Modifying" to the exact same date it already holds must not be
+      // rejected as a self-overlap.
+      const updated = await modifyBookingWithFee({ bookingId: booking.id, newStartDate: daysFromNow(10) });
+      assert.equal(updated.startDate.toISOString().slice(0, 10), daysFromNow(10));
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a cancelled booking cannot be modified", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(10),
+        endDate: daysFromNow(10),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await cancelBookingWithRefund(booking.id);
+
+      await assert.rejects(
+        () => modifyBookingWithFee({ bookingId: booking.id, newStartDate: daysFromNow(20) }),
+        BookingNotModifiableError
+      );
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("modifyBookingWithFee -> cancelBookingWithRefund — Refund Cap Engine (Step B)", () => {
+  test("a booking modified into the 50% cap tier can later only be refunded up to 50%, even with 7+ days notice on the new date", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(5), // lands in the modification fee tier
+        endDate: daysFromNow(5),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      await modifyBookingWithFee({
+        bookingId: booking.id,
+        newStartDate: daysFromNow(30), // plenty of notice for a 100% standard cancellation refund
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      const cancelled = await cancelBookingWithRefund(booking.id);
+      // Standard tier would be 100% (30 days out) — capped to 50% by the
+      // modification's own max_refundable_percent.
+      assert.equal(cancelled.userRefundPercent!.toString(), "50");
+
+      const refund = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: "refund" } });
+      assert.ok(refund);
+      assert.equal(refund!.amount.toString(), "5"); // 50% of the 10.00 sgdAmount
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a never-modified booking is unaffected — maxRefundablePercent stays null, cap is a no-op", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(10),
+        endDate: daysFromNow(10),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      assert.equal(booking.maxRefundablePercent, null);
+
+      const cancelled = await cancelBookingWithRefund(booking.id);
+      assert.equal(cancelled.userRefundPercent!.toString(), "100");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

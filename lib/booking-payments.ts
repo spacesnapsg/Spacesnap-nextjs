@@ -85,3 +85,50 @@ const SUPPLIER_TIER_INVOICING_CADENCE: Record<SupplierTier, InvoicingCadence> = 
 export function invoicingCadenceForSupplierTier(tier: SupplierTier): InvoicingCadence {
   return SUPPLIER_TIER_INVOICING_CADENCE[tier];
 }
+
+// Sprint 4.75 addition (2026-07-21) — "Modify Booking" (reschedule) eligibility
+// and fee/cap engine, per the product brief's own pseudocode. Standalone/pure,
+// same "unit-testable without a DB" pattern as the cancellation calculators
+// above — lib/bookings.ts's modifyBookingWithFee is the only caller that
+// touches Prisma/Stripe.
+//
+// Day tiers are notice BEFORE the booking's CURRENT (pre-this-modification)
+// start date, calendar-day count, same UTC-midnight normalization as
+// daysBeforeSessionStart above:
+//   >  7 days notice  -> free, no fee, max_refundable_percent reset to 100
+//   3-7 days notice   -> 20% fee (of the booking's sgd_amount), charged
+//                        immediately; max_refundable_percent reset to 50
+//   <  3 days notice  -> rejected outright (not eligible)
+//
+// Note the boundary at exactly day 7 is deliberately NOT the same tier as
+// calculateUserCancellationRefund's day-7 boundary (that one is >=7 for the
+// top tier) — this is what the brief's own boundary conditions ("> 7" free vs
+// "3 <= Days <= 7" fee) specify, not a copy-paste of the cancellation tiers.
+export const MODIFICATION_FEE_PERCENT = 20;
+const MODIFICATION_FREE_MIN_NOTICE_DAYS = 7; // strictly greater than this
+const MODIFICATION_MIN_NOTICE_DAYS = 3; // below this, rejected
+
+export type ModificationEligibility =
+  | { eligible: true; noticeDays: number; feePercent: number; maxRefundablePercent: number }
+  | { eligible: false; noticeDays: number };
+
+export function calculateModificationTerms(booking: CancellableBooking, requestedAt: Date): ModificationEligibility {
+  const noticeDays = daysBeforeSessionStart(booking, requestedAt);
+
+  if (noticeDays > MODIFICATION_FREE_MIN_NOTICE_DAYS) {
+    return { eligible: true, noticeDays, feePercent: 0, maxRefundablePercent: 100 };
+  }
+  if (noticeDays >= MODIFICATION_MIN_NOTICE_DAYS) {
+    return { eligible: true, noticeDays, feePercent: MODIFICATION_FEE_PERCENT, maxRefundablePercent: 50 };
+  }
+  return { eligible: false, noticeDays };
+}
+
+// The "Refund Cap Engine" — a booking that was previously modified may carry
+// a maxRefundablePercent cap (Booking.maxRefundablePercent) below the
+// standard day-tier refund a cancellation would otherwise pay out.
+// `cap === null` means uncapped (a never-modified booking), so this is a
+// no-op for every booking this feature hasn't touched.
+export function applyRefundCap(standardRefundPercent: number, cap: number | null): number {
+  return cap === null ? standardRefundPercent : Math.min(standardRefundPercent, cap);
+}

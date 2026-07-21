@@ -3396,3 +3396,187 @@ only fixed the underlying ledger correctness), and the no-show/never-
 checked-out gap already flagged in the Sprint 3.5 `check_ins` schema note
 (a `confirmed` booking that's never checked in still never transitions or
 gets a payable — unchanged, undecided territory).
+
+## Sprint 4.75 — Modify Booking (Reschedule) Backend (2026-07-21)
+
+New feature, added to Sprint 4.75 at the product owner's request, per a
+detailed pseudocode spec covering two engines:
+- **Step A, Modification Request Engine**: when a user reschedules a
+  booking, notice (days between the booking's CURRENT start date and today)
+  determines eligibility/fee — `> 7` days: free, `max_refundable_percent`
+  reset to 100%; `3-7` days: 20% modification fee charged immediately,
+  `is_modified = true`, `max_refundable_percent` reset to 50%; `< 3` days:
+  rejected outright (fulfil or cancel instead).
+- **Step B, Cancellation Refund Cap Engine**: a later cancellation's
+  standard day-tier refund is capped at `min(standard refund,
+  max_refundable_percent)` — so a booking that used its cheap reschedule
+  window can't then cancel for a bigger refund than the modification's own
+  tier allowed.
+
+Read the existing cancellation-window code (`lib/booking-payments.ts`,
+`lib/bookings.ts`'s `cancelBookingWithRefund`/`declineBookingWithRefund`)
+before writing anything, since this is explicitly designed to compose with
+it, not replace it — confirmed the existing at-fault-party model (supplier
+decline always refunds the user 100%, only user-initiated cancel follows a
+day tier) before deciding where the cap plugs in.
+
+### Build-time decisions, flagged rather than guessed (not confirmed with
+the product owner this session — the brief was pseudocode, not a full
+spec):
+
+- **"booking_fee" = `Booking.sgdAmount`** (the full nominal price
+  snapshotted at creation), not the net Stripe-charged amount after any
+  earned-credit discount. The modification fee is a flat cost of rescheduling
+  THIS booking, not scaled by how it happened to be paid for.
+- **Duration-preserving reschedule.** The brief only ever says "new
+  requested date" (singular) — read as shifting the whole
+  `startDate..endDate` window by the same offset, so a 3-day booking stays a
+  3-day booking. The client sends `newStartDate` only; `newEndDate` is
+  computed server-side from the existing duration. This avoids requiring the
+  client to re-derive/re-validate a duration or re-quote a price for a
+  different-length stay.
+- **The Refund Cap Engine applies to `cancelBookingWithRefund` (user-
+  initiated) only, NOT `declineBookingWithRefund` (supplier-initiated).**
+  This codebase's existing at-fault-party design makes the user whole when
+  the SUPPLIER cancels, regardless of cause — capping that refund because
+  the user separately chose to reschedule earlier would penalize the user
+  for something the supplier caused, contradicting a design this codebase
+  already settled on with the product owner (see `declineBookingWithRefund`'s
+  own header comment, 2026-07-21 correction). Worth a real confirmation with
+  the product owner if this ever comes up, but the alternative (capping a
+  supplier-caused refund) seemed clearly wrong to build silently.
+- **`is_modified` is set true only the first time a modification lands in
+  the fee tier** — matches the brief's own pseudocode exactly (the free-tier
+  action list never mentions it). Never reset back to false by a later free
+  modification. `max_refundable_percent`, by contrast, IS reset on every
+  modification including a free one (brief: "Set to 1.00") — these two
+  fields deliberately don't move in lockstep.
+- **The 20% fee is real Stripe money movement**, not a ledger-only line —
+  matches this codebase's standing discipline (Transaction ledger backs
+  every credit-affecting action) and gives the fee its own new
+  `TransactionType.booking_modification_fee` value rather than overloading
+  `booking_payment` (same reasoning `gig_payout_sgd` used for its own new
+  value: a genuinely distinct ledger event, not a duplicate of an existing
+  one). Charged before the DB transaction opens (Prisma's `$transaction`
+  can't roll back an external API call), with the same pre-charge /
+  compensating-refund-on-failure discipline `createBookingWithDebit` already
+  uses. Deliberately non-refundable if the booking is later
+  cancelled/declined — no code path reverses a
+  `booking_modification_fee` Transaction, since the fee is for the act of
+  rescheduling, not part of the stay's own price.
+
+### What was built
+
+- `calculateModificationTerms` + `applyRefundCap`
+  (`lib/booking-payments.ts`) — pure, no-DB calculators, same pattern as the
+  existing cancellation-window functions. Covered a boundary subtlety
+  explicitly: the modification free tier's day-7 boundary is `> 7` (exclusive),
+  the OPPOSITE inclusivity from the cancellation tiers' `>= 7` (inclusive) —
+  day 7 exactly lands in the 20% fee tier for a modification but the 100%
+  tier for a cancellation. This is per the brief's own stated boundaries,
+  not a copy-paste of the cancellation logic; a dedicated test asserts this
+  so a future session doesn't "fix" it to match cancellation by mistake.
+- Schema (migration `20260721075948_booking_modification_fields`):
+  `Booking.originalStartDate` (nullable, set once on first modification,
+  preserves the pre-modification date for history even across repeat
+  reschedules — `startDate`/`endDate` always stay the CURRENT schedule,
+  unchanged reading for every other part of this codebase), `isModified`
+  (default false), `maxRefundablePercent` (nullable Decimal(5,2), null =
+  uncapped/unaffected). New enum values: `ActivityActionType.booking_modified`,
+  `TransactionType.booking_modification_fee`.
+- `modifyBookingWithFee` (`lib/bookings.ts`) — the write path: status guard
+  (only `pending`/`confirmed`), eligibility check, duration-preserving new
+  date range, overlap pre-check via `hasOverlappingBooking` (extended with an
+  optional `excludeBookingId` param so a booking being rescheduled doesn't
+  collide with its own current row), fee charge via Stripe when applicable,
+  one DB transaction updating the Booking + writing the fee Transaction (if
+  any) + an ActivityLog row, with the same charge-before-transaction /
+  compensating-refund-on-DB-failure discipline `createBookingWithDebit`
+  uses. `parseModifyBookingFields` mirrors `parseBookingCreateFields`'s
+  validate-then-throw shape (`newStartDate` required and not in the past,
+  `paymentMethodId` optional at parse time — whether it's actually required
+  depends on the fee tier, which parsing alone can't know).
+- `cancelBookingWithRefund` now runs its standard day-tier refund through
+  `applyRefundCap` against the booking's own `maxRefundablePercent` before
+  writing it — one-line change, `null` (never-modified) is a no-op so every
+  pre-existing booking/test is unaffected.
+- `PATCH /api/bookings/[id]/modify` (`app/api/bookings/[id]/modify/route.ts`)
+  — same ownership-check shape as the existing cancel route, translates each
+  new error type to a clean HTTP status (422 not-modifiable/not-eligible/
+  payment-method-required, 409 overlap including the 23P01 race-window
+  fallback mirroring the create-booking route's own translation, 402 Stripe
+  failure).
+
+### Tests
+
+`lib/booking-payments.test.ts`: 11 new cases (`calculateModificationTerms`'
+day-7/day-3 boundaries including the inclusivity-flip vs. cancellation
+noted above, `applyRefundCap`'s null/below/above/equal/zero cases).
+`lib/bookings.test.ts`: 9 new cases against the real dev Postgres + Stripe
+test-mode sandbox (no mocking, same convention as every other test in this
+file) — free-tier modification (date updates, `originalStartDate` set,
+`isModified` stays false), fee-tier rejected without a `paymentMethodId`
+then succeeding with one (exact 20% charge, `isModified` true, cap 50),
+too-soon rejection with no partial state, overlap rejection against another
+booking, self-exclusion from the overlap check (modifying to the same date
+it already holds doesn't self-collide), rejecting a modify on an
+already-cancelled booking, and two Refund-Cap-Engine integration tests
+(a modified booking's later cancellation is capped even with 7+ days notice
+on its NEW date; a never-modified booking is unaffected). `npm test`:
+244/244 passing, no regressions. `npx tsc --noEmit` and `npx eslint .` both
+clean (the only two pre-existing lint findings, in `passport/page.tsx` and
+`prisma/tests/db-constraints.test.ts`, are untouched by this session — confirmed via `git diff --stat` before treating them as pre-existing). `npx next build` succeeds, `/api/bookings/[id]/modify` listed in the route
+manifest.
+
+### Live verification (real dev server, real cookie-jar login, cleaned up after)
+
+Hit a real bug during this pass, not just confirmed the happy path: the
+already-running dev server (Turbopack) had an in-memory Prisma Client
+generated BEFORE this session's `prisma generate` ran, so its first request
+against the new `originalStartDate` field 500'd with `PrismaClientValidationError:
+Unknown argument`. Root cause was a stale server process, not the
+migration/schema — restarted the dev server (`preview_stop` + `preview_start`)
+and the identical request succeeded immediately after. Confirmed booking 164
+(the request that hit the stale-client 500) rolled back cleanly with no
+orphan state before retrying — the free tier's zero-Stripe-charge path means
+there was nothing to compensate-refund either way. **Flagging this as a
+real deploy-order note**: a Railway deploy that runs `prisma migrate deploy`
+without also restarting/rebuilding the Next.js process will hit this same
+class of error in production.
+
+As `ethan@example.com` against listing 165 (Power Drill Set, no cert
+requirement, $25/day) on the seeded dev DB:
+- Booking #164 created 10 days out → modified to 25 days out (free tier) →
+  `originalStartDate: "2026-07-31"`, `maxRefundablePercent: 100`,
+  `isModified: false`. Matches the free-tier spec exactly.
+- Booking #165 created 5 days out (fee tier) → modify attempt without
+  `paymentMethodId` → clean 422 `{"paymentMethodId": ["A payment method is
+  required..."]}}`, nothing charged. Retried with `pm_card_visa` → 200,
+  `isModified: true`, `maxRefundablePercent: 50`, and the wallet transaction
+  feed confirmed an exact `-5` SGD `booking_modification_fee` row (20% of the
+  25.00 `sgdAmount`) with a real `stripePaymentIntentId`.
+- Booking #165 then cancelled (40 days from its new date — a 100% standard
+  refund tier) → actual refund was `12.5` SGD (50%), confirmed via both the
+  API response's `maxRefundablePercent: 50` and the wallet feed's refund
+  Transaction row — the Refund Cap Engine correctly overrode the day-tier's
+  100% down to the modification's 50% cap.
+- Booking #166 created 1 day out → modify attempt → clean 422 "starts too
+  soon to be modified," no booking/transaction/activity rows written.
+- All 3 test bookings + their 5 Transaction rows + 6 ActivityLog rows
+  deleted afterward by explicit id (via a scratch Prisma script, deleted
+  immediately after running, not committed) — re-confirmed the dev DB's
+  `bookings`/`transactions` counts matched their pre-verification values.
+
+### Not built this session (flagged, not silently dropped)
+
+- **Frontend UI.** No "Modify Booking" control exists anywhere in the app —
+  this session was backend-only, per the same "backend first" pattern the
+  Sprint 6 cancellation route followed before its own (still-unbuilt) UI.
+  Sprint plan updated to note this explicitly rather than implying the
+  feature is user-reachable.
+- **Re-running cert-gating or availability checks beyond the overlap
+  check** at modify time — a credential could theoretically expire between
+  the old and new dates; not handled, not asked for, flagged here as a real
+  but narrow gap rather than guessed at.
+- **`declineBookingWithRefund` does not consult `maxRefundablePercent`** —
+  deliberate, see the at-fault-party reasoning above, not an oversight.
