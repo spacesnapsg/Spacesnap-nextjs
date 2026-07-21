@@ -3580,3 +3580,104 @@ requirement, $25/day) on the seeded dev DB:
   but narrow gap rather than guessed at.
 - **`declineBookingWithRefund` does not consult `maxRefundablePercent`** —
   deliberate, see the at-fault-party reasoning above, not an oversight.
+
+## Sprint 4.75 — Cancel/Modify Booking UI + Stripe Elements Card Entry (2026-07-21)
+
+Frontend session closing the two UI gaps the product owner picked from the
+"what's next" list: the Cancel/Modify Booking controls (both backends landed
+earlier this same day / the day before, both flagged "no UI exists") and the
+Stripe Elements card-entry item ("buildable now, not blocked").
+
+### Entry point decision (made here, not specced anywhere)
+
+No design ever specced where Cancel/Modify surface. Went with a new
+**"My Bookings" card on the user dashboard** (`app/(user)/user/page.tsx`),
+directly mirroring the existing Bulk Orders card's row-with-inline-actions
+anatomy — one row per booking, status badge, Cancel/Modify text buttons on
+`pending`/`confirmed` rows only (matching the lib-layer status guards), and a
+"Rescheduled from {date}" hint when `originalStartDate` is set. Flagging the
+placement as this session's own call, easily moved if product wants it
+elsewhere.
+
+### Stripe Elements: client-side card → pm id, no server changes
+
+- `components/StripeCardField.tsx`: `StripeElementsProvider` (always mounts
+  `<Elements>`, with `stripe={null}` when unconfigured — `useStripe()` throws
+  outside an Elements context, and consumers call the hook unconditionally),
+  `CardEntryField` (CardElement in an iframe can't read CSS variables, so its
+  colors hand-mirror tailwind.config.ts), `useCreateCardPaymentMethod`
+  (createPaymentMethod → `pm_...` id). The raw card never touches this
+  codebase — the existing routes' `paymentMethodId` contract is unchanged,
+  which is why this needed zero server work.
+- `BookingModal.tsx`: hardcoded `pm_card_visa` + its TODO gone; confirm now
+  collects the card first. State moved into an inner component that mounts
+  fresh per open (replaces the old manual reset-on-close bookkeeping).
+- New env var `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (in `.env.example`;
+  `NEXT_PUBLIC_` convention confirmed unchanged in this Next.js version's
+  bundled docs). Unconfigured state degrades to a visible notice + disabled
+  confirm, verified live — not a broken iframe.
+- **Not verified: an actual card entry through the new field.** No
+  publishable key exists in this dev env; product owner explicitly chose to
+  skip rather than provide one this session. Everything up to Stripe's iframe
+  boundary is verified. One booking with `4242 4242 4242 4242` after setting
+  the key closes this.
+
+### Refund/fee previews: same functions, not a client-side copy
+
+The modals show the refund %, S$ amounts, and fee tier before the user
+commits. To keep that preview from ever drifting from what the server
+charges, split the pure calculators out of `lib/booking-payments.ts` into a
+new client-safe `lib/booking-policy.ts` (booking-payments imports the
+generated Prisma client for the tier→cadence mapping, which must not enter
+the browser bundle; it now re-exports everything from booking-policy, so all
+server imports and tests are untouched — `npm test` 244/244 after the split).
+`CancelBookingModal` runs `calculateUserCancellationRefund` +
+`applyRefundCap`; `ModifyBookingModal` runs `calculateModificationTerms` and
+only renders the card field when the fee tier applies. Server still
+recomputes at request time; the preview is advisory.
+
+### Real bug found: activity feed crashed on the new enum values
+
+First dashboard load crashed with "Element type is invalid... Check the
+render method of `ActivityRow`" — `lib/hooks/useActivity.ts`'s
+`ActivityActionType` union (and the page's exhaustive icon map keyed off it)
+had never learned `booking_cancelled`, `booking_modified`, or
+`bulk_order_confirmed_despite_insufficient_credit`, all added to the schema
+enum by earlier backend sessions; the seeded DB already contained a
+`booking_cancelled` row, so the whole dashboard crashed for ANY user before
+this session's UI even entered the picture (and would have crashed on first
+real cancel regardless). Fixed the union + icon map + "Bookings" category
+filter + the `BOOKING_ACTION_TYPES` badge-linking set (cancel/modify
+descriptions carry the same `Booking #<id>` pattern). Left a sync-warning
+comment on the union pointing at the schema enum.
+
+### Live verification (dev server, real logins, cleaned up after)
+
+As `ethan@example.com`, three test bookings on listing 165 (Power Drill Set,
+$25/day) at 1/5/25 days notice, all via the real UI:
+- 1 day out: Modify → clean "starts too soon" ineligible modal; Cancel →
+  preview 0% · S$0.00, executed: status `cancelled`, reason persisted, zero
+  refund Transaction (correct for 0%).
+- 25 days out: Modify free tier → "Free" badge, picked a date 5 days later,
+  row updated to the new dates + "Rescheduled from Aug 15, 2026";
+  DB confirmed `originalStartDate` set, `isModified` false,
+  `maxRefundablePercent` 100.00, no fee row.
+- 5 days out: Modify → fee tier preview "20% · S$5.00" + 50%-cap warning +
+  (unconfigured) card notice with confirm disabled; Cancel → preview
+  50% · S$12.50, executed: real Stripe refund, ledger `refund` row +12.50
+  with live PaymentIntent id — preview matched execution exactly.
+- All test rows (bookings, transactions, activity, the cancels'
+  supplier_payables audit rows) deleted; counts re-confirmed at their
+  pre-session baseline (5/10/8).
+- `npx tsc --noEmit`, `npx eslint` clean on every touched file.
+
+Also fixed while in the sprint plan: two stale lines contradicting closed
+work — Sprint 3.5's "booking decline still has no refund mechanism" (closed
+by the same-day decline rewrite) and Sprint 6's "InvoicingCadence mapping
+undecided" (confirmed and built the same day).
+
+### Not done
+
+- Real-card verification (above).
+- `Company.supplierTier` admin route/UI, `BookingCredit` issuance,
+  Stripe webhooks — unchanged, still the next Sprint 6 items.

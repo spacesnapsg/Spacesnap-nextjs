@@ -1,9 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, Image as ImageIcon, MapPin } from "lucide-react";
+import { Image as ImageIcon, MapPin } from "lucide-react";
 import Modal from "@/components/Modal";
 import Button from "@/components/Button";
+import BookingDatePicker, { addDays, toDateString } from "@/components/BookingDatePicker";
+import {
+  StripeElementsProvider,
+  CardEntryField,
+  useCreateCardPaymentMethod,
+  stripeConfigured,
+} from "@/components/StripeCardField";
 import { useCreateBooking, type BookingType, type Listing } from "@/lib/hooks/useListings";
 import { ApiRequestError } from "@/lib/api-client";
 
@@ -21,173 +28,45 @@ const DURATIONS = [
 
 type DurationKey = (typeof DURATIONS)[number]["key"];
 
-const WEEKDAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
-
-function startOfDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addDays(date: Date, amount: number) {
-  const result = new Date(date);
-  result.setDate(result.getDate() + amount);
-  return result;
-}
-
-function toDateString(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function isSameDay(a: Date | null, b: Date | null) {
-  return (
-    !!a &&
-    !!b &&
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
-
-function formatShort(date: Date) {
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function buildCalendarCells(viewDate: Date) {
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-  const startWeekday = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const cells: (Date | null)[] = Array(startWeekday).fill(null);
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    cells.push(new Date(year, month, day));
-  }
-  return cells;
-}
-
-function DatePicker({
-  durationDays,
-  selectedDate,
-  onSelectDate,
-}: {
-  durationDays: number;
-  selectedDate: Date | null;
-  onSelectDate: (date: Date) => void;
-}) {
-  const today = startOfDay(new Date());
-  const [viewDate, setViewDate] = useState(
-    startOfDay(new Date(today.getFullYear(), today.getMonth(), 1))
-  );
-
-  const cells = buildCalendarCells(viewDate);
-  const rangeEnd = selectedDate ? addDays(selectedDate, durationDays - 1) : null;
-  const isPrevDisabled =
-    viewDate.getFullYear() === today.getFullYear() && viewDate.getMonth() === today.getMonth();
-
-  return (
-    <div className="border-t border-border/40 pt-4">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-sm text-muted-text">Select a date</p>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            disabled={isPrevDisabled}
-            onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() - 1, 1))}
-            aria-label="Previous month"
-            className={`h-7 w-7 flex items-center justify-center rounded border border-border text-muted-text transition-colors ${
-              isPrevDisabled ? "opacity-30 cursor-not-allowed" : "hover:text-body-text hover:bg-background"
-            }`}
-          >
-            <ChevronLeft size={14} />
-          </button>
-          <p className="text-sm text-body-text font-medium w-28 text-center">
-            {viewDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-          </p>
-          <button
-            type="button"
-            onClick={() => setViewDate(new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 1))}
-            aria-label="Next month"
-            className="h-7 w-7 flex items-center justify-center rounded border border-border text-muted-text hover:text-body-text hover:bg-background transition-colors"
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-7 gap-1 text-center">
-        {WEEKDAY_LABELS.map((label, i) => (
-          <p key={i} className="text-xs text-muted-text py-1">
-            {label}
-          </p>
-        ))}
-
-        {cells.map((date, i) => {
-          if (!date) return <div key={`pad-${i}`} />;
-
-          const isPast = date < today;
-          const isStart = isSameDay(date, selectedDate);
-          const isInRange =
-            !!selectedDate && !isStart && date > selectedDate && !!rangeEnd && date <= rangeEnd;
-
-          return (
-            <button
-              key={date.toISOString()}
-              type="button"
-              disabled={isPast}
-              onClick={() => onSelectDate(date)}
-              className={`h-8 w-8 mx-auto flex items-center justify-center rounded text-sm transition-colors ${
-                isPast
-                  ? "text-muted-text/30 cursor-not-allowed"
-                  : isStart
-                    ? "bg-user-teal-start text-white font-medium"
-                    : isInRange
-                      ? "bg-user-teal-start/25 text-user-teal-end"
-                      : "text-body-text hover:bg-background"
-              }`}
-            >
-              {date.getDate()}
-            </button>
-          );
-        })}
-      </div>
-
-      {selectedDate && rangeEnd && (
-        <p className="text-sm text-muted-text mt-3">
-          Booking window: <span className="text-body-text">{formatShort(selectedDate)}</span> –{" "}
-          <span className="text-body-text">{formatShort(rangeEnd)}</span> ({durationDays} day
-          {durationDays > 1 ? "s" : ""})
-        </p>
-      )}
-    </div>
-  );
-}
-
 interface BookingModalProps {
   open: boolean;
   onClose: () => void;
   listing: Listing | null;
 }
 
-export default function BookingModal({ open, onClose, listing }: BookingModalProps) {
+function BookingModalContent({ onClose, listing }: { onClose: () => void; listing: Listing }) {
   const [duration, setDuration] = useState<DurationKey>("daily");
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [cardError, setCardError] = useState<string | null>(null);
+  const [isCollectingCard, setIsCollectingCard] = useState(false);
   const createBooking = useCreateBooking();
-
-  if (!open || !listing) return null;
+  const createCardPaymentMethod = useCreateCardPaymentMethod();
 
   const activeDuration = DURATIONS.find((d) => d.key === duration) ?? DURATIONS[0];
 
   const selectedPrice =
     duration === "daily" ? listing.priceDay : duration === "weekly" ? listing.priceWeek : listing.priceMonth;
 
-  function handleClose() {
-    setDuration("daily");
-    setSelectedDate(null);
-    createBooking.reset();
-    onClose();
-  }
+  const isSubmitting = isCollectingCard || createBooking.isPending;
 
-  function handleConfirm() {
-    if (!selectedDate || !listing) return;
+  async function handleConfirm() {
+    if (!selectedDate) return;
+    setCardError(null);
+
+    // Card details go straight from the Stripe iframe to Stripe here — the
+    // server routes only ever see the resulting pm_... id (replaces the old
+    // hardcoded pm_card_visa test token; server wiring unchanged).
+    let paymentMethodId: string;
+    setIsCollectingCard(true);
+    try {
+      paymentMethodId = await createCardPaymentMethod();
+    } catch (error) {
+      setCardError(error instanceof Error ? error.message : "Your card could not be processed.");
+      return;
+    } finally {
+      setIsCollectingCard(false);
+    }
+
     const endDate = addDays(selectedDate, activeDuration.days - 1);
     createBooking.mutate(
       {
@@ -195,23 +74,22 @@ export default function BookingModal({ open, onClose, listing }: BookingModalPro
         bookingType: duration as BookingType,
         startDate: toDateString(selectedDate),
         endDate: toDateString(endDate),
-        // TODO(stripe-elements-checkout): booking creation now charges
-        // real-time SGD via Stripe (2026-07-21 write-path session) — this
-        // hardcodes Stripe's well-known test PaymentMethod token so the
-        // booking flow keeps working end-to-end until a real card-entry UI
-        // (Stripe Elements) replaces it. Server-side wiring is real and
-        // tested (lib/bookings.test.ts); only card collection is stubbed.
-        paymentMethodId: "pm_card_visa",
+        paymentMethodId,
       },
-      { onSuccess: handleClose }
+      { onSuccess: onClose }
     );
   }
 
   const errorMessage =
-    createBooking.error instanceof ApiRequestError ? createBooking.error.message : createBooking.error ? "Something went wrong." : null;
+    cardError ??
+    (createBooking.error instanceof ApiRequestError
+      ? createBooking.error.message
+      : createBooking.error
+        ? "Something went wrong."
+        : null);
 
   return (
-    <Modal open={open} onClose={handleClose} className="w-full max-w-[480px]">
+    <Modal open onClose={onClose} className="w-full max-w-[480px]">
       <div className="flex flex-col gap-5">
         <div className="flex gap-4 pr-6">
           <div className="h-20 w-20 shrink-0 rounded-xl bg-background flex items-center justify-center">
@@ -254,23 +132,39 @@ export default function BookingModal({ open, onClose, listing }: BookingModalPro
           <p className="text-body-text font-medium mt-3">{selectedPrice} credits</p>
         </div>
 
-        <DatePicker
+        <BookingDatePicker
           durationDays={activeDuration.days}
           selectedDate={selectedDate}
           onSelectDate={setSelectedDate}
         />
 
+        <div className="border-t border-border/40 pt-4">
+          <CardEntryField />
+        </div>
+
         {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
 
         <Button
           variant="primary"
-          disabled={!selectedDate || createBooking.isPending}
+          disabled={!selectedDate || isSubmitting || !stripeConfigured}
           onClick={handleConfirm}
-          className={`w-full ${!selectedDate || createBooking.isPending ? "opacity-50 cursor-not-allowed" : ""}`}
+          className={`w-full ${!selectedDate || isSubmitting || !stripeConfigured ? "opacity-50 cursor-not-allowed" : ""}`}
         >
-          {createBooking.isPending ? "Confirming…" : "Confirm Booking"}
+          {isSubmitting ? "Confirming…" : "Confirm Booking"}
         </Button>
       </div>
     </Modal>
+  );
+}
+
+export default function BookingModal({ open, onClose, listing }: BookingModalProps) {
+  if (!open || !listing) return null;
+
+  // Content (state included) mounts fresh per open and unmounts on close, so
+  // the old handleClose reset bookkeeping is no longer needed.
+  return (
+    <StripeElementsProvider>
+      <BookingModalContent onClose={onClose} listing={listing} />
+    </StripeElementsProvider>
   );
 }

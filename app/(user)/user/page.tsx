@@ -17,6 +17,8 @@ import {
 import Card from "@/components/Card";
 import RatingStars from "@/components/RatingStars";
 import RequestCancellationModal from "@/components/RequestCancellationModal";
+import CancelBookingModal from "@/components/CancelBookingModal";
+import ModifyBookingModal from "@/components/ModifyBookingModal";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useUserBookings, useSubmitRating, type UserBooking } from "@/lib/hooks/useUserBookings";
 import {
@@ -69,6 +71,8 @@ const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   booking_created: CalendarCheck,
   booking_confirmed: CalendarCheck,
   booking_declined: CalendarCheck,
+  booking_cancelled: CalendarCheck,
+  booking_modified: CalendarCheck,
   booking_completed: CheckCheck,
   bulk_order_created: Package,
   bulk_order_confirmed: Package,
@@ -78,6 +82,7 @@ const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   bulk_order_cancellation_requested: Package,
   bulk_order_cancellation_approved: Package,
   bulk_order_cancellation_rejected: Package,
+  bulk_order_confirmed_despite_insufficient_credit: Package,
   wallet_topup: Wallet,
   check_in: LogIn,
   check_out: LogOut,
@@ -103,6 +108,8 @@ const BOOKING_ACTION_TYPES = new Set<ActivityActionType>([
   "booking_created",
   "booking_confirmed",
   "booking_declined",
+  "booking_cancelled",
+  "booking_modified",
   "booking_completed",
 ]);
 
@@ -176,6 +183,66 @@ function ActivityRow({ entry, bookingsById }: { entry: ActivityEntry; bookingsBy
             ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Mirrors BulkOrderActivityRow below — same row anatomy, but for bookings.
+// Cancel/Modify only surface on pending/confirmed bookings, matching the
+// status guards in cancelBookingWithRefund/modifyBookingWithFee
+// (lib/bookings.ts); each opens its own modal with the refund/fee preview.
+function BookingRow({
+  booking,
+  onCancel,
+  onModify,
+}: {
+  booking: UserBooking;
+  onCancel: (booking: UserBooking) => void;
+  onModify: (booking: UserBooking) => void;
+}) {
+  const actionable = booking.status === "pending" || booking.status === "confirmed";
+  return (
+    <div className="flex items-center justify-between gap-3 py-3 border-b border-border/40 last:border-0">
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="h-9 w-9 shrink-0 rounded-full bg-user-teal-start/15 text-user-teal-end flex items-center justify-center">
+          <CalendarCheck size={16} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm text-body-text font-medium truncate">{booking.listingName ?? `Booking #${booking.id}`}</p>
+          <p className="text-xs text-muted-text">
+            {formatDate(booking.startDate)} – {formatDate(booking.endDate)} &middot; {booking.sgdAmount} cr
+          </p>
+          {booking.originalStartDate && (
+            <p className="text-xs text-amber">Rescheduled from {formatDate(booking.originalStartDate)}</p>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col items-end gap-1 shrink-0">
+        <span
+          className={`rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${BOOKING_STATUS_STYLES[booking.status]}`}
+        >
+          {booking.status}
+        </span>
+        {actionable && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onModify(booking)}
+              className="text-xs text-user-teal-end hover:underline"
+            >
+              Modify
+            </button>
+            <button
+              type="button"
+              onClick={() => onCancel(booking)}
+              className="text-xs text-error-red hover:underline"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -281,6 +348,8 @@ export default function UserDashboardPage() {
   const requestCancellation = useRequestBulkOrderCancellation();
   const [cancellationTarget, setCancellationTarget] = useState<{ id: string; listingName?: string } | null>(null);
   const [cancellationError, setCancellationError] = useState<string | null>(null);
+  const [cancelBookingTarget, setCancelBookingTarget] = useState<UserBooking | null>(null);
+  const [modifyBookingTarget, setModifyBookingTarget] = useState<UserBooking | null>(null);
 
   const [activityCategory, setActivityCategory] = useState<ActivityCategory | "all">("all");
   const [activityRange, setActivityRange] = useState<ActivityDateRange>("30");
@@ -354,6 +423,30 @@ export default function UserDashboardPage() {
           Not wired yet — there&apos;s no GET endpoint to list active check-ins (only POST create and
           PATCH check-out exist). Tracked as a backend gap.
         </p>
+      </Card>
+
+      <Card className="mb-6">
+        <h2 className="text-lg font-semibold text-body-text mb-2">My Bookings</h2>
+        <p className="text-sm text-muted-text mb-2">
+          Pending and confirmed bookings can be rescheduled (free with more than 7 days&apos; notice, a
+          20% fee at 3-7 days) or cancelled (refund depends on notice).
+        </p>
+        {bookingsLoading ? (
+          <p className="text-sm text-muted-text py-4">Loading…</p>
+        ) : !bookings || bookings.length === 0 ? (
+          <p className="text-sm text-muted-text py-4">No bookings yet.</p>
+        ) : (
+          <div className="flex flex-col">
+            {bookings.map((booking) => (
+              <BookingRow
+                key={booking.id}
+                booking={booking}
+                onCancel={setCancelBookingTarget}
+                onModify={setModifyBookingTarget}
+              />
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card className="mb-6">
@@ -433,6 +526,18 @@ export default function UserDashboardPage() {
           </div>
         )}
       </Card>
+
+      <CancelBookingModal
+        open={!!cancelBookingTarget}
+        onClose={() => setCancelBookingTarget(null)}
+        booking={cancelBookingTarget}
+      />
+
+      <ModifyBookingModal
+        open={!!modifyBookingTarget}
+        onClose={() => setModifyBookingTarget(null)}
+        booking={modifyBookingTarget}
+      />
 
       <RequestCancellationModal
         open={!!cancellationTarget}

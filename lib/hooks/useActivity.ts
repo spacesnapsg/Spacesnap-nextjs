@@ -5,10 +5,18 @@ import { apiFetch } from "@/lib/api-client";
 // plain string union — frontend code doesn't import the generated Prisma
 // client (see lib/hooks/useUserBookings.ts's BookingStatus for the same
 // convention), so this list has to be kept in sync by hand if the enum grows.
+// Must stay in sync with prisma/schema.prisma's ActivityActionType enum — a
+// value the API can return but this union doesn't know crashes the dashboard
+// feed (ACTIVITY_ICONS is keyed exhaustively off this union). Found the hard
+// way 2026-07-21: booking_cancelled/booking_modified/
+// bulk_order_confirmed_despite_insufficient_credit had landed in the schema
+// across three earlier backend sessions without this side being updated.
 export type ActivityActionType =
   | "booking_created"
   | "booking_confirmed"
   | "booking_declined"
+  | "booking_cancelled"
+  | "booking_modified"
   | "booking_completed"
   | "bulk_order_created"
   | "bulk_order_confirmed"
@@ -29,7 +37,8 @@ export type ActivityActionType =
   | "credential_issued"
   | "signoff_requested"
   | "signoff_reviewed"
-  | "instant_purchase_completed";
+  | "instant_purchase_completed"
+  | "bulk_order_confirmed_despite_insufficient_credit";
 
 export interface ActivityEntry {
   id: string;
@@ -48,7 +57,7 @@ export type ActivityCategory = "bookings" | "bulk_orders" | "purchases" | "walle
 export const ACTIVITY_CATEGORIES: Record<ActivityCategory, { label: string; types: ActivityActionType[] }> = {
   bookings: {
     label: "Bookings",
-    types: ["booking_created", "booking_confirmed", "booking_declined", "booking_completed"],
+    types: ["booking_created", "booking_confirmed", "booking_declined", "booking_cancelled", "booking_modified", "booking_completed"],
   },
   bulk_orders: {
     label: "Bulk Orders",
@@ -61,6 +70,7 @@ export const ACTIVITY_CATEGORIES: Record<ActivityCategory, { label: string; type
       "bulk_order_cancellation_requested",
       "bulk_order_cancellation_approved",
       "bulk_order_cancellation_rejected",
+      "bulk_order_confirmed_despite_insufficient_credit",
     ],
   },
   purchases: { label: "Purchases", types: ["instant_purchase_completed"] },

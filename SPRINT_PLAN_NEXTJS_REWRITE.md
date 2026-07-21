@@ -146,7 +146,7 @@ This is the sprint that didn't exist as its own thing in the original build — 
 
 **New known gaps, 2026-07-20 — purchased/earned balance split (schema landed, write paths not yet rewired):**
 - [x] ~~Booking creation: replace the combined-wallet debit in `createBookingWithDebit` (`lib/bookings.ts`) with a Stripe payment intent for `Booking.sgdAmount` (full real-time SGD charge) and, if `earnedCreditsApplied > 0`, an `earned_spend` Transaction discounting the earned balance for that amount — both inside the same DB transaction as the Booking create, same atomicity discipline as today (a booking never exists without its matching charge/discount record, and vice versa). **`purchasedBalance` must never be deducted for a booking, under any code path** — this is the core rule the whole split exists to enforce, not a detail to optimize around.~~ — **closed 2026-07-21**, see CLAUDE1.md "Write-Path Session — Stripe Booking Charges + Purchase/RewardGrant Rewiring."
-- [ ] Booking decline: **still open, not touched this session** — `declineBookingWithRefund` (`lib/bookings.ts`) still credits the old combined-ledger `refund` type instead of issuing a real Stripe refund + reversing any `earned_spend` discount via `earned_grant`. Flagged, not silently carried forward: the 2026-07-21 session that closed booking creation above deliberately scoped decline out (not asked for), so a booking created via the new Stripe charge path that then gets declined currently has no refund mechanism at all — a real gap to close before this flow is production-usable, not a hypothetical.
+- [x] Booking decline: ~~still open~~ — **closed 2026-07-21, this line was stale** (caught in the same day's Cancel/Modify UI session): the "`declineBookingWithRefund` real rewrite" item under Sprint 6 closed it — real `stripe.refunds.create` sized by the cancellation-window tiers, plus proportional `earned_grant` reversal of any discount. See that Sprint 6 item and CLAUDE1.md "Cancellation Route + Commission-Rate Closure" for details.
 - [ ] Booking confirm: **no change needed** — `confirmBookingWithAudit` already creates its own zero-amount audit Transaction, and that discipline (audit row, no ledger movement) is unaffected by where the money/discount actually moved at creation time.
 - [x] ~~Consumables (2026-07-21, schema landed, write path not built): `Purchase.earnedCreditsApplied` needs the same discount-resolution wiring as the booking item above — a `purchased_spend`/Stripe charge for `credits - earnedCreditsApplied`, and if `earnedCreditsApplied > 0`, an `earned_spend` Transaction against that purchase, both inside `createPurchaseWithDebit`'s existing `$transaction`. `purchasedBalance` still covers the full `credits` amount when no discount is applied — unchanged path.~~ — **closed 2026-07-21**, same session as booking creation above. Resolved as purchasedBalance-funded (`purchased_spend`), not a Stripe charge — see that session's write-up for why the compliance boundary doesn't require Stripe here, unlike bookings.
 - [ ] Gigs (2026-07-21, schema landed via `GigTask`/`GigAssignment`, no write path built — see the dated amendment above for the full schema/enum reasoning): posting a task charges the poster `purchasedSpend` (`purchased_spend` Transaction, or real-time SGD, poster's choice — same principal-in-the-middle pattern as every other SpaceSnap-as-seller flow); completing an assignment resolves `payoutAmount` and settles it via either `earned_grant` (worker chose earned credit) or the new `gig_payout_sgd` (worker chose direct SGD, actual Stripe transfer still unbuilt, tracked for audit trail only). Belongs in the same execution pass as the booking/consumables items above, not a separately rediscovered task. **Explicitly deferred again 2026-07-21** — gigs stay shelved per this session's own scoping instruction.
@@ -239,19 +239,34 @@ belong to.
   the public routes already do it. Verified live (`ben@acmecoworking.sg`,
   real cookie-jar login): card now reads "No ratings yet" against the seeded
   dev DB, which has no ratings yet — not just eyeballed from the code.
-- [ ] **Stripe Elements real card-entry UI — buildable now, not blocked.**
-  `BookingModal.tsx` sends a hardcoded `pm_card_visa` test token
-  (`TODO(stripe-elements-checkout)` at line 198) instead of collecting a real
-  card. The server-side charge path is already live and tested
-  (`createBookingWithDebit`), so this is a frontend-only build, not waiting on
-  any new route.
-- [ ] **Cancel Booking UI — blocked on the cancellation route (Sprint 6).**
-  No "Cancel Booking" control exists anywhere in the app (confirmed by
-  repo-wide search) despite `Booking.cancelledAt`/`cancelledBy`/
-  `cancellationReason`/`userRefundPercent` already existing in the schema.
-  Do not build this until the Sprint 6 cancellation route + real Stripe
-  refund execution item is done — there's nothing for a cancel button to call
-  yet.
+- [x] **Stripe Elements real card-entry UI — built 2026-07-21, one
+  verification step pending.** `components/StripeCardField.tsx` (Elements
+  provider + themed CardElement + `useCreateCardPaymentMethod`); the card goes
+  straight from Stripe's iframe to Stripe and only the resulting `pm_...` id
+  reaches the existing routes — no server changes. `BookingModal.tsx`'s
+  hardcoded `pm_card_visa` is gone; the Modify Booking modal's fee tier uses
+  the same field. Requires `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (added to
+  `.env.example`); without it the modals render a clear "not configured"
+  notice with the confirm button disabled (verified live) instead of a broken
+  iframe. **Charging a real test card through the new field is the one
+  unverified step** — no publishable key exists in this dev environment
+  (deliberately skipped 2026-07-21, product owner's call); everything up to
+  Stripe's iframe boundary is verified. Set the key, restart the dev server,
+  and run one booking with card `4242 4242 4242 4242` before calling this
+  fully closed.
+- [x] **Cancel Booking UI — built 2026-07-21** (the Sprint 6 cancellation
+  route it was blocked on closed earlier the same day). Entry point: a new
+  "My Bookings" card on the user dashboard (`app/(user)/user/page.tsx`),
+  mirroring the existing Bulk Orders card — rows for every booking, with
+  Cancel/Modify actions on `pending`/`confirmed` ones only.
+  `CancelBookingModal` previews the refund by running the SAME calculators
+  the server executes (`lib/booking-policy.ts` — day tier through
+  `applyRefundCap`), optional reason, then `PATCH /api/bookings/[id]/cancel`.
+  Verified live against the dev server: a 1-day-out booking previewed and
+  executed 0% (no refund Transaction written, reason persisted), a 5-day-out
+  booking previewed 50%/S$12.50 and the executed Stripe refund matched
+  exactly (real refund id on the ledger row). See CLAUDE1.md
+  "Sprint 4.75 — Cancel/Modify Booking UI + Stripe Elements" session note.
 - [ ] **`Company.supplierTier` admin UI — blocked on the admin route
   (Sprint 6).** No admin page/component references `supplierTier` at all
   (confirmed by repo-wide search); it's currently DB-only. Do not build until
@@ -279,12 +294,16 @@ belong to.
   Booking (Reschedule) Backend" for the full design, flagged assumptions
   (what "booking_fee" means, duration-preserving reschedule, why the cap
   only applies to user-initiated cancellation and not supplier decline), and
-  live-verification transcript. **Frontend UI not built this session** — no
-  "Modify Booking" control exists in the app yet, same "backend first,
-  flagged not guessed" pattern as the Sprint 6 cancellation route before its
-  own UI landed. A future session should add it once product/design specs
-  the entry point (likely alongside wherever Cancel Booking eventually
-  surfaces, still itself unbuilt per the Sprint 4.75 item above).
+  live-verification transcript. **Frontend UI built 2026-07-21** (follow-up
+  session, same day): `ModifyBookingModal` on the dashboard's new My Bookings
+  card, next to Cancel — shared date picker extracted from `BookingModal`
+  into `components/BookingDatePicker.tsx`, fee/eligibility preview via the
+  same `calculateModificationTerms` the server runs, card entry (Stripe
+  Elements) required exactly when the 3-7-day fee tier applies. Free-tier
+  reschedule verified live end-to-end (dates moved, `originalStartDate`
+  preserved and surfaced as "Rescheduled from …", cap reset to 100, no fee
+  row); fee-tier UI verified up to the card field (real charge pending the
+  publishable key, per the Stripe Elements item above).
 
 ---
 
@@ -319,7 +338,7 @@ belong to.
   - [x] **`SupplierPayable` correction: completion earnings + live aggregate balance — closed 2026-07-21 (same day, separate session).** The line above initially wrote a `SupplierPayable` for the *cancelled* booking itself with a fabricated `grossAmount` — wrong, since a cancelled booking's money was refunded, not earned. Caught by the product owner's own worked example (2× $5 completed bookings + 1× $5 booking declined <3 days out → supplier should net $8.50, SpaceSnap $1.50). Fixed: new `createCompletedBookingPayable` (`lib/supplier-payables.ts`) writes the real earning row when a booking actually completes (wired into `checkOutCheckIn`, `lib/check-ins.ts` — this row never existed anywhere before this fix). `declineBookingWithRefund`'s row is now a pure penalty debit (`grossAmount 0`); `cancelBookingWithRefund`'s is now a zero-effect audit row (all three amounts 0), not a fabricated payout. New `getSupplierPendingPayableBalance(companyId)` — live `SUM(netAmount)` over a company's pending rows, same never-denormalized principle as `getCreditBalance` — is what actually nets a penalty against other bookings' earnings; no explicit "check balance, then deduct" step exists or is needed anywhere. See CLAUDE1.md "SupplierPayable Correction — Completion Earnings + Live Aggregate Balance" for the full write-up, including the live verification reproducing the exact worked example through the real API routes.
   - [ ] **`BookingCredit` issuance.** Model exists, nothing writes to it — the "cancelled, here are alternatives, rebook" credit-note flow (both the backend issuance and the UI) is unbuilt.
   - [x] **`declineBookingWithRefund` real rewrite** — closed 2026-07-21. Replaced the flat combined-ledger `refund` Transaction with a real `stripe.refunds.create` against the original PaymentIntent, sized by `calculateUserCancellationRefund`/`calculateSupplierCancellationPenalty` (the cancellation-window percent tiers from the schema session above), plus a proportional `earned_grant` reversal of any `earnedCreditsApplied` discount (ledger-only — the `RewardGrant` row stays `redeemed`, since its job was authorizing the original discount, not tracking the live balance). `cancelledAt`/`cancelledBy`/`cancellationReason`/`userRefundPercent`/`supplierPenaltyPercent` are now written on the `Booking` row. Deliberately still does **not** write a `SupplierPayable` (blocked on the commission-rate gap below) or issue a `BookingCredit` (issuance policy still undecided) — both flagged in the function's own header comment, not guessed at. 4 new tests added to `lib/bookings.test.ts` (100%/50%/0% refund tiers, proportional earned-credit reversal) alongside the 4 existing decline tests, all passing against the real dev DB + Stripe test-mode sandbox (`npm test`: 213/213). `npx tsc --noEmit`, `eslint`, and `next build` all clean.
-  - [ ] Which `InvoicingCadence` each `SupplierTier` maps to — undecided, not guessed at.
+  - [x] Which `InvoicingCadence` each `SupplierTier` maps to — ~~undecided~~ **this line was stale** (caught 2026-07-21): confirmed with the product owner and built the same day as the cancellation route — `free`→monthly, `preferred`→biweekly, `top`→weekly (`invoicingCadenceForSupplierTier`, `lib/booking-payments.ts`), per the item a few lines above.
 
 **Checklist before moving to Sprint 7:**
 - [ ] Stripe webhook tested in sandbox for all states: success, failure, refund
