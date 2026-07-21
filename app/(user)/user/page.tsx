@@ -407,8 +407,10 @@ export default function UserDashboardPage() {
             <div className="mt-3">
               <div className="flex items-center justify-between text-xs text-muted-text mb-1">
                 <span>Progress to Starter</span>
-                {/* TODO: placeholder progress — no booking/spend thresholds are confirmed yet */}
-                <span>Criteria TBC</span>
+                {/* TODO: real criteria (see the Reward Tiers infographic), but actual progress
+                    against it is still a placeholder — no tier/booking-count/spend tracking
+                    exists in the backend yet (Sprint 6.5, not started). */}
+                <span>8 bookings & $1,000 spend</span>
               </div>
               <div className="h-2 rounded-full bg-border/40 overflow-hidden">
                 <div className="h-full w-[35%] rounded-full bg-gradient-to-r from-user-teal-start to-supplier-purple-start" />
