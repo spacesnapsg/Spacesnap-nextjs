@@ -294,6 +294,103 @@ enum RewardGrantStatus {
   @@map("reward_grant_status")
 }
 
+// Merchant-of-record, direct-charge cancellation policy (2026-07-21 session) —
+// which party cancelled a booking, mirrored by two independent percent
+// tiers computed off days-before-session-start (see lib/booking-payments.ts):
+// userRefundPercent (100/50/0, how much of the Stripe charge the user gets
+// back) and supplierPenaltyPercent (0/50/100, applied against SpaceSnap's
+// commission portion of the booking — not the full booking value — when the
+// SUPPLIER is the one who cancelled). Both fields are nullable because most
+// bookings are never cancelled at all.
+enum BookingCancelledBy {
+  user
+  supplier
+
+  @@map("booking_cancelled_by")
+}
+
+// A bounded credit note issued to a user when their booking is cancelled
+// under a policy that doesn't fully refund to the original Stripe charge (or
+// whatever future policy decides to issue one instead of/alongside a Stripe
+// refund — that resolution logic is not built this session, only the ledger
+// shape it will write to). Deliberately NOT a wallet top-up: it can only ever
+// be redeemed against one specific future booking, has its own expiry, and
+// is never summed into purchasedBalance/earnedBalance (see
+// getPurchasedBalance/getEarnedBalance, lib/credits.ts) — do not merge this
+// into that balance calculation.
+enum BookingCreditStatus {
+  available
+  applied
+  expired
+
+  @@map("booking_credit_status")
+}
+
+model BookingCredit {
+  id                 BigInt              @id @default(autoincrement())
+  userId             String              @map("user_id")
+  sourceBookingId    BigInt              @map("source_booking_id")
+  amount             Decimal             @db.Decimal(10, 2)
+  status             BookingCreditStatus @default(available)
+  appliedToBookingId BigInt?             @map("applied_to_booking_id")
+  expiresAt          DateTime            @map("expires_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceBooking    Booking  @relation("BookingCreditSource", fields: [sourceBookingId], references: [id], onDelete: Cascade)
+  appliedToBooking Booking? @relation("BookingCreditAppliedTo", fields: [appliedToBookingId], references: [id], onDelete: SetNull)
+
+  @@map("booking_credits")
+}
+
+// What SpaceSnap owes a supplier for one booking, under the merchant-of-record
+// model — the supplier is never paid directly by Stripe (SpaceSnap is always
+// the merchant of record on the per-booking charge), so this is the ledger
+// SpaceSnap's own accounts-payable process reads from to actually pay the
+// supplier out, on whatever cadence their tier gets invoiced on.
+// penaltyDeduction is only ever non-zero when the SUPPLIER cancelled (see
+// Booking.supplierPenaltyPercent) — a user-side cancellation doesn't reduce
+// what the supplier is owed, since the supplier didn't cause it.
+enum SupplierPayableStatus {
+  pending
+  invoiced
+  paid
+
+  @@map("supplier_payable_status")
+}
+
+// Snapshot of Company.supplierTier's cadence AT THE TIME this payable was
+// created — deliberately not a live join to Company, so a mid-cycle tier
+// change never reaches back and reshuffles a payable that's already pending/
+// invoiced. Which cadence each SupplierTier value actually maps to is not
+// decided this session (see SupplierTier's own comment on Company below) —
+// whatever future session builds the write path that creates SupplierPayable
+// rows resolves that mapping, this column just holds the result.
+enum InvoicingCadence {
+  monthly
+  biweekly
+  weekly
+
+  @@map("invoicing_cadence")
+}
+
+model SupplierPayable {
+  id               BigInt                @id @default(autoincrement())
+  companyId        BigInt                @map("company_id")
+  bookingId        BigInt                @unique @map("booking_id")
+  grossAmount      Decimal               @map("gross_amount") @db.Decimal(10, 2)
+  penaltyDeduction Decimal               @default(0) @map("penalty_deduction") @db.Decimal(10, 2)
+  netAmount        Decimal               @map("net_amount") @db.Decimal(10, 2)
+  status           SupplierPayableStatus @default(pending)
+  invoicingCadence InvoicingCadence      @map("invoicing_cadence")
+  createdAt        DateTime              @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("supplier_payables")
+}
+
 // A grant is issued with its own resolved type+value (e.g. `booking_discount_pct`
 // value 10 = 10% off) and can only ever be redeemed once, atomically with the
 // booking/purchase it discounts — see redeemRewardGrant (lib/reward-grants.ts),
@@ -370,29 +467,44 @@ model VerificationToken {
 // Domain
 // ---------------------------------------------------------------------------
 
+// Manually settable by admin only — no automatic gating logic (rating/
+// availability/booking-count thresholds) is built here, those numbers are
+// still TBC. See the stubbed admin-route TODO in CLAUDE1.md's session note
+// for this field; no route was added this session (schema + lib functions
+// only, per this session's scope).
+enum SupplierTier {
+  free
+  preferred
+  top
+
+  @@map("supplier_tier")
+}
+
 model Company {
-  id                   BigInt   @id @default(autoincrement())
+  id                   BigInt       @id @default(autoincrement())
   name                 String
-  businessName         String?  @map("business_name")
-  businessDescription  String?  @map("business_description")
-  contactEmail         String?  @map("contact_email")
-  businessLocation     String?  @map("business_location")
-  yearsOperating       Int?     @map("years_operating")
+  businessName         String?      @map("business_name")
+  businessDescription  String?      @map("business_description")
+  contactEmail         String?      @map("contact_email")
+  businessLocation     String?      @map("business_location")
+  yearsOperating       Int?         @map("years_operating")
   // Added for the supplier profile "Business Details" edit form — the
   // registration number and finance contact fields the old CODEBASE_SUMMARY.md
   // gap note said had no backing columns at all (distinct from contactEmail,
   // which is the company's general contact address, not accounts/finance).
-  registrationNumber   String?  @map("registration_number")
-  financeContactEmail  String?  @map("finance_contact_email")
-  financeContactPerson String?  @map("finance_contact_person")
-  createdAt            DateTime @default(now()) @map("created_at")
-  updatedAt            DateTime @updatedAt @map("updated_at")
+  registrationNumber   String?      @map("registration_number")
+  financeContactEmail  String?      @map("finance_contact_email")
+  financeContactPerson String?      @map("finance_contact_person")
+  supplierTier         SupplierTier @default(free) @map("supplier_tier")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
 
   users            User[]
   listings         Listing[]
   certificates     Certificate[]
   trainingVideos   TrainingVideo[]
   trainingSessions TrainingSession[]
+  supplierPayables SupplierPayable[]
 
   @@map("companies")
 }
@@ -447,6 +559,7 @@ model User {
   postedGigTasks          GigTask[]                   @relation("GigTaskPoster")
   gigAssignments          GigAssignment[]             @relation("GigAssignmentWorker")
   rewardGrants            RewardGrant[]
+  bookingCredits          BookingCredit[]
 
   @@map("users")
 }
@@ -675,25 +788,42 @@ model TrainingSession {
 // before opening the DB transaction. `earnedCreditsApplied` is resolved by
 // redeeming a specific RewardGrant (type `booking_discount_pct`), never a raw
 // client-supplied amount — see RewardGrant's own comment.
+//
+// 2026-07-21 — merchant-of-record, direct-charge cancellation fields. No
+// duplicate stripePaymentIntentId column added here — Transaction already
+// carries one (set on the booking_payment row createBookingWithDebit writes,
+// see lib/bookings.ts), reused as-is rather than denormalizing a second copy
+// onto Booking. userRefundPercent/supplierPenaltyPercent are populated by
+// lib/booking-payments.ts's two pure calculator functions at whatever future
+// cancellation-flow session actually sets cancelledAt/cancelledBy — not
+// written by any code yet this session (schema only).
 model Booking {
-  id                   BigInt        @id @default(autoincrement())
-  userId               String        @map("user_id")
-  listingId            BigInt        @map("listing_id")
-  bookingType          BookingType   @map("booking_type")
-  startDate            DateTime      @map("start_date") @db.Date
-  endDate              DateTime      @map("end_date") @db.Date
-  sgdAmount            Decimal       @map("sgd_amount") @db.Decimal(10, 2)
-  earnedCreditsApplied Decimal       @default(0) @map("earned_credits_applied") @db.Decimal(10, 2)
-  status               BookingStatus @default(pending)
-  createdAt            DateTime      @default(now()) @map("created_at")
-  updatedAt            DateTime      @updatedAt @map("updated_at")
+  id                     BigInt              @id @default(autoincrement())
+  userId                 String              @map("user_id")
+  listingId              BigInt              @map("listing_id")
+  bookingType            BookingType         @map("booking_type")
+  startDate              DateTime            @map("start_date") @db.Date
+  endDate                DateTime            @map("end_date") @db.Date
+  sgdAmount              Decimal             @map("sgd_amount") @db.Decimal(10, 2)
+  earnedCreditsApplied   Decimal             @default(0) @map("earned_credits_applied") @db.Decimal(10, 2)
+  status                 BookingStatus       @default(pending)
+  cancelledAt            DateTime?           @map("cancelled_at")
+  cancelledBy            BookingCancelledBy? @map("cancelled_by")
+  cancellationReason     String?             @map("cancellation_reason")
+  userRefundPercent      Decimal?            @map("user_refund_percent") @db.Decimal(5, 2)
+  supplierPenaltyPercent Decimal?            @map("supplier_penalty_percent") @db.Decimal(5, 2)
+  createdAt              DateTime            @default(now()) @map("created_at")
+  updatedAt              DateTime            @updatedAt @map("updated_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
-  transactions Transaction[]
-  checkIns     CheckIn[]
-  rating       Rating?
+  transactions         Transaction[]
+  checkIns             CheckIn[]
+  rating               Rating?
+  bookingCreditsIssued BookingCredit[]  @relation("BookingCreditSource")
+  bookingCreditsSpent  BookingCredit[]  @relation("BookingCreditAppliedTo")
+  supplierPayable      SupplierPayable?
 
   @@map("bookings")
 }

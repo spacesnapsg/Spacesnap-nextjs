@@ -231,6 +231,15 @@ interface CreateBookingWithDebitParams {
 //
 // Cert-gating, overlap, and consumables checks stay as pre-checks in the
 // route, run before this function is even called (unchanged).
+//
+// Note (2026-07-21 schema session, cancellation fields): this function
+// already implements the merchant-of-record, direct-charge model that
+// session's brief was describing as a target to build toward — it does NOT
+// debit any wallet balance for a booking, it charges Stripe directly, per
+// the header comment above. Checked against schema.prisma before writing
+// anything this session, since assuming otherwise would have duplicated
+// work. Only decline (below) still needs the equivalent rewiring — see its
+// TODO.
 export async function createBookingWithDebit(params: CreateBookingWithDebitParams): Promise<Booking> {
   let discount = new Prisma.Decimal(0);
   let grantId: bigint | null = null;
@@ -441,6 +450,24 @@ export class BookingNotDeclinableError extends Error {
 // renamed from `credits` in the 2026-07-20 purchased/earned balance split)
 // rather than recomputing from the listing's current price — pricing can
 // change after a booking exists, but the amount actually debited can't.
+//
+// TODO(2026-07-21 schema session): this function still writes a combined-
+// ledger `type: refund` Transaction for the full sgdAmount — it never issues
+// a real Stripe refund against the PaymentIntent createBookingWithDebit
+// charged (see that function's own header comment on the Stripe flow), and
+// it doesn't apply the cancellation-window policy at all (full refund
+// regardless of when the decline happens). A future session needs to
+// replace this with a real cancellation flow that: resolves
+// userRefundPercent/supplierPenaltyPercent via
+// calculateUserCancellationRefund/calculateSupplierCancellationPenalty
+// (lib/booking-payments.ts, added this session), issues a real
+// stripe.refunds.create for the refunded portion (or a BookingCredit row for
+// any non-refunded portion the policy doesn't return to the original
+// payment method — schema added this session, no issuance logic yet), and
+// writes a SupplierPayable row reflecting any supplier-cancellation penalty.
+// Not rewritten here per the standing rule never to delete/replace a
+// component before its replacement exists — this session is schema + pure
+// functions only, no Stripe calls, no route changes.
 export async function declineBookingWithRefund(bookingId: bigint): Promise<BookingWithRelations> {
   return prisma.$transaction(async (tx) => {
     const booking = await tx.booking.findUniqueOrThrow({ where: { id: bookingId } });

@@ -3029,3 +3029,144 @@ test sandbox (not just unit tests) — `ethan@example.com`, Studio Space A
   product owner, Sprint 6's full remit.
 - No Stripe Elements checkout UI — `BookingModal` sends a hardcoded test
   token; a real card-entry flow is unbuilt follow-up work, not assumed done.
+
+## Schema + Core Lib — Merchant-of-Record Cancellation Model (2026-07-21)
+
+Task brief asked for schema + pure-function logic backing a "merchant-of-
+record, direct-charge" booking payment model, explicitly framed as replacing
+"the Stripe-Connect-split assumption in the current Sprint 6 plan," with a
+list of "confirmed facts" to check the schema against before writing
+anything (same discipline as every prior session in this file).
+
+**The brief's own "confirmed facts" were stale — checked against
+`prisma/schema.prisma` and `lib/bookings.ts` before touching anything, per
+the brief's own instruction, and this is exactly the kind of thing that
+instruction exists to catch:**
+- The brief stated `Booking` "currently has no `sgdAmount`, no Stripe charge
+  reference, no cancellation fields." **`sgdAmount` already exists** (added
+  in the 2026-07-20 purchased/earned split) and **`Transaction` already has
+  `stripePaymentIntentId`** (added in the very next session, "Write-Path
+  Session — Stripe Booking Charges..." immediately above this entry, same
+  day as this session per the system clock but a separate sitting). Only the
+  cancellation fields were genuinely missing.
+- The brief stated `createBookingWithDebit` "currently debits
+  `getCreditBalance`" — **this is no longer true.** That same immediately-
+  prior session already rewired it to charge a real Stripe PaymentIntent
+  directly (merchant-of-record, direct-charge — exactly the target model
+  this session's brief describes as new). It was not touched again here; a
+  short note was added to its header pointing this out explicitly so a
+  future session doesn't assume it still needs the rewrite this brief
+  described. `declineBookingWithRefund`, by contrast, genuinely still uses
+  the old combined-ledger `refund` Transaction with no real Stripe refund and
+  no cancellation-window policy applied — that one got the TODO comment the
+  brief asked for.
+- Reused `Transaction.stripePaymentIntentId` for the direct charge's payment
+  intent id, per the brief's own instruction not to add a duplicate column —
+  confirmed no second column was needed since the field already existed and
+  is already populated by `createBookingWithDebit`.
+
+**What was built (schema + pure functions only, no Stripe calls, no route
+changes, no UI, per the brief's explicit exclusions):**
+- `Booking` gained `cancelledAt`, `cancelledBy` (new `BookingCancelledBy`
+  enum: `user`/`supplier`), `cancellationReason`, `userRefundPercent`
+  (`Decimal(5,2)`, nullable), `supplierPenaltyPercent` (`Decimal(5,2)`,
+  nullable). Not added: `sgdAmount`/`stripePaymentIntentId` (already
+  covered, see above).
+- New `BookingCredit` model/table — a bounded, per-booking credit note
+  (`userId`, `sourceBookingId`, `amount`, `status` new `BookingCreditStatus`
+  enum `available`/`applied`/`expired`, `appliedToBookingId` nullable,
+  `expiresAt`, `createdAt`). Two separate FK relations to `Booking`
+  (`BookingCreditSource`/`BookingCreditAppliedTo`, disambiguated relation
+  names since both point at the same model). Deliberately kept out of
+  `getPurchasedBalance`/`getEarnedBalance` (`lib/credits.ts`) — it's not a
+  wallet top-up and must not be merged into that balance calculation, per
+  the brief's explicit instruction.
+- New `SupplierPayable` model/table — what SpaceSnap owes a supplier per
+  booking under the merchant-of-record model (`companyId`, `bookingId`
+  unique/one-to-one, `grossAmount`, `penaltyDeduction` default 0,
+  `netAmount`, `status` new `SupplierPayableStatus` enum
+  `pending`/`invoiced`/`paid`, `invoicingCadence` new `InvoicingCadence`
+  enum `monthly`/`biweekly`/`weekly`, `createdAt`). `invoicingCadence` is a
+  snapshot at creation time, not a live join to `Company.supplierTier` — a
+  mid-cycle tier change must never reshuffle an already-pending/invoiced
+  payable. Which cadence each tier actually maps to is not decided this
+  session (no such mapping exists anywhere to check against) — the column
+  just holds whatever a future write-path session resolves.
+- `Company.supplierTier` — new `SupplierTier` enum (`free`/`preferred`/`top`,
+  default `free`). No automatic gating logic (rating/availability/booking-
+  count thresholds) was built, per the brief's explicit instruction — those
+  numbers are still TBC, same posture as every other "numbers TBC, don't
+  invent" gap already flagged elsewhere in this file/sprint plan.
+- Migration `20260721053114_booking_cancellation_credits_supplier_payables`,
+  applied cleanly to both `spacesnap_dev` and the isolated
+  `spacesnap_nextjs_test` DB (`npm run test:db:migrate`).
+- `lib/booking-payments.ts` — `calculateUserCancellationRefund(booking,
+  cancelledAt)` and `calculateSupplierCancellationPenalty(booking,
+  cancelledAt)`, pure/no-DB (same "unit-testable without a DB" pattern as
+  `lib/certificate-gating.ts`). Both compute a calendar-day count between
+  `cancelledAt` and `booking.startDate` (both normalized to UTC midnight
+  before diffing, so the cancellation timestamp's time-of-day can't shift
+  which tier a same-calendar-day cancellation lands in) and return a percent
+  tier: `>=7 days before` → 100 refund / 0 penalty, `3-6 days before` → 50 /
+  50, `<3 days before (incl. after start)` → 0 / 100.
+
+**Flagged, not silently guessed — genuinely open questions for the product
+owner before this is wired into a real route:**
+- **The exact cancellation-window day thresholds (7/3/0) and percentages
+  (100/50/0) are this session's own inference from the brief's own named
+  boundary-day test cases ("day 7, day 3, day 0"), not a policy confirmed
+  anywhere else** — grepped this codebase and the old Laravel repo for any
+  existing cancellation-window concept, zero hits. This is exactly the kind
+  of assumption this file's Sprint 4 "tier comparison scrapped" entry warns
+  against making permanent without confirming — flagging it here explicitly
+  so it doesn't quietly become load-bearing policy. Confirm with the
+  product owner before any future session calls these functions from a real
+  cancellation endpoint.
+- `calculateSupplierCancellationPenalty` returns only the percent tier, not
+  a dollar amount — it's meant to apply "against SpaceSnap's commission
+  portion of the booking, not the full booking value" per the brief, but
+  **no commission-rate figure exists anywhere in this schema** (grepped;
+  `SPRINT_PLAN_NEXTJS_REWRITE.md`'s Sprint 6 section already says "platform
+  fee / operator payout mechanics... scope TBD"). Resolving the percent
+  against an actual commission amount is left to whichever future session
+  builds `SupplierPayable`'s write path.
+- **Ambiguity in the brief itself, resolved by not building it:** point 4 of
+  the schema-changes list said to "stub the admin route with a TODO comment"
+  for `Company.supplierTier`, while the brief's title and "EXPLICIT
+  EXCLUSIONS" section both said "no routes... this session" (scoped
+  specifically to `app/api/bookings/**`, but the overall framing was
+  "schema and pure-function logic only"). No new route file was created —
+  the "stub with a TODO" instruction is satisfied by this write-up and the
+  schema comment on `SupplierTier` instead, on the read that "no routes this
+  session" was the dominant, repeated instruction. Flagging this
+  interpretation explicitly in case it's wrong — a future session may still
+  need to add `PATCH /api/admin/companies/[id]/supplier-tier` (or similar)
+  as a small, separate, manually-triggered admin action.
+- Which `InvoicingCadence` each `SupplierTier` maps to is undecided (see
+  above) — not guessed at.
+
+**Tests:** `lib/booking-payments.test.ts` (new, registered in `package.json`
+alongside the existing suite) — 17 cases: exact boundary days (7, 3, 0) for
+both functions, the tiers just inside each boundary (6, 2 days) to catch an
+off-by-one specifically, cancelling after the session already started,
+time-of-day robustness on the cancellation timestamp (11:59pm and 12:01am
+variants of the same calendar day both land in the same tier), a `Date`-
+object `startDate` accepted alongside a string, and a symmetry check that
+the two functions' percentages always sum to 100 at every boundary. All 17
+pass; full `npm test` — 209/209 (17 new, 0 regressions).
+
+**Verified:** migration applied cleanly to both `spacesnap_dev` and
+`spacesnap_nextjs_test` (`npx prisma migrate dev` / `npm run
+test:db:migrate`), `npx tsc --noEmit` clean, `npx next build` clean, `npx
+eslint .` shows the same two pre-existing findings as every prior session
+(`app/(user)/passport/page.tsx`'s `setState`-in-effect,
+`prisma/tests/db-constraints.test.ts`'s one `any`) — neither touched this
+session, not introduced by it.
+
+**Not built, per the brief's explicit exclusions:** no Stripe API calls
+(payment intent creation/capture/refund for cancellation), no route changes
+to `app/api/bookings/**` (or anywhere else), no UI, no automatic
+supplier-tier gating logic, no changes to `purchasedBalance`/`earnedBalance`
+consumables/cert-fee logic, `createBookingWithDebit`/
+`declineBookingWithRefund` left in place (the former already correct for
+this model, the latter TODO'd, neither deleted/rewritten).
