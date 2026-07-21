@@ -3681,3 +3681,141 @@ undecided" (confirmed and built the same day).
 - Real-card verification (above).
 - `Company.supplierTier` admin route/UI, `BookingCredit` issuance,
   Stripe webhooks — unchanged, still the next Sprint 6 items.
+
+## Stripe Webhooks (2026-07-21)
+
+Closed the last open Sprint 6 checklist item that didn't need a product
+decision: "Stripe webhook tested in sandbox for all states: success, failure,
+refund." No webhook route existed anywhere in the repo before this session
+(confirmed by `find app/api -iname "*webhook*"`, zero hits).
+
+### What this endpoint actually is, read from the existing code before
+building anything
+
+Every Stripe-charging write path in this codebase — `createBookingWithDebit`,
+`modifyBookingWithFee`, `cancelBookingWithRefund`, `declineBookingWithRefund`
+(all `lib/bookings.ts`) — calls Stripe with `confirm: true` and reads the
+result synchronously in the same request, writing its own Transaction row
+before returning. So a webhook here is **not** the primary write path for any
+of these — it's the safety net those write paths already gesture at but can't
+close themselves: `createBookingWithDebit`'s own catch block already has a
+`console.error("...manual reconciliation required")` for the case where its
+compensating refund itself fails, but nothing before this session actually
+detected that class of gap after the fact. This webhook gives that existing
+"manual reconciliation required" posture a real detection mechanism instead
+of only a comment.
+
+### What was built
+
+- `lib/stripe-webhooks.ts`:
+  - `constructStripeWebhookEvent(payload, signature)` — wraps
+    `stripe.webhooks.constructEvent` against `STRIPE_WEBHOOK_SECRET`, throwing
+    a new `StripeWebhookSignatureError` on any verification failure (bad
+    signature, tampered payload, missing secret).
+  - `handleStripeWebhookEvent(event)` — dispatches on `event.type`:
+    - `payment_intent.succeeded`: looks up a `booking_payment`/
+      `booking_modification_fee` Transaction by `stripePaymentIntentId` (the
+      only two Transaction types a PaymentIntent maps to — grep-confirmed
+      only two `stripe.paymentIntents.create` call sites exist, both in
+      `lib/bookings.ts`). Found → silent no-op (the synchronous request
+      already recorded it). Not found → `console.error` with the PaymentIntent
+      id and amount: a real charge with no corresponding app-side record,
+      which is exactly the "process died mid-request" gap.
+    - `payment_intent.payment_failed`: `console.warn` only. Both charging
+      functions already throw `StripeChargeFailedError` before writing
+      anything if the synchronous result isn't `succeeded`, so there's never
+      app state to roll back here — this is observability only (e.g. an
+      off-session retry Stripe attempted on its own).
+    - `charge.refunded`: looks up the original charge's Transaction by
+      `stripePaymentIntentId` first. **No original Transaction at all** → a
+      silent no-op — this is the fully-rolled-back compensating-refund case
+      (the DB transaction wrapping the Booking create failed, so there was
+      never a charge on this app's ledger to reconcile against in the first
+      place, even though Stripe did receive money briefly). **Original
+      Transaction exists** → sums this app's `refund`-type Transaction rows
+      for that PaymentIntent and compares against Stripe's own
+      `charge.amount_refunded`. A mismatch (a Dashboard-initiated refund this
+      app never learned about, or a refund Transaction write that failed
+      after `stripe.refunds.create` already succeeded) → `console.error`.
+    - Anything else: acknowledged silently, not thrown — so Stripe doesn't
+      retry-storm the endpoint over event types this app doesn't track.
+- `app/api/webhooks/stripe/route.ts` — `POST` only, `runtime = "nodejs"`
+  (Stripe's signature check needs Node's crypto). Reads the raw body via
+  `request.text()` (confirmed against this fork's own bundled docs,
+  `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/route.md`
+  §Webhooks — no `bodyParser` config needed in this App Router version,
+  matching the "read the docs first" rule in `AGENTS.md`). No `auth()` call —
+  Stripe's signature *is* the authentication here, there's no session cookie
+  on a server-to-server webhook call. Missing signature header → clean `400`;
+  invalid/tampered signature → clean `400`; otherwise dispatches to
+  `handleStripeWebhookEvent` and returns `{ received: true }`.
+- `STRIPE_WEBHOOK_SECRET` added to `.env`, `.env.testing`, and `.env.example`
+  (placeholder in the latter). Any value works for local dev/test — signature
+  verification is a local HMAC check against whatever secret this app itself
+  was configured with, not a live round trip to Stripe. Noted in the env
+  comment that production needs the real value from the Stripe Dashboard's
+  webhook endpoint config (or `stripe listen`'s own secret if testing via the
+  Stripe CLI, which isn't installed in this dev environment — confirmed via
+  `which stripe`).
+
+### Tests
+
+`lib/stripe-webhooks.test.ts` (registered in `npm test`), hitting the real
+Stripe test-mode sandbox for every PaymentIntent/refund involved (no mocking,
+same convention as `lib/bookings.test.ts`) and signing synthetic event
+payloads with Stripe's own `generateTestHeaderString` helper — this
+faithfully exercises the real signature-verification code path without
+needing `stripe listen` or a publicly reachable URL, since verification never
+leaves the process. 10 cases: valid signature accepted, tampered payload
+rejected, garbage signature header rejected, a recorded PaymentIntent is a
+silent no-op, an orphan PaymentIntent (created directly via the SDK,
+bypassing `createBookingWithDebit` on purpose) logs the reconciliation
+warning with the right PaymentIntent id in the message, `payment_intent.
+payment_failed` warns, a refund matching the ledger exactly is a silent
+no-op, a refund with no matching `refund` Transaction warns, a refund on a
+PaymentIntent with zero app-side Transactions at all (the rolled-back-attempt
+case) is a silent no-op, and an unhandled event type doesn't throw. Full
+suite: 254/254 passing, no regressions. `npx tsc --noEmit` and `npx eslint`
+both clean on the three new files. `npx next build` succeeds,
+`/api/webhooks/stripe` listed in the route manifest.
+
+### Live verification, not just unit-tested
+
+Restarted the dev server after editing `.env` (env vars are read once at
+process boot, same reasoning as the stale-Prisma-client restart note in the
+Sprint 4.75 Modify Booking session above — an env change needs the same
+treatment). Then, from a scratch script run from the project root (so it
+could resolve `stripe` from `node_modules`; deleted immediately after, not
+committed), sent three real HTTP requests at the actually-running dev server:
+- A `payment_intent.payment_failed` event, correctly signed with the real
+  `STRIPE_WEBHOOK_SECRET` → `200 {"received":true}`, and the server's own log
+  output confirmed the handler actually ran (not just returned a blind 200):
+  `[stripe-webhook] payment_intent.payment_failed for pi_live_curl_test:
+  Live curl test — your card was declined.`
+- The same payload tampered after signing (amount changed) → clean
+  `400 {"message":"Invalid webhook signature."}`.
+- The same payload with no `stripe-signature` header at all → clean
+  `400 {"message":"Missing stripe-signature header."}`.
+
+### Also this session: Stripe publishable key added
+
+The product owner supplied the test-mode `pk_test_...` publishable key
+(pairing with the secret key already in `.env`) mid-session, closing the
+"no publishable key exists in this dev environment" blocker the Sprint 4.75
+Stripe Elements session left open. Added to `.env` (and confirmed
+`.env.example`'s placeholder was already correct from that earlier session).
+**Not yet done**: actually running one booking through the live UI with
+`4242 4242 4242 4242` to confirm a real charge clears Stripe's iframe
+boundary — queued as the next task, per the product owner's own instruction
+to pick it up after this session's work. `Company.supplierTier` and
+`BookingCredit` issuance from the "not done" list above are unaffected by
+this session, still open.
+
+### Not done this session
+
+- The real-card-charge verification above — deliberately deferred to a
+  follow-up task, not silently dropped.
+- `BookingCredit` issuance — unchanged, still needs a product decision on
+  where the first issuance flow lives (see the Sprint 6 item's own note).
+- No second-reviewer sign-off on live payment code — that Sprint 6 checklist
+  line is a human-process item, not something a session can close by itself.

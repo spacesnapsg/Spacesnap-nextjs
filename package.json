@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "DOTENV_CONFIG_PATH=.env.testing tsx --test prisma/tests/db-constraints.test.ts lib/certificate-gating.test.ts lib/bookings.test.ts lib/bulk-orders.test.ts lib/credit-holds.test.ts lib/purchases.test.ts lib/wallet.test.ts lib/check-ins.test.ts lib/training-enrollments.test.ts lib/training-sessions.test.ts lib/ratings.test.ts lib/training-credentials.test.ts lib/quiz-attempts.test.ts lib/certificate-signoffs.test.ts lib/training-videos.test.ts lib/quiz-questions.test.ts lib/earned-balance-guard.test.ts lib/booking-payments.test.ts lib/supplier-payables.test.ts",
+    "test": "DOTENV_CONFIG_PATH=.env.testing tsx --test prisma/tests/db-constraints.test.ts lib/certificate-gating.test.ts lib/bookings.test.ts lib/bulk-orders.test.ts lib/credit-holds.test.ts lib/purchases.test.ts lib/wallet.test.ts lib/check-ins.test.ts lib/training-enrollments.test.ts lib/training-sessions.test.ts lib/ratings.test.ts lib/training-credentials.test.ts lib/quiz-attempts.test.ts lib/certificate-signoffs.test.ts lib/training-videos.test.ts lib/quiz-questions.test.ts lib/earned-balance-guard.test.ts lib/booking-payments.test.ts lib/supplier-payables.test.ts lib/stripe-webhooks.test.ts",
     "test:db:migrate": "DOTENV_CONFIG_PATH=.env.testing prisma migrate deploy",
     "test:db:seed": "DOTENV_CONFIG_PATH=.env.testing prisma db seed",
     "test:db:setup": "npm run test:db:migrate && npm run test:db:seed"

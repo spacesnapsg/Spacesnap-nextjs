@@ -249,11 +249,14 @@ belong to.
   `.env.example`); without it the modals render a clear "not configured"
   notice with the confirm button disabled (verified live) instead of a broken
   iframe. **Charging a real test card through the new field is the one
-  unverified step** — no publishable key exists in this dev environment
-  (deliberately skipped 2026-07-21, product owner's call); everything up to
-  Stripe's iframe boundary is verified. Set the key, restart the dev server,
-  and run one booking with card `4242 4242 4242 4242` before calling this
-  fully closed.
+  unverified step** — no publishable key existed in this dev environment as
+  of 2026-07-21 (deliberately skipped that session, product owner's call);
+  everything up to Stripe's iframe boundary is verified. **Publishable key
+  added 2026-07-21** (later the same day, product owner provided it) —
+  `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` now set in `.env`. Still need to
+  actually run one booking with card `4242 4242 4242 4242` through the live
+  UI before calling this fully closed — queued as the next task after the
+  Stripe webhook work below.
 - [x] **Cancel Booking UI — built 2026-07-21** (the Sprint 6 cancellation
   route it was blocked on closed earlier the same day). Entry point: a new
   "My Bookings" card on the user dashboard (`app/(user)/user/page.tsx`),
@@ -341,7 +344,7 @@ belong to.
   - [x] Which `InvoicingCadence` each `SupplierTier` maps to — ~~undecided~~ **this line was stale** (caught 2026-07-21): confirmed with the product owner and built the same day as the cancellation route — `free`→monthly, `preferred`→biweekly, `top`→weekly (`invoicingCadenceForSupplierTier`, `lib/booking-payments.ts`), per the item a few lines above.
 
 **Checklist before moving to Sprint 7:**
-- [ ] Stripe webhook tested in sandbox for all states: success, failure, refund
+- [x] Stripe webhook tested in sandbox for all states: success, failure, refund — closed 2026-07-21, `POST /api/webhooks/stripe` + `lib/stripe-webhooks.ts`. See CLAUDE1.md "Stripe Webhooks" for the full write-up, including why this endpoint is a reconciliation/observability safety net rather than the primary write path (every Stripe-charging route already records its own Transaction synchronously).
 - [ ] No live payment code merged without a second reviewer
 
 ---
