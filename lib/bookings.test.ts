@@ -767,9 +767,11 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
       assert.equal(payable!.companyId, company.id);
-      assert.equal(payable!.grossAmount.toString(), "9"); // 10 - 10% commission (1)
+      // The booking earned nothing (fully refunded) — this is a zero-effect
+      // audit row, not a fabricated payout.
+      assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "0");
-      assert.equal(payable!.netAmount.toString(), "9");
+      assert.equal(payable!.netAmount.toString(), "0");
       assert.equal(payable!.invoicingCadence, "monthly"); // default supplierTier: free
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
@@ -801,9 +803,10 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
 
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
-      assert.equal(payable!.grossAmount.toString(), "9");
+      // Pure penalty debit — no gross earning for a refunded booking.
+      assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "0.5"); // 50% of the 1.00 commission
-      assert.equal(payable!.netAmount.toString(), "8.5");
+      assert.equal(payable!.netAmount.toString(), "-0.5");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -835,8 +838,9 @@ describe("declineBookingWithRefund — supplier penalty against commission (2026
 
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
+      assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "1"); // 100% of the 1.00 commission
-      assert.equal(payable!.netAmount.toString(), "8"); // 9 gross - 1 penalty
+      assert.equal(payable!.netAmount.toString(), "-1");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -916,17 +920,19 @@ describe("cancelBookingWithRefund — user-initiated, day-tier applies to the us
       assert.ok(refund);
       assert.equal(refund!.amount.toString(), "10");
 
+      // Zero-effect audit row — the booking earned nothing, and the
+      // supplier isn't owed anything for it either way.
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
-      assert.equal(payable!.grossAmount.toString(), "9");
+      assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "0");
-      assert.equal(payable!.netAmount.toString(), "9");
+      assert.equal(payable!.netAmount.toString(), "0");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });
 
-  test("cancelling 3-6 days before start refunds the user exactly 50%, supplier still paid in full", async () => {
+  test("cancelling 3-6 days before start refunds the user exactly 50%, supplier unaffected", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -951,14 +957,15 @@ describe("cancelBookingWithRefund — user-initiated, day-tier applies to the us
 
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
+      assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "0");
-      assert.equal(payable!.netAmount.toString(), "9"); // unaffected by the user's own refund tier
+      assert.equal(payable!.netAmount.toString(), "0"); // unaffected by the user's own refund tier
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });
 
-  test("cancelling <3 days before start refunds the user 0% and writes no refund Transaction, supplier still paid in full", async () => {
+  test("cancelling <3 days before start refunds the user 0% and writes no refund Transaction, supplier unaffected", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -984,7 +991,7 @@ describe("cancelBookingWithRefund — user-initiated, day-tier applies to the us
 
       const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
       assert.ok(payable);
-      assert.equal(payable!.netAmount.toString(), "9");
+      assert.equal(payable!.netAmount.toString(), "0");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

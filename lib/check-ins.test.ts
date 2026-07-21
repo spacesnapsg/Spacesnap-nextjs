@@ -202,6 +202,33 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
 
       const bookingRow = await prisma.booking.findUnique({ where: { id: booking.id } });
       assert.equal(bookingRow!.status, "completed");
+
+      // Sprint 6: a normal completion now records what the supplier
+      // actually earned (lib/supplier-payables.ts) — 10% platform commission
+      // (Booking.platformCommissionPercent default), no penalty.
+      const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
+      assert.ok(payable);
+      assert.equal(payable!.companyId, company.id);
+      assert.equal(payable!.grossAmount.toString(), "9"); // 10 - 10% commission (1)
+      assert.equal(payable!.penaltyDeduction.toString(), "0");
+      assert.equal(payable!.netAmount.toString(), "9");
+      assert.equal(payable!.invoicingCadence, "monthly"); // default supplierTier: free
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("checking out a bare check-in (no bookingId) writes no SupplierPayable", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+      const checkIn = await createCheckIn({ userId: user.id, listingId: listing.id, bookingId: null });
+
+      await checkOutCheckIn(checkIn.id);
+
+      const payables = await prisma.supplierPayable.findMany({ where: { companyId: company.id } });
+      assert.equal(payables.length, 0);
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -293,6 +320,9 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
 
       const checkInRow = await prisma.checkIn.findUnique({ where: { id: checkIn.id } });
       assert.equal(checkInRow!.checkedOutAt, null);
+
+      const payable = await prisma.supplierPayable.findUnique({ where: { bookingId: booking.id } });
+      assert.equal(payable, null);
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

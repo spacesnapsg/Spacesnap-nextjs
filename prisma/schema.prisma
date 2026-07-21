@@ -351,14 +351,35 @@ model BookingCredit {
   @@map("booking_credits")
 }
 
-// What SpaceSnap owes a supplier for one booking, under the merchant-of-record
-// model — the supplier is never paid directly by Stripe (SpaceSnap is always
-// the merchant of record on the per-booking charge), so this is the ledger
+// What SpaceSnap owes a supplier, under the merchant-of-record model — the
+// supplier is never paid directly by Stripe (SpaceSnap is always the
+// merchant of record on the per-booking charge), so this is the ledger
 // SpaceSnap's own accounts-payable process reads from to actually pay the
 // supplier out, on whatever cadence their tier gets invoiced on.
-// penaltyDeduction is only ever non-zero when the SUPPLIER cancelled (see
-// Booking.supplierPenaltyPercent) — a user-side cancellation doesn't reduce
-// what the supplier is owed, since the supplier didn't cause it.
+//
+// One row per booking (bookingId unique), but NOT one row per booking that
+// exists — only for a booking that actually produced a financial event for
+// the supplier ledger:
+//   - Normal completion (check-out flips active -> completed): a credit row,
+//     grossAmount = sgdAmount - commission, penaltyDeduction 0, netAmount =
+//     grossAmount. See createCompletedBookingPayable, lib/supplier-payables.ts.
+//   - Supplier-initiated decline with a non-zero cancellation-window
+//     penalty: a pure DEBIT row — grossAmount 0 (the booking earned nothing,
+//     the user was refunded in full), penaltyDeduction > 0, netAmount =
+//     -penaltyDeduction. See declineBookingWithRefund, lib/bookings.ts.
+//   - User-initiated cancel, or a supplier decline with zero penalty
+//     (>=7 days out): a zero-effect audit row (all three amounts 0) — the
+//     supplier is unaffected, not "still paid for a booking whose service
+//     was never rendered."
+// A company's actual pending payable balance is never read off a single
+// row — it's the live SUM(netAmount) across all of a company's `pending`
+// rows (getSupplierPendingPayableBalance, lib/supplier-payables.ts), same
+// "never stored denormalized" principle as the Transaction ledger. This is
+// what lets a supplier-cancellation penalty on one booking net against
+// earnings from other, unrelated bookings automatically — no explicit
+// "check the balance, then deduct" step is needed anywhere; the SUM already
+// reflects it, and can go negative (supplier owes SpaceSnap back) if
+// penalties exceed pending earnings.
 enum SupplierPayableStatus {
   pending
   invoiced

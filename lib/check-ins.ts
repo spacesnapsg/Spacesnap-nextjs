@@ -1,6 +1,7 @@
 import { BookingStatus, ActivityActionType, type CheckIn } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import { createCompletedBookingPayable } from "@/lib/supplier-payables";
 
 export function serializeCheckIn(checkIn: CheckIn) {
   return {
@@ -133,6 +134,11 @@ export async function checkOutCheckIn(checkInId: bigint): Promise<CheckIn> {
         throw new BookingNotCheckOutableError(booking.status);
       }
       await tx.booking.update({ where: { id: checkIn.bookingId }, data: { status: BookingStatus.completed } });
+      // Records what the supplier actually earned now that the service was
+      // rendered — see lib/supplier-payables.ts. A cancelled/declined
+      // booking never reaches this path, so it never gets a fabricated
+      // earning row (see the correction in lib/bookings.ts).
+      await createCompletedBookingPayable(tx, checkIn.bookingId);
     }
 
     const updated = await tx.checkIn.update({

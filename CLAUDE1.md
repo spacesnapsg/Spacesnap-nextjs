@@ -3303,3 +3303,96 @@ UI (`BookingModal.tsx`, a "Cancel Booking" button — Sprint 4.75 flagged
 this as unblocked by this route, but this session was scoped to the backend
 route + refund only), the Stripe Elements real-card-entry item (next up,
 per the product owner's own sequencing this session).
+
+## SupplierPayable Correction — Completion Earnings + Live Aggregate Balance (2026-07-21)
+
+The previous session's `SupplierPayable` writes had a real bug, caught by
+the product owner walking through a concrete worked example before any
+penalty-deduction logic could be trusted: a $5 booking cancelled by the
+supplier at the <3-day tier owes SpaceSnap a $0.50 penalty (10% commission
+× 100% tier), recovered from whatever the supplier is already holding from
+*other* completed bookings — not from the cancelled booking itself, which
+earned nothing (the full $5 was refunded to the user).
+
+**The bug:** both `declineBookingWithRefund` and `cancelBookingWithRefund`
+computed `grossAmount = sgdAmount - commission` for the *cancelled* booking
+itself, fabricating a payout for a booking whose service was never
+rendered. Worse, **nothing in the codebase created a `SupplierPayable` row
+for a normal, non-cancelled completed booking at all** — the model only
+ever got exercised by the cancellation paths added last session, so the
+"supplier earned $9 from two completed bookings" half of the product
+owner's own example had no code path to produce it.
+
+**Fix, both halves:**
+- New `lib/supplier-payables.ts`: `createCompletedBookingPayable(tx,
+  bookingId)` — writes the actual earning row (`grossAmount = sgdAmount -
+  commission`, `penaltyDeduction 0`, `netAmount = grossAmount`) once a
+  booking's service is actually rendered. Wired into `checkOutCheckIn`
+  (`lib/check-ins.ts`), right after the existing `active -> completed`
+  transition, only when the check-in is booking-linked. `
+  getSupplierPendingPayableBalance(companyId)` — the live `SUM(netAmount)`
+  over a company's `pending` `SupplierPayable` rows, same
+  never-stored-denormalized principle as `getCreditBalance`
+  (`lib/credits.ts`). This is what actually answers the product owner's
+  question ("does SpaceSnap automatically deduct the penalty from what the
+  supplier is holding") — there's no explicit "check balance, then deduct"
+  branch anywhere; a penalty debit row and completion credit rows for the
+  same company just net together in this one live SUM, the same way a
+  Transaction ledger SUM already absorbs a spend against a prior top-up.
+  The SUM can go negative (supplier owes SpaceSnap back) when penalties
+  exceed pending earnings — recovering that is a still-unbuilt
+  invoicing/collection step (Sprint 6 Invoice/Receipt gap, unchanged).
+- `declineBookingWithRefund` corrected: the cancelled booking's own
+  `SupplierPayable` row is now a pure penalty **debit** —
+  `grossAmount 0`, `penaltyDeduction` = the day-tier percent of the
+  commission, `netAmount = -penaltyDeduction`. No fabricated gross for a
+  refunded booking.
+- `cancelBookingWithRefund` corrected: still writes a `SupplierPayable` row
+  for audit-trail consistency (every terminal booking gets exactly one row,
+  whether from completion, decline, or cancel), but now all-zero
+  (`grossAmount 0`, `penaltyDeduction 0`, `netAmount 0`) — a user-initiated
+  cancellation is a zero-effect event for the supplier ledger, not a
+  fabricated full payout.
+- `prisma/schema.prisma`'s `SupplierPayable` comment rewritten to document
+  the three actual row shapes (completion credit / decline-penalty debit /
+  zero-effect audit row) and the live-SUM aggregate principle, replacing
+  the old (incorrect) "one row per booking always has a real gross/penalty
+  split" description.
+
+**Tests:** `lib/bookings.test.ts`'s existing decline/cancel `SupplierPayable`
+assertions rewritten for the corrected math at all three day tiers.
+`lib/check-ins.test.ts` gained assertions that `checkOutCheckIn` now writes
+the completion payable (and that a bare, non-booking check-out writes
+none). New `lib/supplier-payables.test.ts` (registered in `package.json`):
+`getSupplierPendingPayableBalance` returns zero with no rows, only sums
+`pending`-status rows (an `invoiced` row manually created to prove the
+filter), a worked-example test reproducing the product owner's own numbers
+exactly (2× $5 completed bookings + 1× $5 booking declined <3 days out →
+$8.50 pending, matching `$9 earned - $0.50 penalty`), and a negative-balance
+test (penalty exceeding pending earnings drives the SUM below zero rather
+than clamping at zero). Full suite: 224 tests, all passing. `npx tsc
+--noEmit`, `npx eslint .` (same two pre-existing findings, untouched), and
+`npx next build` all clean.
+
+**Verified live**, not just unit-tested — real cookie-jar logins against
+the dev server/DB (`ethan@example.com`, `divya@toolshare.sg`), listing 165
+(Power Drill Set, ToolShare SG, priceDay 25.00, `free` supplierTier):
+booking 162 created → confirmed → checked in → checked out (via the real
+`/api/check-ins` + `/api/check-ins/[id]/check-out` routes) produced a
+`SupplierPayable` of gross 22.50 / penalty 0 / net 22.50. Booking 163
+(1 day out) created → confirmed → declined by `divya` produced gross 0 /
+penalty 2.50 (100% of the 2.50 commission) / net -2.50. Direct SQL
+`SUM(net_amount) WHERE company_id=123 AND status='pending'` = **20.00**,
+confirming the aggregate nets a completion credit against a penalty debit
+exactly as designed, through the real routes rather than only in-process
+test helpers. All test bookings, check-ins, transactions, activity-log
+rows, and payables deleted afterward; dev DB row counts confirmed back to
+seeded state.
+
+**Not touched:** any UI/route exposing a supplier's payable balance (the
+supplier profile's "Accounts Receivable" card is still explicitly
+out-of-scope, blocked on the Sprint 6 Invoice/Receipt gap — this session
+only fixed the underlying ledger correctness), and the no-show/never-
+checked-out gap already flagged in the Sprint 3.5 `check_ins` schema note
+(a `confirmed` booking that's never checked in still never transitions or
+gets a payable — unchanged, undecided territory).

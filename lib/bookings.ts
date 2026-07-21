@@ -462,14 +462,21 @@ export class StripeRefundFailedError extends Error {
 // cause this, so they are always refunded in full — the cancellation-window
 // day tier no longer applies to their refund. Instead it sizes the
 // supplier's penalty against SpaceSnap's commission portion of the booking
-// (Booking.platformCommissionPercent, snapshotted at creation), and that
-// penalty now resolves into a real SupplierPayable row (companyId,
-// grossAmount = sgdAmount - commission, penaltyDeduction, netAmount,
-// invoicingCadence snapshotted from the company's current supplierTier).
-// netAmount can go negative if the penalty exceeds the gross payout — that
-// represents the supplier owing SpaceSnap back, to be recovered on their next
-// invoice; no automated collection/invoicing beyond this ledger row is built
-// here, per the still-open Sprint 6 Invoice/Receipt gap.
+// (Booking.platformCommissionPercent, snapshotted at creation).
+//
+// Corrected again the same day (worked example from the product owner —
+// see CLAUDE1.md): a cancelled booking earns the supplier NOTHING — the
+// full amount was refunded to the user, so there is no "grossAmount" to
+// speak of for this booking. The SupplierPayable row written here is a pure
+// penalty DEBIT (grossAmount 0, netAmount = -penaltyDeduction) against
+// whatever the supplier is already owed from OTHER, actually-completed
+// bookings (see createCompletedBookingPayable, lib/supplier-payables.ts) —
+// the live SUM in getSupplierPendingPayableBalance is what nets a penalty
+// against prior earnings, not anything computed or checked here. That SUM
+// can go negative if penalties exceed pending earnings — the supplier owing
+// SpaceSnap back, to be recovered on their next invoice; no automated
+// collection/invoicing beyond this ledger row is built here, per the
+// still-open Sprint 6 Invoice/Receipt gap.
 //
 // Still deliberately does NOT issue a BookingCredit for the (now
 // nonexistent, since the user is always refunded in full) non-refunded
@@ -520,9 +527,7 @@ export async function declineBookingWithRefund(
   const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
 
   const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
-  const grossAmount = existing.sgdAmount.sub(commissionAmount);
   const penaltyDeduction = commissionAmount.mul(supplierPenaltyPercent).div(100).toDecimalPlaces(2);
-  const netAmount = grossAmount.sub(penaltyDeduction);
   const invoicingCadence = invoicingCadenceForSupplierTier(existing.listing.company.supplierTier);
 
   if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
@@ -583,9 +588,9 @@ export async function declineBookingWithRefund(
         data: {
           companyId: existing.listing.companyId,
           bookingId: updated.id,
-          grossAmount,
+          grossAmount: new Prisma.Decimal(0),
           penaltyDeduction,
-          netAmount,
+          netAmount: penaltyDeduction.negated(),
           invoicingCadence,
         },
       });
@@ -626,12 +631,19 @@ export class BookingNotCancellableError extends Error {
 }
 
 // User-initiated cancellation. The supplier did not cause this, so they are
-// never penalized — they still get their full normal payout (a
-// SupplierPayable with zero penaltyDeduction). The user's own refund follows
-// the cancellation-window day tier (calculateUserCancellationRefund),
-// confirmed with the product owner 2026-07-21 alongside the decline
-// correction above — see that function's header comment in
-// lib/booking-payments.ts for the full at-fault-party design.
+// never penalized. The user's own refund follows the cancellation-window
+// day tier (calculateUserCancellationRefund), confirmed with the product
+// owner 2026-07-21 alongside the decline correction above — see that
+// function's header comment in lib/booking-payments.ts for the full
+// at-fault-party design.
+//
+// Corrected the same day (worked example from the product owner — see
+// CLAUDE1.md): a cancelled booking earns the supplier NOTHING regardless of
+// who cancelled it — the money was refunded to the user, not earned. The
+// SupplierPayable row written here is a zero-effect audit record
+// (grossAmount 0, penaltyDeduction 0, netAmount 0), not a fabricated payout
+// for a booking whose service was never rendered — "the supplier is made
+// whole" here just means "unaffected," not "still paid for this booking."
 //
 // Mirrors declineBookingWithRefund's structure (Stripe refund before the
 // status-guarded DB write, same narrow race accepted, same reward-grant
@@ -662,8 +674,6 @@ export async function cancelBookingWithRefund(
   const earnedReversalAmount = existing.earnedCreditsApplied.mul(userRefundPercent).div(100).toDecimalPlaces(2);
   const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
 
-  const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
-  const grossAmount = existing.sgdAmount.sub(commissionAmount);
   const invoicingCadence = invoicingCadenceForSupplierTier(existing.listing.company.supplierTier);
 
   if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
@@ -724,9 +734,9 @@ export async function cancelBookingWithRefund(
         data: {
           companyId: existing.listing.companyId,
           bookingId: updated.id,
-          grossAmount,
+          grossAmount: new Prisma.Decimal(0),
           penaltyDeduction: new Prisma.Decimal(0),
-          netAmount: grossAmount,
+          netAmount: new Prisma.Decimal(0),
           invoicingCadence,
         },
       });
