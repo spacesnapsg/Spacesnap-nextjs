@@ -1,6 +1,7 @@
 import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { invoicingCadenceForSupplierTier } from "@/lib/booking-payments";
+import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 
 // Live-computed, never stored denormalized — same "SUM over the ledger"
 // principle as getCreditBalance (lib/credits.ts). A company's pending
@@ -34,11 +35,12 @@ export async function getSupplierPendingPayableBalance(
 export async function createCompletedBookingPayable(tx: Prisma.TransactionClient, bookingId: bigint): Promise<void> {
   const booking = await tx.booking.findUniqueOrThrow({
     where: { id: bookingId },
-    include: { listing: { include: { company: true } } },
+    include: { listing: true },
   });
 
   const commissionAmount = booking.sgdAmount.mul(booking.platformCommissionPercent).div(100).toDecimalPlaces(2);
   const grossAmount = booking.sgdAmount.sub(commissionAmount);
+  const { tier } = await getCompanySupplierTier(booking.listing.companyId, tx);
 
   await tx.supplierPayable.create({
     data: {
@@ -47,7 +49,7 @@ export async function createCompletedBookingPayable(tx: Prisma.TransactionClient
       grossAmount,
       penaltyDeduction: new Prisma.Decimal(0),
       netAmount: grossAmount,
-      invoicingCadence: invoicingCadenceForSupplierTier(booking.listing.company.supplierTier),
+      invoicingCadence: invoicingCadenceForSupplierTier(tier),
     },
   });
 }

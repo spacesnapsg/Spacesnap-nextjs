@@ -2,7 +2,7 @@
 
 import { signOut } from "next-auth/react";
 import Link from "next/link";
-import { BarChart3, Package, Building2, FileText, User, UserCircle, LogOut } from "lucide-react";
+import { BarChart3, Package, Building2, FileText, Landmark, User, UserCircle, LogOut } from "lucide-react";
 import Navbar from "./Navbar";
 import NavGroup, { NavItem } from "./NavGroup";
 import LogoBox from "./LogoBox";
@@ -55,6 +55,7 @@ export default function SupplierNavbar() {
         <NavItem icon={<Package size={16} />} label="Inventory" href="/supplier-inventory" gradient="from-supplier-purple-start to-supplier-purple-end" />
         <NavItem icon={<Building2 size={16} />} label="Tutorials" href="/supplier-tutorials" gradient="from-supplier-purple-start to-supplier-purple-end" />
         <NavItem icon={<FileText size={16} />} label="Requests" href="/supplier-requests" gradient="from-supplier-purple-start to-supplier-purple-end" />
+        <NavItem icon={<Landmark size={16} />} label="Financials" href="/supplier-financials" gradient="from-supplier-purple-start to-supplier-purple-end" />
         <NavItem icon={<User size={16} />} label="Profile" href="/supplier-profile" gradient="from-supplier-purple-start to-supplier-purple-end" />
       </NavGroup>
     </Navbar>

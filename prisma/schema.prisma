@@ -444,13 +444,12 @@ enum SupplierPayableStatus {
   @@map("supplier_payable_status")
 }
 
-// Snapshot of Company.supplierTier's cadence AT THE TIME this payable was
-// created — deliberately not a live join to Company, so a mid-cycle tier
-// change never reaches back and reshuffles a payable that's already pending/
-// invoiced. Which cadence each SupplierTier value actually maps to is not
-// decided this session (see SupplierTier's own comment on Company below) —
-// whatever future session builds the write path that creates SupplierPayable
-// rows resolves that mapping, this column just holds the result.
+// Snapshot of the company's supplier tier cadence AT THE TIME this payable
+// was created — deliberately not a live join, so a mid-cycle tier change
+// never reaches back and reshuffles a payable that's already pending/
+// invoiced. The tier itself is never stored (lib/supplier-tiers.ts computes
+// it live from rating + rolling-window spend, Sprint 6.10) — this column
+// just holds the cadence that tier mapped to at creation time.
 enum InvoicingCadence {
   monthly
   biweekly
@@ -668,19 +667,6 @@ model VerificationToken {
 // Domain
 // ---------------------------------------------------------------------------
 
-// Manually settable by admin only — no automatic gating logic (rating/
-// availability/booking-count thresholds) is built here, those numbers are
-// still TBC. See the stubbed admin-route TODO in CLAUDE1.md's session note
-// for this field; no route was added this session (schema + lib functions
-// only, per this session's scope).
-enum SupplierTier {
-  free
-  preferred
-  top
-
-  @@map("supplier_tier")
-}
-
 model Company {
   id                   BigInt       @id @default(autoincrement())
   name                 String
@@ -696,7 +682,12 @@ model Company {
   registrationNumber   String?      @map("registration_number")
   financeContactEmail  String?      @map("finance_contact_email")
   financeContactPerson String?      @map("finance_contact_person")
-  supplierTier         SupplierTier @default(free) @map("supplier_tier")
+  // Supplier payment tier (free/preferred/top) is deliberately NOT a column
+  // here — it's live-computed from rating + rolling-window spend
+  // (lib/supplier-tiers.ts, Sprint 6.10, confirmed with the product owner
+  // 2026-07-22). It was a manual admin-set column/route until this session;
+  // both were removed rather than left to fight the automatic calculation
+  // (migration `20260722_remove_supplier_tier_column`).
   createdAt            DateTime     @default(now()) @map("created_at")
   updatedAt            DateTime     @updatedAt @map("updated_at")
 

@@ -3,6 +3,7 @@ import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSystemAdmin } from "@/lib/admin-auth";
 import { serializeAdminCompany } from "@/lib/admin-companies";
+import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 
 // Platform-wide company list with nested member/listing data — closes the
 // "no GET /api/admin/companies" gap tracked since Sprint 3 Session 4.
@@ -31,8 +32,10 @@ export async function GET(request: NextRequest) {
     orderBy: { createdAt: "desc" },
   });
 
+  const tiers = await Promise.all(companies.map((company) => getCompanySupplierTier(company.id)));
+
   return NextResponse.json({
-    companies: companies.map(serializeAdminCompany),
+    companies: companies.map((company, i) => serializeAdminCompany(company, tiers[i].tier)),
     meta: { total: companies.length },
   });
 }

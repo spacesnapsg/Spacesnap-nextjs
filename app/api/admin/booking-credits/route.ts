@@ -9,8 +9,7 @@ import { creditsToSgd } from "@/lib/credit-units";
 // other) way a BookingCredit gets issued, besides a supplier decline. No
 // real Stripe charge backs this money (refundObligated stays false inside
 // grantBookingCredit), so it simply lapses if unused; no auto-gating logic,
-// same "manual admin decision, no automatic trigger" posture as
-// Company.supplierTier's own admin route.
+// a manual admin decision with no automatic trigger.
 export async function POST(request: Request) {
   const adminAuth = await requireSystemAdmin();
   if ("error" in adminAuth) return adminAuth.error;

@@ -25,6 +25,7 @@ import {
 } from "@/lib/booking-payments";
 import { sgdToCredits } from "@/lib/credit-units";
 import { getUserRewardTier, rebatePercentForTier } from "@/lib/reward-tiers";
+import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 
 export { RewardGrantNotRedeemableError };
 
@@ -744,7 +745,7 @@ export async function declineBookingPendingResolution(
 ): Promise<BookingWithRelations> {
   const existing = await prisma.booking.findUniqueOrThrow({
     where: { id: bookingId },
-    include: { listing: { include: { company: true } } },
+    include: { listing: true },
   });
   if (existing.status !== BookingStatus.pending && existing.status !== BookingStatus.confirmed) {
     throw new BookingNotDeclinableError(existing.status);
@@ -761,7 +762,8 @@ export async function declineBookingPendingResolution(
 
   const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
   const penaltyDeduction = commissionAmount.mul(supplierPenaltyPercent).div(100).toDecimalPlaces(2);
-  const invoicingCadence = invoicingCadenceForSupplierTier(existing.listing.company.supplierTier);
+  const { tier: existingSupplierTier } = await getCompanySupplierTier(existing.listing.companyId);
+  const invoicingCadence = invoicingCadenceForSupplierTier(existingSupplierTier);
   const creditExpiresAt = new Date(declinedAt.getTime() + BOOKING_CREDIT_REFUND_OBLIGATION_DAYS * 24 * 60 * 60 * 1000);
 
   return prisma.$transaction(async (tx) => {
@@ -1070,7 +1072,7 @@ export async function cancelBookingWithRefund(
 ): Promise<BookingWithRelations> {
   const existing = await prisma.booking.findUniqueOrThrow({
     where: { id: bookingId },
-    include: { listing: { include: { company: true } } },
+    include: { listing: true },
   });
   if (existing.status !== BookingStatus.pending && existing.status !== BookingStatus.confirmed) {
     throw new BookingNotCancellableError(existing.status);
@@ -1095,7 +1097,8 @@ export async function cancelBookingWithRefund(
   const earnedReversalAmount = existing.earnedCreditsApplied.mul(userRefundPercent).div(100).toDecimalPlaces(2);
   const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
 
-  const invoicingCadence = invoicingCadenceForSupplierTier(existing.listing.company.supplierTier);
+  const { tier: cancelSupplierTier } = await getCompanySupplierTier(existing.listing.companyId);
+  const invoicingCadence = invoicingCadenceForSupplierTier(cancelSupplierTier);
 
   if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
     try {

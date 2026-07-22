@@ -1,4 +1,5 @@
-import { SupplierTier, InvoicingCadence } from "@/app/generated/prisma/client";
+import { InvoicingCadence } from "@/app/generated/prisma/client";
+import type { SupplierTier } from "@/lib/supplier-tiers";
 
 // The pure refund/fee/cap calculators moved to lib/booking-policy.ts
 // (2026-07-21, Cancel/Modify Booking UI session) so the browser-side preview
@@ -19,9 +20,10 @@ export {
   MODIFICATION_FEE_PERCENT,
 } from "@/lib/booking-policy";
 
-// Snapshot of Company.supplierTier's cadence AT SupplierPayable-creation time
-// (see SupplierPayable.invoicingCadence's own schema comment for why this is
-// a snapshot, not a live join). Confirmed with the product owner 2026-07-21.
+// Snapshot of the live-computed supplier tier's cadence (lib/supplier-tiers.ts)
+// AT SupplierPayable-creation time (see SupplierPayable.invoicingCadence's
+// own schema comment for why this is a snapshot, not a live join). Confirmed
+// with the product owner 2026-07-21.
 const SUPPLIER_TIER_INVOICING_CADENCE: Record<SupplierTier, InvoicingCadence> = {
   free: InvoicingCadence.monthly,
   preferred: InvoicingCadence.biweekly,

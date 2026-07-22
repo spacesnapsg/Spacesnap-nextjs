@@ -1,6 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
+export type SupplierTier = "free" | "preferred" | "top";
+export type InvoicingCadence = "monthly" | "biweekly" | "weekly";
+
+// Live-computed, not admin-set (Sprint 6.10) — see lib/supplier-tiers.ts.
+export interface SupplierTierStats {
+  averageRating: number | null;
+  ratingCount: number;
+  spendCredits: number;
+  nextTier: SupplierTier | null;
+  progressPercent: number;
+}
+
 export interface CompanyDetails {
   id: string;
   name: string;
@@ -9,6 +21,9 @@ export interface CompanyDetails {
   registrationNumber: string | null;
   financeContactEmail: string | null;
   financeContactPerson: string | null;
+  supplierTier: SupplierTier;
+  invoicingCadence: InvoicingCadence;
+  tierStats: SupplierTierStats;
 }
 
 export interface BusinessDetailsFields {

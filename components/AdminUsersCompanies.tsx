@@ -11,7 +11,7 @@ import {
   type UserRole,
   type AccountStatus,
 } from "@/lib/hooks/useAdminUsers";
-import { useAdminCompanies, useSetSupplierTier, type SupplierTier } from "@/lib/hooks/useAdminCompanies";
+import { useAdminCompanies, type SupplierTier } from "@/lib/hooks/useAdminCompanies";
 import { ApiRequestError } from "@/lib/api-client";
 
 type MainTab = "users" | "companies";
@@ -215,8 +215,6 @@ function UsersTab() {
   );
 }
 
-const SUPPLIER_TIERS: SupplierTier[] = ["free", "preferred", "top"];
-
 const SUPPLIER_TIER_LABELS: Record<SupplierTier, string> = {
   free: "Free",
   preferred: "Preferred",
@@ -229,40 +227,17 @@ const SUPPLIER_TIER_BADGE_STYLES: Record<SupplierTier, string> = {
   top: "bg-gradient-to-r from-admin-red-start/20 to-admin-orange-end/20 text-admin-orange-end border-admin-orange-end/30",
 };
 
-function SupplierTierControl({ company }: { company: { id: string; supplierTier: SupplierTier } }) {
-  const setSupplierTier = useSetSupplierTier();
-  const [error, setError] = useState<string | null>(null);
-  const isPending = setSupplierTier.isPending && setSupplierTier.variables?.id === company.id;
-
-  function handleChange(next: SupplierTier) {
-    if (next === company.supplierTier) return;
-    setError(null);
-    setSupplierTier.mutate(
-      { id: company.id, supplierTier: next },
-      {
-        onError: (err) => setError(err instanceof ApiRequestError ? err.message : "Something went wrong."),
-      }
-    );
-  }
-
+// Read-only — Sprint 6.10 replaced the manual admin `<select>` with a live
+// calculation off rating + rolling-window spend (lib/supplier-tiers.ts), per
+// the product owner's own "remove the manual override, not just supplement
+// it" instruction. No admin action can change this anymore.
+function SupplierTierBadge({ tier }: { tier: SupplierTier }) {
   return (
-    <div className="flex flex-col items-end gap-1" onClick={(e) => e.stopPropagation()}>
-      <select
-        value={company.supplierTier}
-        disabled={isPending}
-        onChange={(e) => handleChange(e.target.value as SupplierTier)}
-        className={`h-8 rounded-full border px-3 text-xs font-medium bg-card focus:outline-none focus:border-admin-red-start transition-colors ${
-          SUPPLIER_TIER_BADGE_STYLES[company.supplierTier]
-        } ${isPending ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-      >
-        {SUPPLIER_TIERS.map((tier) => (
-          <option key={tier} value={tier} className="bg-card text-body-text">
-            {SUPPLIER_TIER_LABELS[tier]}
-          </option>
-        ))}
-      </select>
-      {error && <p className="text-xs text-error-red text-right max-w-[10rem]">{error}</p>}
-    </div>
+    <span
+      className={`inline-block h-8 leading-8 rounded-full border px-3 text-xs font-medium ${SUPPLIER_TIER_BADGE_STYLES[tier]}`}
+    >
+      {SUPPLIER_TIER_LABELS[tier]}
+    </span>
   );
 }
 
@@ -338,7 +313,7 @@ function CompaniesTab() {
                   </div>
                   <div>
                     <p className="text-xs text-muted-text text-right mb-1">Tier</p>
-                    <SupplierTierControl company={company} />
+                    <SupplierTierBadge tier={company.supplierTier} />
                   </div>
                 </div>
               </div>

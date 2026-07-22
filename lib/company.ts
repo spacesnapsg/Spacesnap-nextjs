@@ -1,8 +1,19 @@
 import type { Company } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import { invoicingCadenceForSupplierTier } from "@/lib/booking-payments";
+import { getCompanySupplierTier } from "@/lib/supplier-tiers";
+import { sgdToCredits } from "@/lib/credit-units";
 
-export function serializeCompanyDetails(company: Company) {
+// supplierTier/invoicingCadence/tierStats added 2026-07-22 (Sprint 6.10,
+// supplier Financials page) — live-computed (lib/supplier-tiers.ts), not
+// read off a stored column; the manual admin-set route was removed the same
+// session. spendCredits is converted at this API edge only (sgdToCredits) —
+// the underlying calculation stays true SGD end to end, same discipline as
+// every other credits-display figure in this codebase.
+export async function serializeCompanyDetails(company: Company) {
+  const tierStatus = await getCompanySupplierTier(company.id);
+
   return {
     id: company.id.toString(),
     name: company.name,
@@ -11,6 +22,15 @@ export function serializeCompanyDetails(company: Company) {
     registrationNumber: company.registrationNumber,
     financeContactEmail: company.financeContactEmail,
     financeContactPerson: company.financeContactPerson,
+    supplierTier: tierStatus.tier,
+    invoicingCadence: invoicingCadenceForSupplierTier(tierStatus.tier),
+    tierStats: {
+      averageRating: tierStatus.averageRating,
+      ratingCount: tierStatus.ratingCount,
+      spendCredits: sgdToCredits(tierStatus.spendSgd),
+      nextTier: tierStatus.nextTier,
+      progressPercent: tierStatus.progressPercent,
+    },
   };
 }
 

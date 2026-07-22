@@ -653,42 +653,60 @@ together under one sprint number per this file's own "figure out X"
 convention (see Sprint 6.7's original "TBD when this sprint starts"
 phrasing), not guessed at.
 
-### Supplier Tier — Automatic Calculation
+### Supplier Tier — Automatic Calculation — Closed 2026-07-22
 
 Raised by the product owner same session as the reward-catalogue follow-up
-above.
+above; confirmed and built the same day the Supplier Financials page's tier
+card asked the open questions below back to the product owner.
 
-- [ ] `Company.supplierTier` (free/preferred/top) is currently **manual-only**
-  — `PATCH /api/admin/companies/[id]/supplier-tier`, system-admin-set, "no
-  automatic gating logic" by the field's own schema comment (Sprint 6,
-  closed 2026-07-21). The product owner now wants this **automatically
-  computed** from the supplier's spend and rating, with the admin manual
-  override UI **removed** (not just supplemented).
-- [ ] Open questions to resolve before this can be built, none guessed at:
-  - What "spend" means here — gross booking volume through the company's
-    listings? Net of commission? Over what window (matches Sprint 6.5's
-    reward-tier rolling 3-month window, or all-time)?
-  - What "rating" means — average of which ratings (`lib/ratings.ts` exists
-    for booking ratings, scope/aggregation not confirmed)? Minimum sample
-    size before a rating counts?
-  - The actual free/preferred/top thresholds for both dimensions, and
-    whether both spend AND rating must clear a bar (Sprint 6.5's reward-tier
-    model requires both bookings-count AND spend) or either alone suffices.
-  - Whether an existing `SupplierPayable`/completed-booking aggregate
-    already contains the right "spend" figure to read live from (matching
-    this codebase's "never stored denormalized" convention throughout —
-    `getSupplierPendingPayableBalance`, `getCreditBalance`, etc.) or a new
-    aggregate is needed.
-- [ ] Remove the manual tier `<select>` in `AdminUsersCompanies.tsx`'s
-  Companies tab (Sprint 6's own admin UI) once the automatic calculation
-  replaces it — do not leave both a manual override and an automatic
-  calculation fighting each other.
-- [ ] Supplier-facing UI: no card currently shows a supplier's own tier
-  anywhere in `(supplier)/supplier/page.tsx` or elsewhere — placement not
-  yet decided. The user (rewards) side already has a precedent to mirror:
-  the Sprint 6.5 "User Tier" dashboard card + `TierBenefitsModal` infographic
-  on the user dashboard. Whether the supplier equivalent lives on the main
-  supplier dashboard, the Supplier Profile page, or both is undecided.
+- [x] `Company.supplierTier` (free/preferred/top) was **manual-only** —
+  `PATCH /api/admin/companies/[id]/supplier-tier`, system-admin-set. Now
+  **automatically computed**, admin override **removed entirely** (not just
+  supplemented) — the column, the enum, the admin route, and the admin
+  `<select>` are all gone, replaced by a live calculation
+  (`lib/supplier-tiers.ts`, `getCompanySupplierTier`/`getCompanySupplierTierStats`),
+  same "never stored denormalized" principle as `getCreditBalance`/
+  `getUserRewardTier`. Migration `20260722070000_remove_supplier_tier_column`.
+- [x] Open questions resolved, confirmed by the product owner 2026-07-22 (not
+  guessed at):
+  - **Rating**: the live average across the company's entire listed
+    inventory, all-time (not windowed) — `prisma.rating.aggregate({ where:
+    { listing: { companyId } } })`, no minimum sample size (an unrated
+    company simply can't clear the rating bar for preferred/top yet).
+  - **Spend**: "the same as user tier" — gross `Booking.sgdAmount` of the
+    company's own COMPLETED bookings, summed over the identical rolling
+    3-month window as the user reward tier (`REWARD_TIER_WINDOW_MONTHS`,
+    `lib/reward-tiers.ts`), not net of commission.
+  - **Thresholds**: confirmed correct against the product-owner-provided
+    infographic (`public/rewards/supplier-reward-tiers-infographic.png`) —
+    preferred: 4.0★ AND 50,000 credits (S$5,000) spend; top: 4.5★ AND
+    100,000 credits (S$10,000) spend. BOTH dimensions required at each
+    tier, same "AND, not OR" model as the user reward tier.
+  - No existing aggregate covered this — `getCompanySupplierTierStats` is a
+    new live query, not a repurposed `SupplierPayable`/booking aggregate,
+    since none of the existing ones combine rating with a rolling-window
+    booking sum.
+- [x] Removed the manual tier `<select>` in `AdminUsersCompanies.tsx`'s
+  Companies tab — replaced with a read-only `SupplierTierBadge`. No manual
+  override left to fight the automatic calculation.
+- [x] Supplier-facing UI — built on the new Supplier Financials page
+  (`(supplier)/supplier-financials/page.tsx`, see that section above), not
+  the main supplier dashboard as originally proposed (the product owner's
+  own Financials-page UI spec superseded that placement guess). Real
+  progress bar wired to `company.tierStats.progressPercent`
+  (`GET /api/supplier/company`), "View Tier Benefits" link opens
+  `SupplierTierBenefitsModal.tsx` showing the same infographic.
+
+**Verified live** (`ben@acmecoworking.sg`, `alice.admin@spacesnap.sg`): the
+Financials page's Supplier Tier card shows a real "Free" with a 0%-filled
+progress bar (Acme Coworking has no ratings and no completed-booking spend
+in the current window); the admin Companies tab shows a plain read-only
+"Free" badge for all three seeded companies, no `<select>` present.
+`npm test` 293/293 (including the two `invoicingCadence === "monthly"`
+assertions in `bookings.test.ts`/`check-ins.test.ts`, which still hold since
+fresh test companies naturally compute to free-tier with zero rating/spend).
+`npx tsc --noEmit`, `eslint .` (2 pre-existing errors elsewhere, confirmed
+via `git stash` unrelated to this change), and `next build` all clean.
 
 ### Rewards Catalogue — per-category redemption/fulfillment design (raised 2026-07-22, planning only, not yet built)
 
@@ -784,6 +802,100 @@ product owner per-category below; **none of this is built yet**, same
   which categories even need a non-trivial status versus staying
   immediately-terminal (`discount`/`consumable` redemption is arguably done
   the moment it's redeemed; `pitch_ticket`/`consultancy` clearly aren't).
+
+### Supplier Financials Page — UI built 2026-07-22, backend deliberately not wired
+
+New `/supplier-financials` page (nav item added to `SupplierNavbar.tsx`,
+between Requests and Profile), built per the product owner's own direct UI
+spec for this session — **UI only, on the product owner's own explicit
+instruction to build the visual design first and track backend wiring here
+rather than build it now.** Nothing below is guessed at; it's the list of
+what a future session needs to decide/build before any of this is real.
+
+- [x] **Supplier Tier card** — real data, not a placeholder. Shows the
+  supplier tier + its derived invoicing cadence (both exposed via
+  `GET /api/supplier/company`, `serializeCompanyDetails`/`lib/company.ts`)
+  and the logged-in user's own real `referralCode` (`GET /api/me`, same
+  field the user dashboard's Tier card already reads — no new backend needed
+  for this part). **Progress bar + tier itself went fully live later the
+  same day** — see "Supplier Tier — Automatic Calculation — Closed
+  2026-07-22" above; at the time this line was first written the tier was
+  still `Company.supplierTier`, a manual admin-set column, which no longer
+  exists. Mirrors the user dashboard's "User Tier" card layout, per the
+  still-open Sprint
+  6.10 "Supplier-facing UI" item above — this closes that item's placement
+  question (main supplier dashboard was the original proposal; the product
+  owner instead specified the new Financials page for this session, so
+  placed there instead).
+- [ ] **Purchased/Earned Credits cards — placeholder numbers, no backend
+  concept exists.** There is no company-level credit wallet anywhere in the
+  schema, distinct from a `User`'s `purchasedBalance`/`earnedBalance`
+  (`lib/credits.ts`). Before this can be real, needs a decision: is this the
+  same purchased/earned mechanic re-scoped to a `Company` (its own ledger,
+  its own `Transaction`-equivalent rows), or something else entirely? And if
+  it's a real company balance — how does a company actually earn or purchase
+  credits (revenue-based rebate on completed bookings, same shape as Sprint
+  6.5's user reward-tier rebate? Manual admin grant? Both)?
+- [ ] **"Platform Revenue" by listing type — placeholder chart, no backend
+  query exists.** `GET /api/supplier/revenue` (`lib/revenue.ts`) only returns
+  a single monthly total today, no split by listing type (space/equipment/
+  consumable). A real version needs a new query grouping the same
+  Transaction/Booking rows by the listing's category. The date-range toggle
+  (3/6/12 months) is real UI, just filtering placeholder data client-side —
+  swapping in a real endpoint would need it to accept a range param instead.
+- [ ] **Accounts Receivable, Receipts & Invoices — relocated, not newly
+  built.** Moved as-is from the Supplier Profile page (same placeholder
+  copy) per the product owner's request. Still the same standing gap flagged
+  since Sprint 3 — no Invoice/Receipt/payout concept in the schema at all,
+  blocked on Sprint 6's unbuilt Stripe supplier-payout mechanics, unaffected
+  by this session.
+- [ ] **Supplier Rewards Catalogue — new placeholder-only modal
+  (`components/SupplierRewardsCatalogueModal.tsx`), deliberately not sharing
+  a backend with the user-facing one.** 6 items across 3 new categories
+  (`report`, `ad`, `system`) that don't exist in the user catalogue's
+  `RewardCategory` enum (`discount`/`pitch_ticket`/`consultancy`/`events`/
+  `lucky_draw`/`tier_upgrade`/`consumable`) — this is a genuinely separate
+  catalogue, not an extension of `RewardCatalogueItem`, since these rewards
+  (analytics reports, ad placements, a supplier tier boost) are
+  company-facing, not user-facing. Credit costs are placeholder numbers the
+  product owner explicitly asked for ("use a random number first"), not
+  priced against anything. Before this can redeem anything for real, needs:
+  - A schema home — either a new `SupplierRewardCatalogueItem` model
+    (mirrors `RewardCatalogueItem`'s shape: active/inactive,
+    `quantityAvailable`/`redeemedCount`, `creditCost`) or an extension of the
+    existing model with a company-facing flag. Given the categories don't
+    overlap at all with the user-facing ones, a separate model is likely
+    cleaner — not decided here.
+    - "Targeted Insights Report" (`report`) — needs a target-group field,
+      multi-select over Bookings/Equipment/Consumables (mirrors
+      `discountAppliesTo`'s pattern on the user-facing `discount` category).
+    - "Platform Performance Report" (`report`) — no extra fields beyond the
+      universal ones.
+    - "Popup Ad Campaign" / "Spotlight Listing" / "Newsletter Feature"
+      (`ad`) — a campaign-duration or placement-window field, not yet
+      designed (this session's cards just say "week-long"/"priority
+      placement" as static copy, not a configurable duration).
+    - "Tier Boost" (`system`) — same `upgradeDurationMonths`-shaped field as
+      the user-facing `tier_upgrade` category, and the same open design
+      question already flagged under "Rewards Catalogue — per-category
+      redemption/fulfillment design" above (does it freeze-and-restore a
+      snapshot, or just stop applying once expired — unconfirmed there,
+      unconfirmed here too, same answer would presumably apply to both).
+  - A real redemption flow analogous to `lib/reward-redemptions.ts`, once
+    the company-level earned-balance question above is resolved (redemption
+    has to debit something real).
+  - **Admin UI modifications needed because of these extra figures** (the
+    product owner's own follow-up ask, documentation only — not built this
+    session): `AdminRewards.tsx`/`RewardItemModal` today only render fields
+    for the 7 user-facing categories. Supporting the supplier catalogue
+    means either teaching that same admin surface to branch on a
+    company-facing item type too (target-group multi-select for `report`,
+    campaign-duration for `ad`, upgrade-duration for `system` — new
+    conditional field groups, same pattern as the existing per-category
+    branches) or standing up a second, separate admin surface if the schema
+    ends up as a genuinely separate model. Which of those two paths is
+    right depends on the schema decision above, so this is flagged rather
+    than designed in detail yet.
 
 ---
 

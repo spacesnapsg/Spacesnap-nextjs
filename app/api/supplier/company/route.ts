@@ -12,7 +12,7 @@ export async function GET() {
   const company = await prisma.company.findUnique({ where: { id: auth.companyId } });
   if (!company) return notFoundResponse("Company not found.");
 
-  return NextResponse.json({ company: serializeCompanyDetails(company) });
+  return NextResponse.json({ company: await serializeCompanyDetails(company) });
 }
 
 // PATCH: only a company admin can edit business/finance details. Closes the
@@ -32,7 +32,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const fields = parseBusinessDetailsFields(body);
     const company = await updateCompanyBusinessDetails(auth.companyId, fields);
-    return NextResponse.json({ company: serializeCompanyDetails(company) });
+    return NextResponse.json({ company: await serializeCompanyDetails(company) });
   } catch (error) {
     if (error instanceof ApiValidationError) return validationErrorResponse(error);
     throw error;
