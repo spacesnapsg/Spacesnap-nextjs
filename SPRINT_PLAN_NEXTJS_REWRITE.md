@@ -428,6 +428,62 @@ seeded state (Ethan's tier back to free/0).
 
 ---
 
+## Sprint 6.6: Rewards Catalogue UI (Financials Page) — placeholder catalogue, 2026-07-22
+
+Distinct from Sprint 6.5's reward-*tier* rebate system above (the 1%/1.2%/1.5%/1.8%
+earned-credit rebate) — this is the redemption *catalogue* surfaced on the
+user Financials page (`app/(user)/wallet/page.tsx`), letting a user see what
+their `earnedBalance` can actually be spent on beyond a plain booking-discount
+percentage.
+
+- [x] Financials page, Earned Credits card: replaced the static "Earned by
+  completing bookings & rewards" line with a clickable "Check out your
+  redeemable rewards!" button.
+- [x] `components/RewardsCatalogueModal.tsx` — Teal → Purple themed modal:
+  header banner showing the user's real `earned` credit balance (from
+  `useWallet`), a "View redeemed rewards" toggle that drops down
+  active/unused vouchers or tickets, and a grid-card rewards catalogue below
+  (image/icon tile, header, description per card).
+- [ ] **Catalogue rewards are placeholder only, not backed by any real
+  issuance/redemption flow — close this before calling Sprint 6.6 done.**
+  The 7 reward types below are hardcoded UI, not real `RewardGrant` rows:
+  Discount Voucher (renamed from "% off voucher" — matches common platform
+  terminology for a booking-fee-offsetting coupon), VC Pitch Ticket, Legal
+  Consultancy, Exclusive Event Invite, Lucky Draw Ticket, Premium Tier
+  Upgrade, Consumable Redemption. The "View redeemed rewards" active-vouchers
+  dropdown is also placeholder data — there is no `GET` endpoint yet to list
+  a user's own `RewardGrant` rows (only server-side redemption logic exists,
+  `lib/reward-grants.ts`). Wiring both to real data is Sprint 6.7's job
+  (activation) — this item just tracks that the UI shipped ahead of its
+  backend, per the product owner's own instruction, and isn't forgotten.
+
+---
+
+## Sprint 6.7: Admin UI — Activate/Deactivate Rewards Catalogue Items
+
+- [ ] Admin UI (Certificates & Training or a new Rewards tab — TBD when this
+  sprint starts) to activate/deactivate each of the 7 catalogue reward types
+  from Sprint 6.6.
+- [ ] Wire it for real: an inactive reward must not render in
+  `RewardsCatalogueModal` for any user. Requires a real schema home for
+  "reward catalogue item" (not on `RewardGrant` itself, which represents an
+  issued/redeemed grant, not a catalogue definition) — a new model/table,
+  scoped when this sprint starts.
+- [ ] Decide whether the "View redeemed rewards" active-vouchers list gets a
+  real `GET` endpoint in this same pass, since it's the natural place to add
+  one (both need a user-facing `RewardGrant` read path).
+
+---
+
+## Sprint 6.8: Admin UI — Customize Reward Values
+
+- [ ] Admin UI to set the Discount Voucher's `%` value.
+- [ ] Admin UI to set the Consumable Redemption's value.
+- [ ] Both values should be editable per-catalogue-item (not global constants),
+  building on whichever catalogue-item schema Sprint 6.7 introduces.
+
+---
+
 ## Sprint 7: Dashboard, Polish, and Full Re-Verification
 
 - [x] **"Credits" labeling on booking prices — Terms of Service clarification needed, not a UI bug.** `BookingModal.tsx`, the marketplace listing cards/detail panel, and the supplier inventory page all display `priceDay`/`priceWeek`/`priceMonth` with a price suffix even though, since the 2026-07-21 write-path session, a booking is charged real-time SGD via Stripe and never touches any credit balance (confirmed against `lib/bookings.ts` — `Booking.sgdAmount` is set directly from these fields). **Decision (2026-07-21): keep the display as a cosmetic unit, do not relabel to SGD** — "Credits" at checkout is being kept purely as a cosmetic display unit, solely to present the SGD price of a booking. **Correction (2026-07-21, same day): the abbreviated "cr" suffix itself was wrong — the product owner wants the full word "Credits", never the "cr" shorthand, anywhere in the app.** Swept every remaining `cr` abbreviation (30 occurrences across `app/(user)/marketplace/page.tsx`, `app/(supplier)/supplier-inventory/page.tsx`, `app/(supplier)/supplier/page.tsx`, `app/(supplier)/supplier-requests/page.tsx`, `app/(user)/user/page.tsx`, `app/(user)/wallet/page.tsx`, `app/(admin)/admin/dashboard/page.tsx`, `app/(admin)/admin-financials/page.tsx`, `components/PendingBookingCreditModal.tsx`, `components/ConfirmBulkOrderModal.tsx`) and replaced with the full word "credits", matching the wording the booking/purchase modals already used. Verified live against the dev server (`ethan@example.com`): wallet shows "80 Credits"/"420.00 credits", marketplace listing cards show "120 credits"/"18.5 credits / unit", no bare "cr" left anywhere (`grep -rn '\bcr\b' --include="*.tsx"` zero hits outside `node_modules`). `npx tsc --noEmit` and `eslint` clean on every touched file. The ToS clarification section below is still needed, now written against "Credits" as the unit name (no abbreviation to define away):

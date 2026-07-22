@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import Card from "@/components/Card";
 import TopUpCreditsModal from "@/components/TopUpCreditsModal";
+import RewardsCatalogueModal from "@/components/RewardsCatalogueModal";
 import { useWallet, type WalletTransaction } from "@/lib/hooks/useWallet";
 
 function formatDate(dateString: string) {
@@ -148,6 +149,7 @@ function TransactionRow({ transaction }: { transaction: WalletTransaction }) {
 
 export default function FinancialsPage() {
   const [topUpOpen, setTopUpOpen] = useState(false);
+  const [rewardsOpen, setRewardsOpen] = useState(false);
   const { data: wallet, isLoading, isError } = useWallet();
 
   const stats = useMemo(() => (wallet ? computeStats(wallet.transactions) : null), [wallet]);
@@ -205,9 +207,13 @@ export default function FinancialsPage() {
           <p className="text-white/70 text-xs mt-1 mb-4">
             Redeemable as booking discounts, consumables perks, or gig payouts — never purchasable or cashed out directly.
           </p>
-          <div className="w-full h-10 rounded flex items-center justify-center bg-white/15 text-white/80 text-sm font-medium">
-            Earned by completing bookings & rewards
-          </div>
+          <button
+            type="button"
+            onClick={() => setRewardsOpen(true)}
+            className="w-full h-10 rounded font-medium bg-white text-supplier-purple-start hover:bg-white/90 transition-colors"
+          >
+            Check out your redeemable rewards!
+          </button>
         </div>
       </div>
 
@@ -264,6 +270,11 @@ export default function FinancialsPage() {
       </Card>
 
       <TopUpCreditsModal open={topUpOpen} onClose={() => setTopUpOpen(false)} />
+      <RewardsCatalogueModal
+        open={rewardsOpen}
+        onClose={() => setRewardsOpen(false)}
+        earnedCredits={wallet.earned}
+      />
     </div>
   );
 }
