@@ -2,6 +2,7 @@ import { BookingStatus, ActivityActionType, type CheckIn } from "@/app/generated
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { createCompletedBookingPayable } from "@/lib/supplier-payables";
+import { grantRewardTierRebate, maybeConvertReferral } from "@/lib/reward-tiers";
 
 export function serializeCheckIn(checkIn: CheckIn) {
   return {
@@ -133,12 +134,22 @@ export async function checkOutCheckIn(checkInId: bigint): Promise<CheckIn> {
       if (booking.status !== BookingStatus.active) {
         throw new BookingNotCheckOutableError(booking.status);
       }
-      await tx.booking.update({ where: { id: checkIn.bookingId }, data: { status: BookingStatus.completed } });
+      await tx.booking.update({
+        where: { id: checkIn.bookingId },
+        data: { status: BookingStatus.completed, completedAt: new Date() },
+      });
       // Records what the supplier actually earned now that the service was
       // rendered — see lib/supplier-payables.ts. A cancelled/declined
       // booking never reaches this path, so it never gets a fabricated
       // earning row (see the correction in lib/bookings.ts).
       await createCompletedBookingPayable(tx, checkIn.bookingId);
+      // Sprint 6.5 — User Reward Tier: pays out the rebate % snapshotted at
+      // this booking's creation, and checks whether this (the booking's own
+      // user, not necessarily whoever physically checked in) is a referred
+      // user completing their first qualifying booking. See
+      // lib/reward-tiers.ts for both functions' full design.
+      await grantRewardTierRebate(tx, checkIn.bookingId);
+      await maybeConvertReferral(tx, booking.userId, checkIn.bookingId, booking.sgdAmount);
     }
 
     const updated = await tx.checkIn.update({

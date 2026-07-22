@@ -4022,3 +4022,69 @@ the actual browser UI for the modal/redemption steps, not just `curl`:
 - Deriving `ActivityActionType`/`BookingStatus` frontend unions from the
   Prisma schema instead of hand-maintaining them — flagged above as worth a
   future session, not attempted here (out of this session's actual scope).
+
+## Sprint 6.5 — User Reward Tier System + Referral Mechanic, Built (2026-07-22)
+
+Numbers were confirmed with the product owner this session (chat, not a
+design doc) — see `SPRINT_PLAN_NEXTJS_REWRITE.md`'s Sprint 6.5 section for
+the full confirmed table and a summary of what was built; this note covers
+the process/gotchas that section doesn't.
+
+### Pre-existing migration drift, worked around, not fixed
+
+Before touching anything, `prisma migrate dev` refused to proceed: it
+reported migration `20260721130000_notification_cert_expiry_dedup` was
+"modified after it was applied" and offered only `prisma migrate reset`
+(drops the whole dev DB) as a way forward. This predates this session
+entirely — `git diff`/`git log` on that migration file showed zero
+uncommitted changes, so the drift is between the DB's recorded checksum and
+the file, not something this session's schema edit caused. `prisma migrate
+status` reported "up to date" the whole time (that command doesn't do the
+same shadow-DB checksum validation `migrate dev` does), so the applied
+schema itself was never actually in question — just `migrate dev`'s
+stricter integrity check.
+
+**Did not run `migrate reset`** (would drop all seeded/test data, way
+outside this session's scope to risk). Instead: wrote the migration SQL by
+hand, applied it directly via `prisma db execute` against both
+`spacesnap_dev` and `spacesnap_nextjs_test`, then `prisma migrate resolve
+--applied <name>` to record it — same effect as `migrate dev`, without
+needing the shadow-DB path that was blocked.
+
+**Root cause found and fixed, same session (user asked "what can be done
+about the dev DB" after the initial writeup above).** Compared the stored
+`_prisma_migrations.checksum` for `20260721130000_notification_cert_expiry_dedup`
+against a fresh `shasum -a 256` of the actual file on both DBs: the TEST DB's
+stored checksum already matched the current file exactly; only DEV's was
+stale — confirming a prior session applied this migration to dev before the
+file reached its final (committed) form, then finalized the file without
+updating dev's bookkeeping, while test's history was built later via
+`migrate deploy` against the already-final file. The actual table structure
+was correct on both DBs the whole time; this was purely a stale metadata
+row. Fixed with a direct `UPDATE _prisma_migrations SET checksum = '<correct
+sha256>' WHERE migration_name = '...'` on dev (no schema/data touched). Found
+and fixed the identical self-inflicted issue on this session's own
+`20260721140000_reward_tiers_referrals` migration too (edited its file
+after already resolving it once — see the `referralCode` DEFAULT note
+below) on both dev and test. `prisma migrate status` now reports clean on
+both DBs — **this is resolved, not still open.**
+
+### Prisma 7 CLI flag changes encountered
+
+`prisma migrate diff --from-url ... --to-schema-datamodel ...` (the flags
+this repo's own conventions/training data would suggest) no longer exist in
+this installed version (7.8.0) — `--from-url` was removed in favor of
+`--from-config-datasource` reading the datasource out of `prisma.config.ts`.
+Worth remembering for the next session that needs `migrate diff`, per this
+repo's own "read the actual docs, don't assume" rule (`AGENTS.md`).
+
+### `referralCode` required-but-DB-defaulted, not touched in every test file
+
+`User.referralCode` is `@unique` and effectively required, but making it a
+literal required field in `prisma.user.create` calls would have broken every
+existing `prisma.user.create` across `prisma/seed.ts` and a dozen
+`lib/*.test.ts` fixtures (none of which have any reason to know about this
+Sprint 6.5 field). Gave it a `@default(dbgenerated(...))` — a random
+8-hex-char Postgres default — so every OTHER call site stays untouched;
+only `app/api/auth/register/route.ts` explicitly generates and sets one
+(needs its own collision-retry loop, the DB default doesn't).

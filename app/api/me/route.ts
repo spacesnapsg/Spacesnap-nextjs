@@ -2,11 +2,20 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { unauthorizedResponse } from "@/lib/api-errors";
+import { getUserRewardTier } from "@/lib/reward-tiers";
+import { sgdToCredits } from "@/lib/credit-units";
 
 // GET: the caller's own profile. Sprint 4.5 addition — the JWT session only
 // carries role-gating fields (see types/next-auth.d.ts), not display fields
 // like title/avatarUrl/company name, and there was no other route exposing
 // them for profile-card UI (e.g. the Digital Passport page).
+//
+// `rewardTier`/`referralCode` added Sprint 6.5 (User Reward Tier). rewardTier
+// is a structured object (tier name, rebate %, progress-to-next-tier in
+// credits) — never a bare balance, same compliance framing
+// lib/earned-balance-guard.test.ts already enforces for earned credits (see
+// getUserRewardTier's comment, lib/reward-tiers.ts). Reusing this existing
+// route rather than adding a new one.
 export async function GET() {
   const session = await auth();
   if (!session?.user) return unauthorizedResponse();
@@ -17,6 +26,8 @@ export async function GET() {
   });
   if (!user) return unauthorizedResponse();
 
+  const rewardTier = await getUserRewardTier(user.id);
+
   return NextResponse.json({
     id: user.id,
     name: user.name,
@@ -26,5 +37,17 @@ export async function GET() {
     companyName: user.company?.name ?? null,
     memberSince: user.createdAt.toISOString(),
     promotionRequested: user.promotionRequested,
+    referralCode: user.referralCode,
+    rewardTier: {
+      tier: rewardTier.tier,
+      rebatePercent: rewardTier.rebatePercent,
+      bookingCount: rewardTier.bookingCount,
+      spendCredits: sgdToCredits(rewardTier.spendSgd),
+      nextTier: rewardTier.nextTier,
+      bookingsToNextTier: rewardTier.bookingsToNextTier,
+      spendCreditsToNextTier:
+        rewardTier.spendSgdToNextTier !== null ? sgdToCredits(rewardTier.spendSgdToNextTier) : null,
+      progressPercent: rewardTier.progressPercent,
+    },
   });
 }

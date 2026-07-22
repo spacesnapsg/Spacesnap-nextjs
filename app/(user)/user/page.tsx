@@ -21,6 +21,7 @@ import CancelBookingModal from "@/components/CancelBookingModal";
 import ModifyBookingModal from "@/components/ModifyBookingModal";
 import TierBenefitsModal from "@/components/TierBenefitsModal";
 import { useUserBookings, useSubmitRating, type UserBooking } from "@/lib/hooks/useUserBookings";
+import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 import {
   useMyBulkOrders,
   useCancelMyBulkOrder,
@@ -345,7 +346,16 @@ function BulkOrderActivityRow({
   );
 }
 
+const REWARD_TIER_LABELS: Record<string, string> = {
+  free: "Free",
+  starter: "Starter",
+  growth: "Growth",
+  power: "Power",
+};
+
 export default function UserDashboardPage() {
+  const { data: currentUser } = useCurrentUser();
+  const [referralCopied, setReferralCopied] = useState(false);
   const { data: bookings, isLoading: bookingsLoading } = useUserBookings();
   const { data: bulkOrders, isLoading: bulkOrdersLoading } = useMyBulkOrders();
   const cancelBulkOrder = useCancelMyBulkOrder();
@@ -400,22 +410,29 @@ export default function UserDashboardPage() {
           </div>
           <div>
             <p className="text-muted-text text-sm">User Tier</p>
-            {/* TODO: current tier is hardcoded to "Free" — no tier assignment exists yet
-                (Sprint 6.5, not started, see SPRINT_PLAN_NEXTJS_REWRITE.md). Replace once
-                a real tier field/endpoint lands. */}
-            <p className="text-2xl font-semibold text-body-text mt-1">Free</p>
-            <div className="mt-3">
-              <div className="flex items-center justify-between text-xs text-muted-text mb-1">
-                <span>Progress to Starter</span>
-                {/* TODO: real criteria (see the Reward Tiers infographic), but actual progress
-                    against it is still a placeholder — no tier/booking-count/spend tracking
-                    exists in the backend yet (Sprint 6.5, not started). */}
-                <span>8 bookings & $1,000 spend</span>
+            <p className="text-2xl font-semibold text-body-text mt-1">
+              {currentUser ? REWARD_TIER_LABELS[currentUser.rewardTier.tier] : "…"}
+            </p>
+            {currentUser && (
+              <p className="text-xs text-muted-text mt-1">{currentUser.rewardTier.rebatePercent}% earned-credit rebate</p>
+            )}
+            {currentUser?.rewardTier.nextTier && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between text-xs text-muted-text mb-1">
+                  <span>Progress to {REWARD_TIER_LABELS[currentUser.rewardTier.nextTier]}</span>
+                  <span>
+                    {currentUser.rewardTier.bookingsToNextTier} bookings & {currentUser.rewardTier.spendCreditsToNextTier}{" "}
+                    credits to go
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-border/40 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-user-teal-start to-supplier-purple-start"
+                    style={{ width: `${currentUser.rewardTier.progressPercent}%` }}
+                  />
+                </div>
               </div>
-              <div className="h-2 rounded-full bg-border/40 overflow-hidden">
-                <div className="h-full w-[35%] rounded-full bg-gradient-to-r from-user-teal-start to-supplier-purple-start" />
-              </div>
-            </div>
+            )}
             <button
               type="button"
               onClick={() => setTierModalOpen(true)}
@@ -423,6 +440,27 @@ export default function UserDashboardPage() {
             >
               View Tier Benefits
             </button>
+            {currentUser && (
+              <div className="mt-3 pt-3 border-t border-border/40">
+                <p className="text-xs text-muted-text mb-1">Your referral code</p>
+                <div className="flex items-center gap-2">
+                  <code className="text-sm font-mono text-body-text bg-border/20 rounded px-2 py-1">
+                    {currentUser.referralCode}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(currentUser.referralCode);
+                      setReferralCopied(true);
+                      setTimeout(() => setReferralCopied(false), 2000);
+                    }}
+                    className="text-xs text-user-teal-end hover:underline"
+                  >
+                    {referralCopied ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </Card>
 

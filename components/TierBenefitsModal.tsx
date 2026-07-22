@@ -5,11 +5,12 @@ import Button from "@/components/Button";
 
 // 2026-07-21: real infographic dropped in by the product owner (Canva
 // export, moved from the repo root's "Campaign Assets/" into
-// public/rewards/ under a clean filename). Sprint 6.5 (Rewards/Tier System)
-// itself is still "Not Started" in SPRINT_PLAN_NEXTJS_REWRITE.md — no tier
-// assignment, progress tracking, or referral flow exists in the backend
-// yet — this modal is only the benefits reference, not a claim that the
-// system is wired up.
+// public/rewards/ under a clean filename). This modal is the static benefits
+// reference — the actual tier assignment/progress/referral system is now
+// live (Sprint 6.5, closed 2026-07-21/22), surfaced on the user dashboard's
+// "User Tier" card (app/(user)/user/page.tsx) via GET /api/me's
+// `rewardTier`/`referralCode` fields (lib/reward-tiers.ts). This infographic
+// intentionally stays static — it's marketing copy, not a data-bound view.
 
 interface TierBenefitsModalProps {
   open: boolean;

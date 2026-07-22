@@ -24,6 +24,7 @@ import {
   invoicingCadenceForSupplierTier,
 } from "@/lib/booking-payments";
 import { sgdToCredits } from "@/lib/credit-units";
+import { getUserRewardTier, rebatePercentForTier } from "@/lib/reward-tiers";
 
 export { RewardGrantNotRedeemableError };
 
@@ -491,6 +492,15 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
 
   try {
     return await prisma.$transaction(async (tx) => {
+      // Sprint 6.5 — User Reward Tier: snapshot the rebate % this user's
+      // CURRENT tier earns, read inside this same transaction (not before it
+      // opens) so the snapshot can't race a concurrent booking-completion
+      // that would change the user's tier. Paid out later, at THIS booking's
+      // own completion, via grantRewardTierRebate (lib/reward-tiers.ts) —
+      // see that module's comment for why the rebate is locked to the tier
+      // held at creation, not read live at completion time.
+      const rewardTier = await getUserRewardTier(params.userId, tx);
+
       const booking = await tx.booking.create({
         data: {
           userId: params.userId,
@@ -501,6 +511,7 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
           sgdAmount: params.cost,
           earnedCreditsApplied: discount,
           platformCommissionPercent: new Prisma.Decimal(PLATFORM_COMMISSION_PERCENT_BOOKINGS),
+          rewardTierRebatePercent: new Prisma.Decimal(rebatePercentForTier(rewardTier.tier)),
         },
       });
 

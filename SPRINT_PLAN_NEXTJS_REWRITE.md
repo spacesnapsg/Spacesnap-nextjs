@@ -351,31 +351,80 @@ belong to.
 
 ---
 
-## Sprint 6.5: Rewards/Tier System (Free/Starter/Growth/Power) — Not Started
+## Sprint 6.5: Rewards/Tier System (Free/Starter/Growth/Power) — Closed 2026-07-22
 
-New user-facing scope, added 2026-07-21. Discussion-stage only — no schema, no
-`lib/` functions, no admin toggles exist yet. Distinct from the already-
-scrapped equipment-certification "tier" concept (`lib/tiers.ts`, deleted in
-Sprint 4 Item 2 — see that section's writeup above): this is a *user reward*
-tier (Free/Starter/Growth/Power), unrelated to how a certificate was earned.
-Also distinct from `Company.supplierTier` (Sprint 6, supplier-side payment
-tiers) — two separate tier concepts in this product, don't conflate them.
+Numbers confirmed with the product owner 2026-07-21/22 (chat, not a design
+doc), then built the same session. Distinct from the already-scrapped
+equipment-certification "tier" concept (`lib/tiers.ts`, deleted in Sprint 4
+Item 2 — see that section's writeup above): this is a *user reward* tier
+(Free/Starter/Growth/Power), unrelated to how a certificate was earned. Also
+distinct from `Company.supplierTier` (Sprint 6, supplier-side payment tiers)
+— three separate tier concepts in this product now, don't conflate them.
 
-- [ ] Define the reward-tier model: what each tier unlocks, and how a user
-  moves between tiers
-- [ ] `RewardGrant` (Sprint 6) is the redemption mechanic already built —
-  this sprint would be the issuance/progression layer that decides *when*
-  a grant gets created, not a replacement for it
+- [x] Reward-tier model, confirmed: rolling 3-month window, BOTH a bookings-
+  count AND a spend threshold required per tier (Free 1% rebate/no threshold,
+  Starter ≥8 bookings & ≥$1,000 SGD spend/1.2%, Growth ≥20 & ≥$2,500/1.5%,
+  Power ≥35 & ≥$4,500/1.8%). Never stored denormalized — computed live off
+  completed bookings + `ReferralSpendBonus` rows, same "live SUM" principle
+  as every other balance in this codebase. See `lib/reward-tiers.ts`.
+- [x] Rebate mechanic: % snapshotted onto `Booking.rewardTierRebatePercent`
+  at booking CREATION (the tier held when the user booked, not a later
+  change), paid out as an `earned_grant` Transaction at booking COMPLETION
+  (check-out) — reuses the existing `earned_grant` TransactionType value, no
+  new enum needed.
+- [x] Referral mechanic: every user gets a `referralCode` (captured
+  optionally at signup via `referredByUserId`). When a referred user's own
+  booking of ≥$300 SGD completes (first qualifying booking only — a referral
+  converts once), the referrer gets a real $20 SGD `earned_grant` plus a
+  $200 SGD bump to their own rolling-window spend figure (`ReferralSpendBonus`
+  — a phantom, non-ledger row, never a `Transaction`, same idiom as
+  `BookingCredit`/`CreditHold`).
+- [x] `RewardGrant` (Sprint 6) — confirmed unaffected/not reused: that's the
+  discount-redemption mechanic for a *specific* grant type
+  (`booking_discount_pct` etc.); the reward-tier rebate is unconditional
+  earned-credit issuance on every completed booking, a different shape, so
+  it goes straight to a Transaction, not through `RewardGrant`.
 
-**Numbers TBC (blocking real implementation, not just polish):**
-- [ ] User reward-tier thresholds (bookings + spend per tier)
-- [ ] Rolling window length for cumulative spend
-- [ ] Referral flat bonus amount + qualifying booking value threshold (two
-  distinct numbers)
+New/changed files: `lib/reward-tiers.ts` (tier table + pure
+`computeUserRewardTier`/`rebatePercentForTier`, `getUserRewardTierWindowStats`/
+`getUserRewardTier`, `grantRewardTierRebate`, `maybeConvertReferral`);
+`Booking.rewardTierRebatePercent`/`completedAt`, `User.referralCode`/
+`referredByUserId`/`referralConvertedAt`, new `ReferralSpendBonus` model,
+two new `ActivityActionType` values (migration
+`20260721140000_reward_tiers_referrals`); wired into `createBookingWithDebit`
+(`lib/bookings.ts`) and `checkOutCheckIn` (`lib/check-ins.ts`);
+`app/api/auth/register/route.ts` (referral code generation/capture);
+`GET /api/me` (structured `rewardTier`/`referralCode`, never a bare balance —
+same compliance framing `lib/earned-balance-guard.test.ts` enforces);
+signup page referral field; the user dashboard's pre-existing "User Tier"
+card (previously hardcoded placeholder, now wired to real data) and its
+`TierBenefitsModal` infographic (unchanged asset, just its own stale comment
+fixed).
 
-Do not start building this until the thresholds above are confirmed with the
-product owner — same "numbers TBC, don't invent" posture as the commission-
-rate and supplier-tier gaps in Sprint 6.
+**Flagged assumptions (this session's own inferences, not explicitly asked —
+confirm before treating as permanent policy, same posture as every other
+"flag rather than silently guess" item in this file):** both bookings-count
+and spend are counted from COMPLETED bookings only; referral qualification
+checks a booking's headline `sgdAmount`, not the post-discount Stripe charge;
+a referral converts at most once, not once per qualifying booking.
+
+**Tests:** `lib/reward-tiers.test.ts` — pure tier-boundary unit tests plus
+real-DB integration tests (rolling-window inclusion/exclusion, creation-time
+snapshot correctness including a seeded Starter-tier user, full referral
+conversion + no-double-grant). All 287 tests in `npm test` pass. `npx tsc
+--noEmit`, `eslint .`, and `next build` all clean.
+
+**Verified live**, not just unit-tested — real cookie-jar logins against the
+dev server/DB (`ethan@example.com`, a fresh referral-code signup, real
+Stripe test-sandbox charges): completed a $120 booking as a free-tier user →
+exactly one `earned_grant` Transaction for 1.20 SGD (1%); registered a new
+user with Ethan's referral code, completed a $400 booking as that user →
+Ethan received a $20 `earned_grant` tied to that booking, a `ReferralSpendBonus`
+row of $200, and the referee's `referralConvertedAt` was set; confirmed via
+`GET /api/me` that Ethan's live stats reflected the $320 combined spend and
+the correct bottlenecked progress percentage. All test bookings/transactions/
+activity-log rows/the test user deleted afterward; dev DB confirmed back to
+seeded state (Ethan's tier back to free/0).
 
 ---
 

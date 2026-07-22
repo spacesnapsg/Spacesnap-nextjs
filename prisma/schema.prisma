@@ -224,6 +224,10 @@ enum ActivityActionType {
   booking_credit_redeemed
   booking_credit_refunded
 
+  // Sprint 6.5 — User Reward Tier system (lib/reward-tiers.ts).
+  reward_tier_rebate_earned
+  referral_bonus_earned
+
   @@map("activity_action_type")
 }
 
@@ -608,10 +612,31 @@ model User {
   stripeCustomerId       String?    @map("stripe_customer_id")
   stripeConnectAccountId String?    @map("stripe_connect_account_id")
   status                 UserStatus @default(active)
+  // Sprint 6.5 addition (2026-07-21) — User Reward Tier referral mechanic.
+  // referralCode is THIS user's own shareable code, generated in
+  // application code at registration (app/api/auth/register/route.ts) —
+  // existing rows backfilled via raw SQL in the migration (Postgres has no
+  // clean column-default expression for a friendly random string, same
+  // "Prisma/DB can't express this, so raw SQL" precedent as the bookings
+  // exclusion constraint). referredByUserId is set once, at signup, if a
+  // valid code was supplied. referralConvertedAt is set once THIS user's
+  // own referral has produced a qualifying booking and the referrer was
+  // paid (maybeConvertReferral, lib/reward-tiers.ts) — guards against
+  // paying the same referral twice; a repeat qualifying booking by this
+  // same user is a no-op once this is set.
+  // DB-generated default so every OTHER prisma.user.create call in this
+  // codebase (seed.ts, every lib/*.test.ts fixture) doesn't need to know
+  // about this Sprint 6.5 field at all — only app/api/auth/register/route.ts
+  // explicitly generates+sets one (its own collision-retry loop).
+  referralCode           String     @unique @default(dbgenerated("substr(md5(random()::text || clock_timestamp()::text), 1, 8)")) @map("referral_code")
+  referredByUserId       String?    @map("referred_by_user_id")
+  referralConvertedAt    DateTime?  @map("referral_converted_at")
   createdAt              DateTime   @default(now()) @map("created_at")
   updatedAt              DateTime   @updatedAt @map("updated_at")
 
-  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  company      Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  referredBy   User?    @relation("UserReferrals", fields: [referredByUserId], references: [id], onDelete: SetNull)
+  referredUsers User[]  @relation("UserReferrals")
 
   accounts Account[]
   sessions Session[]
@@ -636,8 +661,29 @@ model User {
   rewardGrants            RewardGrant[]
   bookingCredits          BookingCredit[]
   notifications           Notification[]
+  referralSpendBonuses    ReferralSpendBonus[]
 
   @@map("users")
+}
+
+// Sprint 6.5 — User Reward Tier referral mechanic. A phantom bump added to
+// the referrer's rolling-window "spend" figure for tier-qualification math
+// only (getUserRewardTierWindowStats, lib/reward-tiers.ts) — deliberately
+// NOT a Transaction (would incorrectly inflate purchasedBalance/
+// earnedBalance, see TransactionType's comment above) and NOT merged into
+// BookingCredit (different lifecycle/purpose: that's a real, redeemable
+// credit note, this is just an input to a threshold comparison). The
+// referrer's actual reward (a real earned_grant Transaction) is separate —
+// see maybeConvertReferral, lib/reward-tiers.ts.
+model ReferralSpendBonus {
+  id        BigInt   @id @default(autoincrement())
+  userId    String   @map("user_id")
+  amount    Decimal  @default(200) @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("referral_spend_bonuses")
 }
 
 // App-layer rule (not DB-enforced yet): only status=approved certs may be
@@ -891,6 +937,14 @@ model Booking {
   // 2026-07-21: flat 10% for space/equipment bookings (consumables/bulk
   // orders use a different, separately-scoped rate).
   platformCommissionPercent Decimal             @default(10) @map("platform_commission_percent") @db.Decimal(5, 2)
+  // Sprint 6.5 addition (2026-07-21) — User Reward Tier system. Snapshotted
+  // at booking creation from getUserRewardTier (lib/reward-tiers.ts), same
+  // "don't let a later change reshuffle an existing booking" discipline as
+  // platformCommissionPercent above. Paid out as an earned_grant Transaction
+  // at booking completion (grantRewardTierRebate, lib/reward-tiers.ts),
+  // not at creation — the tier a user held when they BOOKED is what they're
+  // rebated on, even if their tier changes before the stay completes.
+  rewardTierRebatePercent   Decimal             @default(1) @map("reward_tier_rebate_percent") @db.Decimal(5, 2)
   status                    BookingStatus       @default(pending)
   cancelledAt               DateTime?           @map("cancelled_at")
   cancelledBy               BookingCancelledBy? @map("cancelled_by")
@@ -918,6 +972,14 @@ model Booking {
   // Re-set on every modification per the tier that modification landed in
   // (a later free modification restores it to 100, not left at a stale 50).
   maxRefundablePercent      Decimal?            @map("max_refundable_percent") @db.Decimal(5, 2)
+  // Sprint 6.5 addition — set once, at check-out (checkOutCheckIn,
+  // lib/check-ins.ts), the moment status flips active -> completed.
+  // updatedAt is not reliable for this: it bumps on every write to the row
+  // (any later, unrelated update would silently shift what "when this
+  // completed" means), which the reward-tier rolling-window calculation
+  // (getUserRewardTierWindowStats, lib/reward-tiers.ts) needs to be exact
+  // about. Null for every booking that hasn't completed (or never will).
+  completedAt               DateTime?           @map("completed_at")
   createdAt                 DateTime            @default(now()) @map("created_at")
   updatedAt                 DateTime            @updatedAt @map("updated_at")
 

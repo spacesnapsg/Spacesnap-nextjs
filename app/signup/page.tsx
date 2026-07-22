@@ -22,6 +22,7 @@ interface SignupFormData {
   role: Role | null;
   agreedToTerms: boolean;
   agreedToPrivacy: boolean;
+  referralCode: string;
 }
 
 interface RoleOption {
@@ -67,6 +68,7 @@ interface RegisterFields {
   name: string;
   email: string;
   password: string;
+  referralCode?: string;
 }
 
 export default function SignupPage() {
@@ -81,6 +83,7 @@ export default function SignupPage() {
     role: null,
     agreedToTerms: false,
     agreedToPrivacy: false,
+    referralCode: "",
   });
   const [error, setError] = useState("");
 
@@ -145,6 +148,7 @@ export default function SignupPage() {
       name: formData.fullName,
       email: formData.email,
       password: formData.password,
+      referralCode: formData.referralCode.trim() || undefined,
     });
   }
 
@@ -230,6 +234,13 @@ export default function SignupPage() {
               placeholder="Confirm your password"
               className="w-full"
               value={formData.confirmPassword}
+              onChange={handleChange}
+            />
+            <Input
+              name="referralCode"
+              placeholder="Referral code (optional)"
+              className="w-full"
+              value={formData.referralCode}
               onChange={handleChange}
             />
 
