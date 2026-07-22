@@ -597,6 +597,51 @@ live: seeded placeholder `creditCost`s (Discount Voucher 50, VC Pitch Ticket
 `npm test` (re-ran `test:db:setup` for the new migration), `tsc`, `eslint`,
 `next build` all clean.
 
+- [x] **Real redemption/issuance flow — closed 2026-07-22, same day.** The
+  gap flagged immediately above (`redeemedCount` had no writer anywhere) is
+  now closed. New `RewardRedemption` model (migration
+  `20260722063112_reward_redemptions`) — a user spending earnedBalance on a
+  catalogue item, distinct from `RewardGrant` (that's a server-issued
+  booking/purchase *discount*, not a standalone catalogue purchase).
+  `itemName`/`itemCategory`/`creditCost` are snapshotted onto the row at
+  redemption time (same principle as `Booking.platformCommissionPercent`
+  elsewhere in this schema) so an admin editing or hard-deleting the
+  catalogue item afterward can't reshuffle or blank out what the user
+  actually redeemed — `rewardCatalogueItemId` itself is nullable/`SetNull`,
+  not the source of truth for display. `POST /api/rewards/[id]/redeem`
+  (`redeemRewardCatalogueItem`, `lib/reward-redemptions.ts`): row-locks the
+  catalogue item (`SELECT ... FOR UPDATE`, same concurrency pattern as
+  `enrollUser`'s capacity guard in `lib/training-enrollments.ts`), rejects
+  inactive/fully-redeemed/not-found items, checks earnedBalance via a new
+  `assertSufficientEarnedBalance` (`lib/credits.ts`, mirrors
+  `assertSufficientPurchasedBalance`), then atomically creates the
+  `RewardRedemption` row, increments `redeemedCount`, writes an
+  `earned_spend` Transaction, and logs a new `reward_redeemed`
+  `ActivityActionType`. `GET /api/rewards/redemptions` (the caller's own
+  rows) replaces `RewardsCatalogueModal.tsx`'s `PLACEHOLDER_ACTIVE_VOUCHERS`
+  — "View redeemed rewards" is real now. Each catalogue card also gained a
+  Redeem button (disabled + "Not enough credits" when the balance is short,
+  hidden when fully redeemed).
+  `creditCost` itself is stored on `RewardCatalogueItem` as a "credits"
+  display-unit figure, same as `AdminRewards.tsx`'s own input — converted to
+  true SGD via `creditsToSgd()` once, at the ledger-write boundary, same
+  discipline as every other read/write of that ratio (`lib/credit-units.ts`).
+  Tests: `lib/reward-redemptions.test.ts` (6 cases — success incl. exact
+  ledger amount, insufficient balance, inactive, fully-redeemed, not-found,
+  unlimited-quantity repeat redemption), registered in `npm test` (293/293).
+  Verified live (`ethan@example.com`, real dev server/DB): granted a
+  temporary 100-credit earned balance via direct `psql` insert, redeemed
+  "Discount Voucher" (50 credits) through the actual UI — balance dropped to
+  50, `redeemedCount` went to 1, the transaction/activity-log rows appeared
+  correctly, "View redeemed rewards" showed the real row; confirmed a direct
+  `POST /api/rewards/10/redeem` (VC Pitch Ticket, 500 credits, insufficient
+  balance) returned a clean 422 and wrote nothing; confirmed an unknown id
+  returned a clean 404. All test transactions/activity-log/redemption rows
+  deleted and `redeemed_count` reset afterward — dev DB confirmed back to
+  its exact seeded state. `npx tsc --noEmit`/`eslint` clean, `next build`
+  clean with `/api/rewards/[id]/redeem` and `/api/rewards/redemptions` both
+  listed.
+
 ---
 
 ## Sprint 6.10: Supplier Tier — Automatic Calculation (planning only, not yet built)

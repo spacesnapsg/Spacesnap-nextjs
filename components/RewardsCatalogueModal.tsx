@@ -3,15 +3,17 @@
 import { useState } from "react";
 import { Gift, ChevronDown, Percent, Users, Scale, PartyPopper, Ticket, Crown, Package, Ticket as VoucherIcon } from "lucide-react";
 import Modal from "@/components/Modal";
-import { useRewardsCatalogue } from "@/lib/hooks/useRewardsCatalogue";
+import Button from "@/components/Button";
+import { useRewardsCatalogue, useMyRewardRedemptions, useRedeemReward } from "@/lib/hooks/useRewardsCatalogue";
 import type { RewardCatalogueItem, RewardCategory, RewardDiscountAppliesTo } from "@/lib/hooks/useAdminRewards";
+import { ApiRequestError } from "@/lib/api-client";
 
 // 2026-07-22 (Sprint 6.9): the catalogue grid below is real and
 // admin-manageable — see components/AdminRewards.tsx (Sprint 6.7/6.8/6.9) and
-// GET /api/rewards. Only the "View redeemed rewards" list underneath is
-// still placeholder: no GET endpoint exists yet for a user's own RewardGrant
-// rows (only server-side redemption logic exists, lib/reward-grants.ts) —
-// that remains a separate, still-open item per the sprint plan.
+// GET /api/rewards. The "View redeemed rewards" list and the Redeem button
+// itself (both 2026-07-22, same day) are now real too — POST
+// /api/rewards/[id]/redeem + GET /api/rewards/redemptions, see
+// lib/reward-redemptions.ts.
 const CATEGORY_ICONS: Record<RewardCategory, typeof Percent> = {
   discount: Percent,
   pitch_ticket: Users,
@@ -49,17 +51,6 @@ function rewardDetailLine(item: RewardCatalogueItem): string | null {
   }
 }
 
-interface ActiveVoucher {
-  id: string;
-  name: string;
-  status: string;
-}
-
-const PLACEHOLDER_ACTIVE_VOUCHERS: ActiveVoucher[] = [
-  { id: "sample-1", name: "Discount Voucher — 10% off", status: "Unused" },
-  { id: "sample-2", name: "Consumable Redemption", status: "Unused" },
-];
-
 interface RewardsCatalogueModalProps {
   open: boolean;
   onClose: () => void;
@@ -68,7 +59,17 @@ interface RewardsCatalogueModalProps {
 
 export default function RewardsCatalogueModal({ open, onClose, earnedCredits }: RewardsCatalogueModalProps) {
   const [showActiveVouchers, setShowActiveVouchers] = useState(false);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
   const { data: rewards, isLoading, isError } = useRewardsCatalogue();
+  const { data: redemptions } = useMyRewardRedemptions();
+  const redeem = useRedeemReward();
+
+  function handleRedeem(itemId: string) {
+    setRedeemError(null);
+    redeem.mutate(itemId, {
+      onError: (error) => setRedeemError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
 
   return (
     <Modal open={open} onClose={onClose} className="w-full max-w-4xl">
@@ -92,20 +93,20 @@ export default function RewardsCatalogueModal({ open, onClose, earnedCredits }: 
 
         {showActiveVouchers && (
           <div className="mt-3 flex flex-col gap-2">
-            {PLACEHOLDER_ACTIVE_VOUCHERS.length === 0 ? (
-              <p className="text-sm text-muted-text py-2">No active vouchers or tickets yet.</p>
+            {!redemptions || redemptions.length === 0 ? (
+              <p className="text-sm text-muted-text py-2">No rewards redeemed yet.</p>
             ) : (
-              PLACEHOLDER_ACTIVE_VOUCHERS.map((voucher) => (
+              redemptions.map((redemption) => (
                 <div
-                  key={voucher.id}
+                  key={redemption.id}
                   className="flex items-center justify-between rounded border border-border/40 px-4 py-3"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <VoucherIcon size={16} className="text-user-teal-end shrink-0" />
-                    <span className="text-sm text-body-text truncate">{voucher.name}</span>
+                    <span className="text-sm text-body-text truncate">{redemption.itemName}</span>
                   </div>
                   <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-user-teal-end bg-user-teal-end/10 rounded-full px-2 py-0.5">
-                    {voucher.status}
+                    {redemption.creditCost} credits
                   </span>
                 </div>
               ))
@@ -120,6 +121,8 @@ export default function RewardsCatalogueModal({ open, onClose, earnedCredits }: 
           Redeem your earned credits for these rewards. More details coming soon.
         </p>
 
+        {redeemError && <p className="text-sm text-error-red mb-4">{redeemError}</p>}
+
         {isLoading ? (
           <p className="text-sm text-muted-text text-center py-8">Loading…</p>
         ) : isError ? (
@@ -131,6 +134,9 @@ export default function RewardsCatalogueModal({ open, onClose, earnedCredits }: 
             {rewards.map((reward) => {
               const Icon = CATEGORY_ICONS[reward.category];
               const detail = rewardDetailLine(reward);
+              const canAfford = earnedCredits >= reward.creditCost;
+              const isRedeeming = redeem.isPending && redeem.variables === reward.id;
+              const redeemDisabled = reward.fullyRedeemed || !canAfford || redeem.isPending;
               return (
                 <div
                   key={reward.id}
@@ -148,11 +154,22 @@ export default function RewardsCatalogueModal({ open, onClose, earnedCredits }: 
                       <Icon size={22} className="text-white" />
                     </span>
                   </div>
-                  <div className="p-4 flex flex-col gap-1">
+                  <div className="p-4 flex flex-col gap-1 flex-1">
                     <p className="text-sm font-semibold text-body-text">{reward.name}</p>
                     <p className="text-xs text-muted-text leading-snug">{reward.description}</p>
                     {detail && <p className="text-xs text-user-teal-end font-medium mt-1">{detail}</p>}
                     <p className="text-xs font-medium text-body-text mt-2">{reward.creditCost} credits</p>
+                    {!reward.fullyRedeemed && (
+                      <Button
+                        type="button"
+                        variant={canAfford ? "primary" : "ghost"}
+                        disabled={redeemDisabled}
+                        onClick={() => handleRedeem(reward.id)}
+                        className={`h-9 w-full text-xs mt-3 ${redeemDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
+                      >
+                        {isRedeeming ? "Redeeming…" : canAfford ? "Redeem" : "Not enough credits"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               );

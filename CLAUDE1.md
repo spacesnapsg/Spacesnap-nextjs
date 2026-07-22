@@ -4265,3 +4265,121 @@ what "spend" means (gross/net, what window), what "rating" means (which
 aggregate, minimum sample size), the actual tier thresholds, whether an
 existing aggregate (`SupplierPayable`, ratings) already has the right
 number to read live from, and where the supplier-facing card should live.
+
+## Rewards Catalogue: Real Redemption Flow (2026-07-22)
+
+Closed the gap the Sprint 6.6/6.7/6.9 sessions each flagged and deliberately
+left open: `RewardCatalogueItem.redeemedCount` had no writer anywhere —
+"View redeemed rewards" in `RewardsCatalogueModal.tsx` was still
+`PLACEHOLDER_ACTIVE_VOUCHERS`, and there was no way for a user to actually
+spend earned credits on a catalogue item.
+
+### Schema: `RewardRedemption`, distinct from `RewardGrant`
+
+New model (migration `20260722063112_reward_redemptions`) — a user spending
+earned credits on a standalone catalogue item. Deliberately not folded into
+`RewardGrant`: that model is a server-issued *discount* applied to a
+specific booking/purchase Stripe charge (`lib/reward-grants.ts`); this is an
+unconditional catalogue purchase with no booking/purchase involved at all,
+debited straight from earnedBalance.
+
+`itemName`/`itemCategory`/`creditCost` are snapshotted onto the row at
+redemption time — same principle as `Booking.platformCommissionPercent`/
+`rewardTierRebatePercent` elsewhere in this schema. This matters concretely
+here because Sprint 6.9's admin `DELETE /api/admin/rewards/[id]` is a real
+hard delete (that route's own comment says "no other table references
+RewardCatalogueItem, no cascade concerns" — true when it was written, no
+longer true once redemptions exist). `rewardCatalogueItemId` is therefore
+nullable with `onDelete: SetNull`, not the source of truth for display — a
+later admin delete of "Discount Voucher" must never blank out a user's
+already-redeemed row. `Transaction` gained a matching nullable
+`rewardRedemptionId` FK (`onDelete: SetNull`), same "trace the ledger row
+back to what authorized it" pattern as `rewardGrantId`/`bookingCreditId`.
+New `ActivityActionType.reward_redeemed`.
+
+### `lib/reward-redemptions.ts`
+
+`redeemRewardCatalogueItem(userId, itemId)`, one `$transaction`:
+
+1. `SELECT id FROM reward_catalogue_items WHERE id = $1 FOR UPDATE` — same
+   row-lock-then-ORM-read pattern as `enrollUser`'s capacity guard
+   (`lib/training-enrollments.ts`). The concurrency risk is the same shape
+   (two racing requests could both read `redeemedCount < quantityAvailable`
+   as true and both succeed, overshooting the cap) and this codebase already
+   has an established fix for it — reused rather than inventing a
+   column-vs-column `updateMany` guard in raw SQL.
+2. Reject `not_found` / `inactive` / `fully_redeemed` (new
+   `RewardRedemptionError`, mirrors `RewardGrantNotRedeemableError`'s shape).
+3. Convert `item.creditCost` (a "credits" display-unit figure — confirmed by
+   reading `AdminRewards.tsx`'s own input before touching anything; nothing
+   in `lib/reward-catalogue.ts` converts it) to true SGD via `creditsToSgd()`
+   — once, here, at the ledger boundary, same discipline as every other
+   read/write of that ratio.
+4. `assertSufficientEarnedBalance` (new, `lib/credits.ts`, mirrors
+   `assertSufficientPurchasedBalance` — first real caller of the
+   earned-balance-specific guard).
+5. Create the `RewardRedemption` row, `increment` `redeemedCount`, write the
+   `earned_spend` Transaction, log `reward_redeemed`.
+
+### Routes + frontend
+
+`POST /api/rewards/[id]/redeem` (any authenticated user) and `GET
+/api/rewards/redemptions` (caller's own rows, newest first). `useRedeemReward`
+invalidates `wallet`/`rewards-catalogue`/`reward-redemptions` together on
+success. `RewardsCatalogueModal.tsx`: each card now has a Redeem button
+("Not enough credits", disabled, when the balance is short; hidden once
+`fullyRedeemed`); "View redeemed rewards" reads `useMyRewardRedemptions`
+instead of the placeholder array.
+
+**One drafting snag caught by the static guard, not by review:**
+`lib/earned-balance-guard.test.ts` scans every `app/api/**/route.ts` file's
+raw source text for the literal substring `earnedBalance` — it flagged the
+new redeem route over a *comment* that used the word, not an actual
+serialization. Reworded the comment ("earned credits" instead of
+"earnedBalance") rather than weakening the guard; matches how
+`app/api/wallet/route.ts` already phrases the same concept without tripping
+it.
+
+### Tests
+
+`lib/reward-redemptions.test.ts`, 6 cases against the real dev/test Postgres
+DB (same convention as `lib/purchases.test.ts` — earned credits seeded
+directly via an `earned_grant` Transaction row rather than routing through a
+full booking-completion chain): success (exact ledger debit, `redeemedCount`
++1, all three rows written), insufficient balance (writes nothing), inactive
+item, fully-redeemed item, unknown id, and unlimited (`quantityAvailable`
+null) repeat redemption. Registered in `package.json`'s `test` script.
+`npm test`: 293/293.
+
+### Live verification, not just unit-tested
+
+Found the dev server already running on port 3000 from a prior session —
+killed and restarted it before testing, same gotcha this file has now hit
+three times: a schema/migration change made mid-session invalidates an
+already-running dev server's in-memory Prisma Client, and `prisma generate`
+alone doesn't fix a server that's already up.
+
+Real cookie-jar session as `ethan@example.com` (already logged in via a
+persisted cookie): granted a temporary 100-credit earned balance via direct
+`psql` insert (`earned_grant`, S$10.00), opened the catalogue modal through
+the actual UI — "Discount Voucher" and "Consumable Redemption" (50 credits
+each) showed an enabled teal "Redeem" button, everything above 50 credits
+correctly showed a disabled "Not enough credits". Clicked Redeem on
+Discount Voucher: header balance dropped 100 → 50 Credits live, no reload;
+"View redeemed rewards" showed the real row; the wallet's Recent
+Transactions list picked up the new `earned_spend` row
+("Redeemed \"Discount Voucher\" from the rewards catalogue for 50
+credits.", -50 credits). Confirmed server-side, not just via the disabled
+button: a direct `POST /api/rewards/10/redeem` (VC Pitch Ticket, 500
+credits, balance now only 50) returned a clean 422
+(`"You don't have enough earned credits to redeem this reward."`) and wrote
+nothing (checked via `psql` — zero new rows, `redeemedCount` unchanged); a
+direct `POST` to a nonexistent id returned a clean 404. Confirmed via direct
+`psql` query against `reward_catalogue_items`/`reward_redemptions` that
+`redeemedCount` went to exactly 1 and the redemption row's snapshotted
+fields matched. All test transactions/activity-log/redemption rows deleted
+and `redeemed_count` reset to 0 afterward — dev DB confirmed back to its
+exact seeded state (Ethan's earned balance back to 0, `reward_redemptions`
+empty). `npx tsc --noEmit`, `eslint .` clean on every touched file, `next
+build` clean with `/api/rewards/[id]/redeem` and `/api/rewards/redemptions`
+both listed.

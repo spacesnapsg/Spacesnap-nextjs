@@ -108,3 +108,18 @@ export async function assertSufficientPurchasedBalance(
     throw new InsufficientCreditBalanceError(balance, cost);
   }
 }
+
+// earnedBalance counterpart, same shape as assertSufficientPurchasedBalance
+// above. First real caller: lib/reward-redemptions.ts (Rewards Catalogue
+// redemption) — a booking/purchase discount checks a specific RewardGrant's
+// own value instead (lib/reward-grants.ts), not this.
+export async function assertSufficientEarnedBalance(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  cost: Prisma.Decimal
+): Promise<void> {
+  const balance = await getEarnedBalance(userId, tx);
+  if (balance.lt(cost)) {
+    throw new InsufficientCreditBalanceError(balance, cost);
+  }
+}

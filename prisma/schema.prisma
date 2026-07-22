@@ -228,6 +228,12 @@ enum ActivityActionType {
   reward_tier_rebate_earned
   referral_bonus_earned
 
+  // Rewards Catalogue redemption (lib/reward-redemptions.ts) — spending
+  // earnedBalance on a RewardCatalogueItem, distinct from every
+  // booking/purchase-discount activity type above (those apply a RewardGrant
+  // as a discount line; this is a standalone catalogue redemption).
+  reward_redeemed
+
   @@map("activity_action_type")
 }
 
@@ -576,7 +582,40 @@ model RewardCatalogueItem {
   updatedAt DateTime @updatedAt @map("updated_at")
   createdAt DateTime @default(now()) @map("created_at")
 
+  redemptions RewardRedemption[]
+
   @@map("reward_catalogue_items")
+}
+
+// A user spending earnedBalance on a RewardCatalogueItem — the actual
+// issuance/redemption flow that item's own `redeemedCount` field was added
+// ahead of (see that field's comment above). Distinct from RewardGrant: that
+// model is a server-issued discount applied to a specific booking/purchase
+// charge; this is a standalone catalogue redemption with no booking/purchase
+// involved, debited straight from earnedBalance via an earned_spend
+// Transaction.
+//
+// itemName/itemCategory/creditCost are snapshotted at redemption time, same
+// principle as Booking.platformCommissionPercent/rewardTierRebatePercent
+// elsewhere in this schema — an admin editing or hard-deleting the catalogue
+// item afterward (Sprint 6.9's DELETE route) must never reshuffle or blank
+// out what the user actually redeemed. rewardCatalogueItemId is therefore
+// nullable/SetNull, not the source of truth for display.
+model RewardRedemption {
+  id                    BigInt                   @id @default(autoincrement())
+  userId                String                   @map("user_id")
+  rewardCatalogueItemId BigInt?                  @map("reward_catalogue_item_id")
+  itemName              String                   @map("item_name")
+  itemCategory          RewardCatalogueCategory  @map("item_category")
+  creditCost            Decimal                  @db.Decimal(10, 2) @map("credit_cost")
+  createdAt             DateTime                 @default(now()) @map("created_at")
+
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rewardCatalogueItem RewardCatalogueItem?  @relation(fields: [rewardCatalogueItemId], references: [id], onDelete: SetNull)
+  transactions        Transaction[]
+
+  @@index([userId])
+  @@map("reward_redemptions")
 }
 
 // ---------------------------------------------------------------------------
@@ -745,6 +784,7 @@ model User {
   bookingCredits          BookingCredit[]
   notifications           Notification[]
   referralSpendBonuses    ReferralSpendBonus[]
+  rewardRedemptions       RewardRedemption[]
 
   @@map("users")
 }
@@ -1315,6 +1355,11 @@ model Transaction {
   // Same "trace the ledger row back to what authorized it" pattern as
   // rewardGrantId above. Nullable: unrelated to every other Transaction type.
   bookingCreditId       BigInt?         @map("booking_credit_id")
+  // Set on the earned_spend row a Rewards Catalogue redemption writes (see
+  // lib/reward-redemptions.ts) — same "trace the ledger row back to what
+  // authorized it" pattern as rewardGrantId/bookingCreditId above. Nullable:
+  // unrelated to every other Transaction type.
+  rewardRedemptionId    BigInt?         @map("reward_redemption_id")
   type                  TransactionType
   amount                Decimal         @db.Decimal(10, 2)
   stripePaymentIntentId String?         @map("stripe_payment_intent_id")
@@ -1328,6 +1373,7 @@ model Transaction {
   purchase         Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
   rewardGrant      RewardGrant?      @relation(fields: [rewardGrantId], references: [id], onDelete: SetNull)
   bookingCredit    BookingCredit?    @relation(fields: [bookingCreditId], references: [id], onDelete: SetNull)
+  rewardRedemption RewardRedemption? @relation(fields: [rewardRedemptionId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
 }
