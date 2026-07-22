@@ -884,7 +884,8 @@ model TrainingSession {
   company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
   certificate Certificate? @relation(fields: [certificateId], references: [id], onDelete: SetNull)
 
-  enrollments TrainingEnrollment[]
+  enrollments  TrainingEnrollment[]
+  activityLogs ActivityLog[]
 
   @@map("training_sessions")
 }
@@ -1028,15 +1029,21 @@ model Rating {
 // this sprint only wires the write path; verify by querying this table
 // directly after performing a hooked action.
 model ActivityLog {
-  id               BigInt             @id @default(autoincrement())
-  userId           String             @map("user_id")
-  actionType       ActivityActionType @map("action_type")
-  description      String
-  relatedListingId BigInt?            @map("related_listing_id")
-  createdAt        DateTime           @default(now()) @map("created_at")
+  id                      BigInt             @id @default(autoincrement())
+  userId                  String             @map("user_id")
+  actionType              ActivityActionType @map("action_type")
+  description             String
+  relatedListingId        BigInt?            @map("related_listing_id")
+  // Same idiom as relatedListingId — lets the training_enrolled/
+  // training_waitlisted/training_waitlist_approved rows link back to the
+  // actual TrainingSession (for a clickable feed entry opening its detail
+  // modal) instead of the frontend parsing an id out of the description text.
+  relatedTrainingSessionId BigInt?           @map("related_training_session_id")
+  createdAt               DateTime           @default(now()) @map("created_at")
 
-  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  listing Listing? @relation(fields: [relatedListingId], references: [id], onDelete: SetNull)
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listing         Listing?         @relation(fields: [relatedListingId], references: [id], onDelete: SetNull)
+  trainingSession TrainingSession? @relation(fields: [relatedTrainingSessionId], references: [id], onDelete: SetNull)
 
   @@map("activity_log")
 }

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   CalendarCheck,
+  CalendarClock,
   CheckCheck,
   Wallet,
   Package,
@@ -20,6 +21,8 @@ import RequestCancellationModal from "@/components/RequestCancellationModal";
 import CancelBookingModal from "@/components/CancelBookingModal";
 import ModifyBookingModal from "@/components/ModifyBookingModal";
 import TierBenefitsModal from "@/components/TierBenefitsModal";
+import TrainingSessionDetailModal from "@/components/TrainingSessionDetailModal";
+import { useTrainingSessions } from "@/lib/hooks/useTrainingSessions";
 import { useUserBookings, useSubmitRating, type UserBooking } from "@/lib/hooks/useUserBookings";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 import {
@@ -124,7 +127,21 @@ function matchBookingId(description: string): string | null {
   return match ? match[1] : null;
 }
 
-function ActivityRow({ entry, bookingsById }: { entry: ActivityEntry; bookingsById: Map<string, UserBooking> }) {
+const TRAINING_SESSION_ACTION_TYPES = new Set<ActivityActionType>([
+  "training_enrolled",
+  "training_waitlisted",
+  "training_waitlist_approved",
+]);
+
+function ActivityRow({
+  entry,
+  bookingsById,
+  onSelectTrainingSession,
+}: {
+  entry: ActivityEntry;
+  bookingsById: Map<string, UserBooking>;
+  onSelectTrainingSession: (trainingSessionId: string) => void;
+}) {
   const submitRating = useSubmitRating();
   const [error, setError] = useState<string | null>(null);
 
@@ -143,6 +160,8 @@ function ActivityRow({ entry, bookingsById }: { entry: ActivityEntry; bookingsBy
     booking.status === "completed" &&
     booking.listingType !== "consumables";
   const Icon = ACTIVITY_ICONS[entry.actionType];
+  const trainingSessionId =
+    TRAINING_SESSION_ACTION_TYPES.has(entry.actionType) ? entry.relatedTrainingSessionId : null;
 
   function handleRate(score: number) {
     if (!booking) return;
@@ -162,9 +181,19 @@ function ActivityRow({ entry, bookingsById }: { entry: ActivityEntry; bookingsBy
           <Icon size={16} />
         </span>
         <div className="min-w-0">
-          <p className="text-sm text-body-text font-medium truncate">
-            {entry.listingName ?? entry.description}
-          </p>
+          {trainingSessionId ? (
+            <button
+              type="button"
+              onClick={() => onSelectTrainingSession(trainingSessionId)}
+              className="text-sm text-user-teal-end font-medium truncate hover:underline text-left"
+            >
+              {entry.description}
+            </button>
+          ) : (
+            <p className="text-sm text-body-text font-medium truncate">
+              {entry.listingName ?? entry.description}
+            </p>
+          )}
           {entry.listingName && <p className="text-xs text-muted-text truncate">{entry.description}</p>}
           <p className="text-xs text-hint-text mt-0.5">{formatDateTime(entry.createdAt)}</p>
         </div>
@@ -355,8 +384,18 @@ const REWARD_TIER_LABELS: Record<string, string> = {
 
 export default function UserDashboardPage() {
   const { data: currentUser } = useCurrentUser();
+  const { data: trainingSessions } = useTrainingSessions();
+  const [selectedTrainingSessionId, setSelectedTrainingSessionId] = useState<string | null>(null);
+  const selectedTrainingSession = trainingSessions?.find((s) => s.id === selectedTrainingSessionId) ?? null;
   const [referralCopied, setReferralCopied] = useState(false);
   const { data: bookings, isLoading: bookingsLoading } = useUserBookings();
+  const upcomingBookingsCount = useMemo(() => {
+    if (!bookings) return 0;
+    const now = new Date();
+    return bookings.filter(
+      (b) => (b.status === "pending" || b.status === "confirmed") && new Date(b.startDate) >= now,
+    ).length;
+  }, [bookings]);
   const { data: bulkOrders, isLoading: bulkOrdersLoading } = useMyBulkOrders();
   const cancelBulkOrder = useCancelMyBulkOrder();
   const requestCancellation = useRequestBulkOrderCancellation();
@@ -464,17 +503,31 @@ export default function UserDashboardPage() {
           </div>
         </Card>
 
-        <Card className="flex flex-col gap-4">
-          <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center">
-            <CalendarCheck size={20} className="text-white" />
-          </div>
-          <div>
-            <p className="text-muted-text text-sm">Total Bookings</p>
-            <p className="text-2xl font-semibold text-body-text mt-1">
-              {bookingsLoading ? "…" : (bookings?.length ?? 0)}
-            </p>
-          </div>
-        </Card>
+        <div className="flex flex-col gap-6">
+          <Card className="flex flex-col gap-4">
+            <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center">
+              <CalendarCheck size={20} className="text-white" />
+            </div>
+            <div>
+              <p className="text-muted-text text-sm">Total Bookings</p>
+              <p className="text-2xl font-semibold text-body-text mt-1">
+                {bookingsLoading ? "…" : (bookings?.length ?? 0)}
+              </p>
+            </div>
+          </Card>
+
+          <Card className="flex flex-col gap-4">
+            <div className="w-11 h-11 rounded-full bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center">
+              <CalendarClock size={20} className="text-white" />
+            </div>
+            <div>
+              <p className="text-muted-text text-sm">Upcoming Bookings</p>
+              <p className="text-2xl font-semibold text-body-text mt-1">
+                {bookingsLoading ? "…" : upcomingBookingsCount}
+              </p>
+            </div>
+          </Card>
+        </div>
       </div>
 
       <Card className="mb-6">
@@ -581,7 +634,12 @@ export default function UserDashboardPage() {
         ) : (
           <div className="flex flex-col">
             {activity.map((entry) => (
-              <ActivityRow key={entry.id} entry={entry} bookingsById={bookingsById} />
+              <ActivityRow
+                key={entry.id}
+                entry={entry}
+                bookingsById={bookingsById}
+                onSelectTrainingSession={setSelectedTrainingSessionId}
+              />
             ))}
           </div>
         )}
@@ -612,6 +670,11 @@ export default function UserDashboardPage() {
       />
 
       <TierBenefitsModal open={tierModalOpen} onClose={() => setTierModalOpen(false)} />
+
+      <TrainingSessionDetailModal
+        session={selectedTrainingSession}
+        onClose={() => setSelectedTrainingSessionId(null)}
+      />
     </div>
   );
 }

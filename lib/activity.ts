@@ -1,4 +1,4 @@
-import { ActivityActionType, type ActivityLog, type Listing } from "@/app/generated/prisma/client";
+import { ActivityActionType, type ActivityLog, type Listing, type TrainingSession } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 
@@ -69,21 +69,29 @@ export async function getUserActivity(userId: string, query: ActivityQuery) {
       ...(query.types ? { actionType: { in: query.types } } : {}),
       ...(query.since ? { createdAt: { gte: query.since } } : {}),
     },
-    include: { listing: { select: { name: true } } },
+    include: {
+      listing: { select: { name: true } },
+      trainingSession: { select: { title: true } },
+    },
     orderBy: { createdAt: "desc" },
     take: query.limit,
   });
 }
 
-type ActivityLogWithListing = ActivityLog & { listing: Pick<Listing, "name"> | null };
+type ActivityLogWithRelations = ActivityLog & {
+  listing: Pick<Listing, "name"> | null;
+  trainingSession: Pick<TrainingSession, "title"> | null;
+};
 
-export function serializeActivityLogEntry(entry: ActivityLogWithListing) {
+export function serializeActivityLogEntry(entry: ActivityLogWithRelations) {
   return {
     id: entry.id.toString(),
     actionType: entry.actionType,
     description: entry.description,
     relatedListingId: entry.relatedListingId?.toString() ?? null,
     listingName: entry.listing?.name ?? null,
+    relatedTrainingSessionId: entry.relatedTrainingSessionId?.toString() ?? null,
+    trainingSessionTitle: entry.trainingSession?.title ?? null,
     createdAt: entry.createdAt.toISOString(),
   };
 }

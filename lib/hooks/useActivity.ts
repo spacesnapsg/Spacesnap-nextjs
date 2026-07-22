@@ -50,6 +50,8 @@ export interface ActivityEntry {
   description: string;
   relatedListingId: string | null;
   listingName: string | null;
+  relatedTrainingSessionId: string | null;
+  trainingSessionTitle: string | null;
   createdAt: string;
 }
 

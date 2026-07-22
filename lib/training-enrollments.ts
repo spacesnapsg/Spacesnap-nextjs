@@ -90,8 +90,8 @@ interface EnrollUserParams {
 export async function enrollUser(params: EnrollUserParams): Promise<TrainingEnrollment> {
   try {
     return await prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<{ id: bigint; capacity: number }[]>`
-        SELECT id, capacity FROM training_sessions WHERE id = ${params.trainingSessionId} FOR UPDATE
+      const locked = await tx.$queryRaw<{ id: bigint; capacity: number; title: string }[]>`
+        SELECT id, capacity, title FROM training_sessions WHERE id = ${params.trainingSessionId} FOR UPDATE
       `;
       const session = locked[0];
       if (!session) {
@@ -127,8 +127,9 @@ export async function enrollUser(params: EnrollUserParams): Promise<TrainingEnro
           userId: params.userId,
           actionType: isFull ? ActivityActionType.training_waitlisted : ActivityActionType.training_enrolled,
           description: isFull
-            ? `Waitlisted for training session #${params.trainingSessionId} (session at capacity).`
-            : `Enrolled in training session #${params.trainingSessionId}.`,
+            ? `Waitlisted for Training Session - ${session.title} (session at capacity).`
+            : `Enrolled in Training Session - ${session.title}`,
+          relatedTrainingSessionId: params.trainingSessionId,
         },
       });
 
@@ -208,7 +209,8 @@ export async function updateEnrollmentStatus(
         data: {
           userId: existing.userId,
           actionType: ActivityActionType.training_waitlist_approved,
-          description: `Approved off the waitlist into training session #${existing.trainingSessionId}.`,
+          description: `Approved off the waitlist into Training Session - ${existing.trainingSession.title}`,
+          relatedTrainingSessionId: existing.trainingSessionId,
         },
       });
     }
