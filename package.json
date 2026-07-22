@@ -2,15 +2,20 @@
   "name": "spacesnap-nextjs",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "postinstall": "prisma generate",
     "test": "DOTENV_CONFIG_PATH=.env.testing tsx --test prisma/tests/db-constraints.test.ts lib/certificate-gating.test.ts lib/bookings.test.ts lib/bulk-orders.test.ts lib/credit-holds.test.ts lib/purchases.test.ts lib/wallet.test.ts lib/check-ins.test.ts lib/training-enrollments.test.ts lib/training-sessions.test.ts lib/ratings.test.ts lib/training-credentials.test.ts lib/quiz-attempts.test.ts lib/certificate-signoffs.test.ts lib/training-videos.test.ts lib/quiz-questions.test.ts lib/earned-balance-guard.test.ts lib/booking-payments.test.ts lib/supplier-payables.test.ts lib/stripe-webhooks.test.ts lib/reward-tiers.test.ts lib/reward-redemptions.test.ts",
     "test:db:migrate": "DOTENV_CONFIG_PATH=.env.testing prisma migrate deploy",
     "test:db:seed": "DOTENV_CONFIG_PATH=.env.testing prisma db seed",
-    "test:db:setup": "npm run test:db:migrate && npm run test:db:seed"
+    "test:db:setup": "npm run test:db:migrate && npm run test:db:seed",
+    "db:migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
@@ -39,6 +44,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "sharp": "^0.35.3",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "typescript": "^5"

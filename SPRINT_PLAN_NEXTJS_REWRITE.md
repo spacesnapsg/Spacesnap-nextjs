@@ -212,8 +212,8 @@ Found via a linkage audit (2026-07-19): every page still reads from `lib/mock*.t
 - [x] Marketplace: give in-stock consumable listings a bulk-purchase option alongside "Buy Now" (product owner request, 2026-07-20, not a mock-data gap) — previously every consumable card/map-panel funneled into the same `RequestPurchaseModal` regardless of stock, just under different button text. **Corrected same day**: the product owner clarified "Buy Now" must not be a `BulkOrderRequest` at all — it's an immediate, completed sale (stock and credits move at creation, no supplier action pending), distinct from a bulk order request (which stays `pending` until the supplier fulfills it). Built a new `Purchase` model + `POST /api/purchases` (`lib/purchases.ts`, `createPurchaseWithDebit`) separate from the existing `BulkOrderRequest`/`POST /api/bulk-order-requests` path. "Buy Now" now calls the new endpoint (quantity locked at 1, atomic stock-decrement-and-debit); "Request Bulk Purchase" is unchanged, still the existing pending-approval quantity-picker flow. Stripe invoice/receipt (user invoice, supplier receipt of funds) is explicitly out of scope here — Sprint 6, not built, `stripePaymentIntentId` already exists on `Transaction` for when that lands. See CLAUDE1.md "Marketplace, Bulk Purchase Option for In-Stock Consumables" and its "Correction" follow-up.
 
 **Checklist before moving to Sprint 5:**
-- [ ] Zero remaining `lib/mock*.ts` imports in page components
-- [ ] Every Sprint 3.5 endpoint (check-ins, training-enrollments, bulk-order-requests, wallet top-up, certificates + admin/supplier certificate routes) has at least one real frontend caller, or is explicitly marked deferred with a reason
+- [x] Zero remaining `lib/mock*.ts` imports in page components — re-verified 2026-07-22: `lib/mockTutorials.ts` is still imported (supplier Tutorials page, `QuizBuilderStep`/`UploadVideoModal`/`TrainingVideoModal`/`AdminCertificatesTraining`), but only for its `QuizQuestion`/`VideoCategory` types and the `makeBlankQuizQuestion` helper — every one of those components is wired to the real `useCreateTrainingVideo`/`useSaveTrainingVideoQuiz`/`useAdminTrainingVideos` hooks, not mock data. Found and fixed one stale artifact of this in the process: `QuizBuilderStep.tsx` still carried a `// TODO: still on mock data... waiting on this stack's port of the old QuizQuestionController` comment left over from before Sprint 4.5's quiz backend landed (closed 2026-07-20) — removed, no behavior change.
+- [x] Every Sprint 3.5 endpoint (check-ins, training-enrollments, bulk-order-requests, wallet top-up, certificates + admin/supplier certificate routes) has at least one real frontend caller, or is explicitly marked deferred with a reason — re-verified 2026-07-22 by grep: check-ins (user dashboard), training-enrollments (`TrainingSessionDetailModal`, `useTrainingSessions`/`useSupplierTrainingSessions`), bulk-order-requests (`RequestPurchaseModal`, `useMyBulkOrders`/`useSupplierBulkOrders`), wallet top-up (`TopUpCreditsModal`), certificates (passport, `AddEditListingModal`, `CreateSessionModal`, `CertificateDetailModal`) and admin/supplier certificate routes (`AdminCertificatesTraining`, `AdminApprovals`, `useAdminCertificates`/`useSupplierCertificates`) all confirmed wired.
 
 ---
 
@@ -279,11 +279,13 @@ belong to.
   upfront choice; no "S$"/SGD anywhere in the app, credits-only display).
   See CLAUDE1.md "BookingCredit Issuance — Rebook-or-Refund Flow" for the
   full design and live-verification writeup.
-- [ ] **Rewards/tier UI (Free/Starter/Growth/Power) — blocked on Sprint 6.5.**
-  No mock or real UI exists for this anywhere in the repo. Do not design this
-  screen until the tier thresholds/spend-window/referral-bonus numbers in
-  Sprint 6.5 are confirmed with the product owner — there's nothing concrete
-  to lay out yet.
+- [x] **Rewards/tier UI (Free/Starter/Growth/Power) — closed 2026-07-22, this
+  line was stale.** Was blocked on Sprint 6.5's thresholds/spend-window/
+  referral-bonus numbers being confirmed; Sprint 6.5 closed the same day and
+  built exactly this — the user dashboard's "User Tier" card wired to real
+  `GET /api/me` data plus its `TierBenefitsModal` infographic (see Sprint 6.5
+  above). This checkbox was never ticked when that line closed; re-verified
+  2026-07-22 by grep that both are real and wired, not left as a stub.
 - [x] **Modify Booking (reschedule) — backend, closed 2026-07-21.** New
   feature, added as a Sprint 4.75 item per the product owner's own pseudocode
   spec (Modification Request Engine + Cancellation Refund Cap Engine). `PATCH
@@ -644,12 +646,17 @@ live: seeded placeholder `creditCost`s (Discount Voucher 50, VC Pitch Ticket
 
 ---
 
-## Sprint 6.10: Supplier Tier — Automatic Calculation (planning only, not yet built)
+## Sprint 6.10: Open Design Threads (planning only, not yet built)
+
+Two unrelated design threads, both explicitly **not built yet** — logged
+together under one sprint number per this file's own "figure out X"
+convention (see Sprint 6.7's original "TBD when this sprint starts"
+phrasing), not guessed at.
+
+### Supplier Tier — Automatic Calculation
 
 Raised by the product owner same session as the reward-catalogue follow-up
-above, but explicitly **not built this session** — flagged here as an open
-item per this file's own "figure out X" convention (see Sprint 6.7's
-original "TBD when this sprint starts" phrasing), not guessed at.
+above.
 
 - [ ] `Company.supplierTier` (free/preferred/top) is currently **manual-only**
   — `PATCH /api/admin/companies/[id]/supplier-tier`, system-admin-set, "no
@@ -682,6 +689,219 @@ original "TBD when this sprint starts" phrasing), not guessed at.
   the Sprint 6.5 "User Tier" dashboard card + `TierBenefitsModal` infographic
   on the user dashboard. Whether the supplier equivalent lives on the main
   supplier dashboard, the Supplier Profile page, or both is undecided.
+
+### Rewards Catalogue — per-category redemption/fulfillment design (raised 2026-07-22, planning only, not yet built)
+
+`RewardRedemption` (built same day, see the closed item above) only records
+*that* a user spent earned credits on a catalogue item — it says nothing
+about what happens next, and that differs by category. Confirmed with the
+product owner per-category below; **none of this is built yet**, same
+"don't guess, confirm first" posture as the supplier-tier item above.
+
+- [ ] **`discount` (Discount Voucher) — confirmed, straightforward.** Used at
+  checkout: a "Have a voucher?" UI with a dropdown of the user's available
+  vouchers, applied to the charge.
+  - Open (not yet confirmed, this session's own inference): the natural
+    mechanism, given what's already in this codebase, is that redeeming a
+    `discount`-category catalogue item mints a `RewardGrant`
+    (`booking_discount_pct`, value = the item's `discountPercent`) at
+    redemption time — `resolveRewardGrantDiscount`/`redeemRewardGrant`
+    (`lib/reward-grants.ts`) already exist and are already wired into both
+    `createBookingWithDebit` and `createPurchaseWithDebit` via an optional
+    `rewardGrantId`. This would also close the standing "New known gap,
+    2026-07-21 — RewardGrant issuance" item under Sprint 3.5 (no issuance
+    flow has ever existed for `RewardGrant`) — the catalogue redemption
+    would become its first real issuance path. Not confirmed with the
+    product owner yet.
+  - Open: no endpoint exists to list a user's own available (unredeemed)
+    `RewardGrant` rows — needed to populate the checkout dropdown.
+  - Open: `discountAppliesTo` includes `certification_fee`, but no
+    certification/credential ever charges a fee anywhere in this codebase
+    (confirmed by grep) — this option currently has nothing to discount
+    against.
+  - Open: does the voucher/grant expire?
+- [ ] **`pitch_ticket` (VC Pitch Ticket) and `consultancy` (Legal
+  Consultancy) — confirmed, same flow for both.** Redeeming opens a modal
+  (at the rewards screen) letting the user pick their preferred VC/
+  consultancy option, which notifies the admin; the request then appears in
+  the Admin Overview UI. Scheduling itself happens outside the web app; once
+  it's arranged, the admin comes back and closes the case, at which point
+  the voucher is considered used.
+  - Open: what backs "select which preferred VC" — `RewardCatalogueItem`
+    only has a single `partnerName` per row today, not a set of options to
+    choose from. Does the admin create one catalogue item per VC/partner (so
+    "selecting" just means picking which catalogue item to redeem), or does
+    a single item need a new list-of-options field?
+  - Open: how "notify the admin" is actually implemented — `Notification`
+    is strictly `userId`-scoped (no admin/broadcast concept exists anywhere
+    in this schema today). Options: a new admin-facing queue that doesn't
+    route through `Notification` at all (the Admin Overview list item *is*
+    the notification), or a genuinely new broadcast-to-all-`system_admin`
+    mechanism.
+  - Open: the exact state machine (e.g. `pending` → `used`) and whether a
+    `cancelled`/`declined` path is needed.
+  - Open: what information the admin actually needs to see to resolve it
+    (contact details, timing preference, anything captured in the modal
+    beyond the VC/partner selection).
+- [ ] **`events` (Exclusive Event Invite) — explicitly deferred, do not
+  build.** Product owner is still deciding the events side of the business;
+  not to be activated at launch.
+- [ ] **`lucky_draw` (Lucky Draw Ticket) — explicitly deferred, do not
+  build, same reason as `events`.** Confirmed shape for whenever it does get
+  built: redeeming enters the user into a draw that's drawn on a set date
+  (a real "winner" concept), prize itself still TBD.
+- [ ] **`tier_upgrade` (Premium Tier Upgrade) — confirmed, but interacts
+  with existing Sprint 6.5 logic, needs its own confirmation before
+  building.** Redeeming bumps the user's reward tier for
+  `upgradeDurationMonths` (field already on the schema); once it expires,
+  the tier resets to its "last before-bump state."
+  - Open (this session's own inference, not yet confirmed): Sprint 6.5's
+    reward tier is never stored — it's always computed live off a rolling
+    3-month window (`computeUserRewardTier`, `lib/reward-tiers.ts`). Given
+    that "never denormalized" convention holds everywhere else in this
+    codebase, "resets to the before-bump state" most likely just means the
+    override stops applying once its expiry passes and the live computation
+    takes over again — not a frozen snapshot that gets restored. Needs
+    explicit confirmation before building, since the literal wording could
+    also be read as "freeze and later restore a stored snapshot."
+  - Open: does the bump run in parallel with the normal rolling-window
+    computation (so real activity during the bump still counts toward
+    whatever tier the user lands on afterward), or does it pause/exclude
+    that computation while active?
+  - Open: can a user redeem a second tier-upgrade while one is already
+    active — does it stack, extend the existing window, or get rejected?
+- [ ] **`consumable` (Consumable Redemption) — confirmed, already matches
+  what's built.** Manual, no inventory tie-in — the existing terminal
+  "redeemed" state from the 2026-07-22 redemption-flow session needs no
+  further backend work, only whatever the status/icon treatment below ends
+  up being.
+- [ ] **Cross-cutting: user-facing redemption status.** Confirmed: shown as
+  an icon under "View redeemed rewards" (`RewardsCatalogueModal.tsx`).
+  Requires a new status field on `RewardRedemption` (today every redemption
+  is implicitly terminal the instant it's created) — the actual state set
+  depends on the `pitch_ticket`/`consultancy` workflow above being designed
+  first (at minimum something like `pending` → `used`), and a decision on
+  which categories even need a non-trivial status versus staying
+  immediately-terminal (`discount`/`consumable` redemption is arguably done
+  the moment it's redeemed; `pitch_ticket`/`consultancy` clearly aren't).
+
+---
+
+## Sprint 6.11: Railway + Cloudflare R2 Deployment Readiness (raised 2026-07-22)
+
+Sprint 0 already *decided* Railway (front/back/DB) + R2 (file storage) as the
+stack — this sprint is the gap between that decision and an actual deploy.
+No Railway project, `railway.json`, `Dockerfile`, or README deployment
+section exists in this repo yet (confirmed by `find`/grep), so nothing below
+is assumed done just because Sprint 0 checked it off. Everything below was
+found by direct inspection of this session's own codebase (`package.json`,
+`auth.ts`, `lib/storage.ts`, `node_modules/next/dist/docs`, `@auth/core`'s
+own source), not guessed — same "don't invent, verify" posture as the rest
+of this file. Split into **code fixes** (do in this repo) and **external
+dashboard steps** (Railway/Cloudflare/Stripe consoles — outside what a
+session in this repo can provision, same category as the existing
+Sprint 3.5/Sprint 6 cron/webhook notes).
+
+**Code fixes — concrete, found by inspection, not yet done:**
+- [x] **Prisma Client isn't generated anywhere in the build pipeline — closed
+  2026-07-22.** Added `"postinstall": "prisma generate"` to `package.json`.
+  Verified: `npm install` (adding `sharp`, see below) regenerated
+  `app/generated/prisma` on its own, confirmed by the file's fresh mtime and
+  a clean `npx prisma generate` re-run immediately after.
+- [x] **No production migration step — closed 2026-07-22.** Added
+  `"db:migrate:deploy": "prisma migrate deploy"` (no `DOTENV_CONFIG_PATH`
+  override, so it reads the real `DATABASE_URL` — `.env` locally, Railway's
+  env vars in production) — intentionally a separate script, not folded into
+  `build`, so it can be wired as Railway's own deploy-command/release-phase
+  step per the reasoning above. Verified live against the local dev DB: `npm
+  run db:migrate:deploy` found all 36 existing migrations already applied,
+  reported "No pending migrations to apply," no schema drift. The seed
+  guardrail is a runtime discipline note, not code — nothing to close there.
+- [x] **`AUTH_TRUST_HOST` / `AUTH_URL` missing — closed 2026-07-22.** Added
+  `AUTH_TRUST_HOST=""` to `.env.example` with a comment explaining exactly
+  why it's required in production and why local dev doesn't need it (dev
+  already defaults `trustHost` to `true`). The real `AUTH_TRUST_HOST=true`
+  (or `AUTH_URL=https://<domain>`) still needs to be set in Railway's actual
+  environment variables once a domain exists — that half is an external
+  step, tracked below, not something a local `.env.example` edit can do by
+  itself.
+- [x] **Node version isn't pinned — closed 2026-07-22.** Added `"engines":
+  {"node": ">=20.9.0"}` to `package.json` (matches Next.js's own declared
+  floor, `node_modules/next/package.json`, rather than an arbitrary pin) and
+  `.nvmrc` set to `26.5.0` (this session's actual verified-working local
+  version).
+- [x] **`sharp` isn't a direct dependency — closed 2026-07-22.** `npm install
+  --save-dev sharp` — resolved `^0.35.3` (already present transitively at a
+  compatible version, so no new native binary download, just promoted to a
+  direct/top-level dependency).
+- [ ] **`output: 'standalone'` — optional, not required.** Per Next.js's own
+  docs, a plain Node server via `next start` is already a fully-supported
+  minimum deployment target; `standalone` only trims the deploy image via
+  output file tracing. Worth turning on for a smaller/faster Railway build,
+  but not a blocker — don't treat this as load-bearing.
+
+**External dashboard/infra steps — cannot be done from inside this repo,
+tracked here so they aren't silently assumed done:**
+- [ ] **R2 bucket CORS configuration.** `lib/storage.ts`'s presigned-PUT
+  evidence-upload flow (the tier2a signoff evidence recording, the one real
+  R2 consumer in this app today) has the *browser* PUT directly to R2. The
+  R2 bucket itself needs a CORS policy allowing `PUT`/`GET` from the
+  production origin — an R2 dashboard/API step, not something `lib/storage.ts`
+  can configure itself.
+- [ ] **Separate R2 bucket + credentials for production**, distinct from
+  whatever `R2_BUCKET_NAME`/dev credentials are in local `.env` today (per
+  `.env.example`'s own `R2_BUCKET_NAME="spacesnap-dev"` default — a name
+  that shouldn't also be the production bucket).
+- [ ] **Stripe webhook endpoint pointed at the real Railway URL.** The
+  webhook route (`app/api/webhooks/stripe/route.ts`) and its signature
+  verification already exist and are tested (Sprint 6, closed 2026-07-21) —
+  what's missing is a real Stripe Dashboard webhook endpoint configured
+  against `https://<railway-domain>/api/webhooks/stripe`, and that
+  endpoint's own real signing secret set as `STRIPE_WEBHOOK_SECRET` in
+  Railway's environment (today's `.env.example` value is explicitly a local
+  `stripe listen`/placeholder one, per that variable's own comment).
+- [ ] **Railway Cron Schedule service for `/api/cron/resolve-pending-booking-credits`.**
+  Already flagged in that route's own code comment (Sprint 6.5-era) as
+  needing a Railway "Cron Schedule" service configured to `POST` it daily
+  with `Authorization: Bearer <CRON_SECRET>` — still not provisioned.
+  Without it, `BookingCredit`'s forced-refund deadline has no hard,
+  log-in-independent guarantee (only the lazy read-time sweep covers a user
+  who's actively looking).
+- [ ] **Railway environment variables set from real production values, not
+  copied from local `.env`** — `DATABASE_URL` (Railway's own Postgres
+  plugin), `AUTH_SECRET` (a freshly generated one, not the dev value),
+  `R2_*`, `STRIPE_SECRET_KEY`/`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` (still
+  Stripe *test*-mode keys at this stage — going live on Stripe is a separate,
+  already-flagged decision under Sprint 6's "developer review required
+  before going live," not bundled into this sprint), `STRIPE_WEBHOOK_SECRET`,
+  `CRON_SECRET`.
+- [ ] **Confirm Railway Postgres connection behavior under Prisma** —
+  connection pool limits/`sslmode` under Railway's managed Postgres,
+  especially across container restarts/redeploys. Not verified against a
+  real Railway Postgres instance yet, only local Postgres.
+
+**Still-open item this sprint directly closes the reason for** — Sprint 3's
+own checklist has carried `[ ] CORS/cookie behavior confirmed in a deployed
+(not just localhost) environment` since that sprint. This sprint is what
+finally puts a real deployed environment in front of that check; tick it
+there once this sprint's auth/cookie items are verified live on Railway, not
+here.
+
+**Checklist before calling this sprint done:**
+- [x] Every "Code fixes" item above merged and green (`npm test`, `tsc
+  --noEmit`, `eslint .`, `next build`) — closed 2026-07-22: `npm test`
+  293/293, `npx tsc --noEmit` clean, `npx eslint .` shows only pre-existing
+  warnings/errors unrelated to any touched file (confirmed via `git stash` —
+  identical count on `main` before this session's changes), `next build`
+  clean with `proxy.ts` and every route listed. `output: 'standalone'`
+  deliberately left undone, per its own item's "optional, not required"
+  note.
+- [ ] A real deploy exists at a Railway URL, logged into successfully (closes
+  the `AUTH_TRUST_HOST` item's actual risk, not just the code being present)
+- [ ] Sprint 3's stale CORS/cookie checklist item ticked from the real
+  deployed environment, not localhost
+- [ ] One real booking's Stripe charge + webhook round-trip verified against
+  the deployed URL (not `stripe listen` against localhost)
 
 ---
 

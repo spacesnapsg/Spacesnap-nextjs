@@ -1,7 +1,5 @@
 "use client";
 
-// TODO: still on mock data (lib/mockTutorials.ts) — waiting on this stack's port of
-// the old QuizQuestionController.
 import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import Button from "./Button";
