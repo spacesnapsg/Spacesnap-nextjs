@@ -1,78 +1,53 @@
 "use client";
 
 import { useState } from "react";
-import {
-  Gift,
-  ChevronDown,
-  Percent,
-  Users,
-  Scale,
-  PartyPopper,
-  Ticket,
-  Crown,
-  Package,
-  Ticket as VoucherIcon,
-} from "lucide-react";
+import { Gift, ChevronDown, Percent, Users, Scale, PartyPopper, Ticket, Crown, Package, Ticket as VoucherIcon } from "lucide-react";
 import Modal from "@/components/Modal";
+import { useRewardsCatalogue } from "@/lib/hooks/useRewardsCatalogue";
+import type { RewardCatalogueItem, RewardCategory, RewardDiscountAppliesTo } from "@/lib/hooks/useAdminRewards";
 
-// 2026-07-22, Sprint 6.6: rewards catalogue is placeholder-only — none of
-// these are backed by a real RewardGrant issuance flow yet (that model/
-// redemption logic exists, lib/reward-grants.ts, but nothing ever creates
-// one for a user to redeem here). Same for the "active vouchers" list below.
-// Wiring both to real data + an admin activate/deactivate toggle is Sprint
-// 6.7; per-reward value customization (% off, consumable value) is Sprint
-// 6.8. Do not treat the arrays below as real inventory.
-interface CatalogueReward {
-  id: string;
-  name: string;
-  description: string;
-  icon: typeof Percent;
+// 2026-07-22 (Sprint 6.9): the catalogue grid below is real and
+// admin-manageable — see components/AdminRewards.tsx (Sprint 6.7/6.8/6.9) and
+// GET /api/rewards. Only the "View redeemed rewards" list underneath is
+// still placeholder: no GET endpoint exists yet for a user's own RewardGrant
+// rows (only server-side redemption logic exists, lib/reward-grants.ts) —
+// that remains a separate, still-open item per the sprint plan.
+const CATEGORY_ICONS: Record<RewardCategory, typeof Percent> = {
+  discount: Percent,
+  pitch_ticket: Users,
+  consultancy: Scale,
+  events: PartyPopper,
+  lucky_draw: Ticket,
+  tier_upgrade: Crown,
+  consumable: Package,
+};
+
+const APPLIES_TO_LABELS: Record<RewardDiscountAppliesTo, string> = {
+  booking: "Booking",
+  equipment: "Equipment",
+  certification_fee: "Certification Fee",
+};
+
+function rewardDetailLine(item: RewardCatalogueItem): string | null {
+  switch (item.category) {
+    case "discount":
+      return `${item.discountPercent ?? 0}% off${
+        item.discountAppliesTo.length > 0 ? ` · ${item.discountAppliesTo.map((a) => APPLIES_TO_LABELS[a]).join(", ")}` : ""
+      }`;
+    case "pitch_ticket":
+      return item.partnerName ? `Partner: ${item.partnerName}` : null;
+    case "consultancy":
+      return [item.consultancySubject, item.partnerName ? `Partner: ${item.partnerName}` : null].filter(Boolean).join(" · ") || null;
+    case "events":
+      return [item.eventName, item.eventInfo].filter(Boolean).join(" · ") || null;
+    case "lucky_draw":
+      return item.prizeDescription ? `${item.prizeDescription} × ${item.prizeQuantity ?? 1}` : null;
+    case "tier_upgrade":
+      return item.upgradeDurationMonths ? `${item.upgradeDurationMonths} month upgrade` : null;
+    case "consumable":
+      return item.consumableName ? `${item.consumableName} × ${item.consumableQuantity ?? 1}` : null;
+  }
 }
-
-const CATALOGUE_REWARDS: CatalogueReward[] = [
-  {
-    id: "discount_voucher",
-    name: "Discount Voucher",
-    description: "Offsets a percentage of your booking fee for spaces and equipment.",
-    icon: Percent,
-  },
-  {
-    id: "vc_pitch_ticket",
-    name: "VC Pitch Ticket",
-    description: "A 1-hour session with a partner VC to pitch your startup.",
-    icon: Users,
-  },
-  {
-    id: "legal_consultancy",
-    name: "Legal Consultancy",
-    description: "A 1-hour session with a partner legal firm.",
-    icon: Scale,
-  },
-  {
-    id: "exclusive_event_invite",
-    name: "Exclusive Event Invite",
-    description: "Entry to an event organized by SpaceSnap or its affiliates.",
-    icon: PartyPopper,
-  },
-  {
-    id: "lucky_draw_ticket",
-    name: "Lucky Draw Ticket",
-    description: "A chance in a lucky draw for various prizes (TBC).",
-    icon: Ticket,
-  },
-  {
-    id: "premium_tier_upgrade",
-    name: "Premium Tier Upgrade",
-    description: "Upgrades you to the next membership tier for 3 months.",
-    icon: Crown,
-  },
-  {
-    id: "consumable_redemption",
-    name: "Consumable Redemption",
-    description: "A consumable redemption at the consumables kiosk.",
-    icon: Package,
-  },
-];
 
 interface ActiveVoucher {
   id: string;
@@ -93,6 +68,7 @@ interface RewardsCatalogueModalProps {
 
 export default function RewardsCatalogueModal({ open, onClose, earnedCredits }: RewardsCatalogueModalProps) {
   const [showActiveVouchers, setShowActiveVouchers] = useState(false);
+  const { data: rewards, isLoading, isError } = useRewardsCatalogue();
 
   return (
     <Modal open={open} onClose={onClose} className="w-full max-w-4xl">
@@ -144,27 +120,45 @@ export default function RewardsCatalogueModal({ open, onClose, earnedCredits }: 
           Redeem your earned credits for these rewards. More details coming soon.
         </p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {CATALOGUE_REWARDS.map((reward) => {
-            const Icon = reward.icon;
-            return (
-              <div
-                key={reward.id}
-                className="rounded-card border border-border/40 overflow-hidden flex flex-col hover:border-user-teal-end/50 transition-colors"
-              >
-                <div className="h-24 bg-gradient-to-br from-user-teal-start/20 to-supplier-purple-start/20 flex items-center justify-center">
-                  <span className="h-12 w-12 rounded-full bg-gradient-to-br from-user-teal-start to-supplier-purple-start flex items-center justify-center">
-                    <Icon size={22} className="text-white" />
-                  </span>
+        {isLoading ? (
+          <p className="text-sm text-muted-text text-center py-8">Loading…</p>
+        ) : isError ? (
+          <p className="text-sm text-error-red text-center py-8">Failed to load the rewards catalogue.</p>
+        ) : !rewards || rewards.length === 0 ? (
+          <p className="text-sm text-muted-text text-center py-8">No rewards available right now.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {rewards.map((reward) => {
+              const Icon = CATEGORY_ICONS[reward.category];
+              const detail = rewardDetailLine(reward);
+              return (
+                <div
+                  key={reward.id}
+                  className={`relative rounded-card border overflow-hidden flex flex-col transition-colors ${
+                    reward.fullyRedeemed ? "border-border/40 opacity-60" : "border-border/40 hover:border-user-teal-end/50"
+                  }`}
+                >
+                  {reward.fullyRedeemed && (
+                    <span className="absolute top-2 right-2 z-10 text-[10px] font-medium uppercase tracking-wide text-amber bg-amber/15 border border-amber/30 rounded-full px-2 py-0.5">
+                      Fully Redeemed
+                    </span>
+                  )}
+                  <div className="h-24 bg-gradient-to-br from-user-teal-start/20 to-supplier-purple-start/20 flex items-center justify-center">
+                    <span className="h-12 w-12 rounded-full bg-gradient-to-br from-user-teal-start to-supplier-purple-start flex items-center justify-center">
+                      <Icon size={22} className="text-white" />
+                    </span>
+                  </div>
+                  <div className="p-4 flex flex-col gap-1">
+                    <p className="text-sm font-semibold text-body-text">{reward.name}</p>
+                    <p className="text-xs text-muted-text leading-snug">{reward.description}</p>
+                    {detail && <p className="text-xs text-user-teal-end font-medium mt-1">{detail}</p>}
+                    <p className="text-xs font-medium text-body-text mt-2">{reward.creditCost} credits</p>
+                  </div>
                 </div>
-                <div className="p-4 flex flex-col gap-1">
-                  <p className="text-sm font-semibold text-body-text">{reward.name}</p>
-                  <p className="text-xs text-muted-text leading-snug">{reward.description}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </Modal>
   );

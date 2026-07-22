@@ -10,6 +10,8 @@ import {
   CertificateStatus,
   ListingType,
   TransactionType,
+  RewardCatalogueCategory,
+  RewardDiscountAppliesTo,
 } from "../app/generated/prisma/client";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -19,6 +21,7 @@ const password = (plain: string) => bcrypt.hashSync(plain, 10);
 
 async function reset() {
   // Children first, in FK order, so this is safe to re-run.
+  await prisma.rewardCatalogueItem.deleteMany();
   await prisma.quizAnswer.deleteMany();
   await prisma.quizQuestion.deleteMany();
   await prisma.videoCompletion.deleteMany();
@@ -711,6 +714,86 @@ async function main() {
     },
   });
 
+  // --- Rewards catalogue (Sprint 6.6 UI, Sprint 6.7/6.8/6.9 admin CRUD) ----
+  // Starter rows only — admin can add/edit/delete freely via /admin-rewards,
+  // this is not a fixed list. Placeholder values so there's something to
+  // edit rather than blanks.
+  await prisma.rewardCatalogueItem.create({
+    data: {
+      category: RewardCatalogueCategory.discount,
+      name: "Discount Voucher",
+      description: "Offsets a percentage of your booking fee for spaces and equipment.",
+      discountPercent: "10.00",
+      discountAppliesTo: [RewardDiscountAppliesTo.booking],
+      creditCost: "50.00",
+      quantityAvailable: null,
+    },
+  });
+  await prisma.rewardCatalogueItem.create({
+    data: {
+      category: RewardCatalogueCategory.pitch_ticket,
+      name: "VC Pitch Ticket",
+      description: "A 1-hour session with a partner VC to pitch your startup.",
+      partnerName: "TBD",
+      creditCost: "500.00",
+      quantityAvailable: 5,
+    },
+  });
+  await prisma.rewardCatalogueItem.create({
+    data: {
+      category: RewardCatalogueCategory.consultancy,
+      name: "Legal Consultancy",
+      description: "A 1-hour session with a partner legal firm.",
+      consultancySubject: "Legal",
+      partnerName: "TBD",
+      creditCost: "400.00",
+      quantityAvailable: 10,
+    },
+  });
+  await prisma.rewardCatalogueItem.create({
+    data: {
+      category: RewardCatalogueCategory.events,
+      name: "Exclusive Event Invite",
+      description: "Entry to an event organized by SpaceSnap or its affiliates.",
+      eventName: "TBD",
+      eventInfo: "TBD",
+      creditCost: "200.00",
+      quantityAvailable: 20,
+    },
+  });
+  await prisma.rewardCatalogueItem.create({
+    data: {
+      category: RewardCatalogueCategory.lucky_draw,
+      name: "Lucky Draw Ticket",
+      description: "A chance in a lucky draw for various prizes (TBC).",
+      prizeDescription: "TBD",
+      prizeQuantity: 1,
+      creditCost: "100.00",
+      quantityAvailable: 50,
+    },
+  });
+  await prisma.rewardCatalogueItem.create({
+    data: {
+      category: RewardCatalogueCategory.tier_upgrade,
+      name: "Premium Tier Upgrade",
+      description: "Upgrades you to the next membership tier for a limited time.",
+      upgradeDurationMonths: 3,
+      creditCost: "1000.00",
+      quantityAvailable: null,
+    },
+  });
+  await prisma.rewardCatalogueItem.create({
+    data: {
+      category: RewardCatalogueCategory.consumable,
+      name: "Consumable Redemption",
+      description: "A consumable redemption at the consumables kiosk.",
+      consumableName: "TBD",
+      consumableQuantity: 1,
+      creditCost: "50.00",
+      quantityAvailable: null,
+    },
+  });
+
   console.log("Seed complete:", {
     companies: 3,
     users: 8,
@@ -719,6 +802,7 @@ async function main() {
     trainingVideos: 3,
     trainingSessions: 3,
     bookings: 5,
+    rewardCatalogueItems: 7,
   });
 }
 

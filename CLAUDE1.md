@@ -4088,3 +4088,180 @@ Sprint 6.5 field). Gave it a `@default(dbgenerated(...))` — a random
 8-hex-char Postgres default — so every OTHER call site stays untouched;
 only `app/api/auth/register/route.ts` explicitly generates and sets one
 (needs its own collision-retry loop, the DB default doesn't).
+
+## Admin UI: Rewards nav + Rewards Catalogue CRUD (Sprint 6.7/6.8/6.9, 2026-07-22)
+
+Confirmed with the user before building: the admin nav's "Companies" link
+was redundant (`/admin-users` and `/admin-companies` both render the same
+`AdminUsersCompanies.tsx`, which already has its own internal Users/
+Companies tab switcher) — freed that nav slot for **Rewards**
+(`/admin-rewards`), renamed "Users" to **"Users & Coys"**.
+`AdminUsersCompanies.tsx`/`admin-companies/page.tsx` untouched.
+
+Built out Sprint 6.7 (activate/deactivate) + 6.8 (customize values) + 6.9
+(add/delete, added mid-session per the user's own request) as one pass. Key
+corrections made along the way, both confirmed with the user directly
+rather than assumed:
+
+- **6.8's original scope was too narrow.** It only asked for the Discount
+  Voucher's `%` and the Consumable Redemption's "value" to be editable. The
+  user's actual ask, walked through per-reward-type: Discount (`%` +
+  applies-to, multi-select Booking/Equipment/Certification Fee); VC Pitch
+  Ticket (partner, free text); Legal Consultancy (subject — free text, not a
+  dropdown, "Legal? Accounting? HR?" varies too much — + partner); Exclusive
+  Event Invite (event name + info); Lucky Draw Ticket (prize description +
+  quantity); Premium Tier Upgrade (duration in months, not fixed at 3);
+  Consumable Redemption (consumable name + quantity). The base card
+  `description` is also admin-editable for every type, confirmed with the
+  user. See `prisma/schema.prisma`'s `RewardCatalogueItem` model comment for
+  the full per-category field map.
+- **6.9 wasn't in the plan at all** — the user asked for it after seeing the
+  6.7/6.8 design, wanting a real add/delete flow rather than a fixed set of
+  7 items. This changed the schema approach mid-design: dropped the
+  originally-planned `RewardCatalogueItemKey` enum (which would have tied
+  identity to exactly 7 known keys) in favor of plain `id` + `category`,
+  with no cap on items per category.
+
+**What was built:**
+- `prisma/schema.prisma`: `RewardCatalogueItem` model +
+  `RewardCatalogueCategory`/`RewardDiscountAppliesTo` enums (migration
+  `20260722041412_reward_catalogue_items`). Distinct from `RewardGrant`
+  (an issued/redeemed grant, not a catalogue definition) — same distinction
+  Sprint 6.7's original plan text already called out correctly.
+  `prisma/seed.ts` seeds the original 7 items (idempotent, `reset()` clears
+  the table first) with placeholder starter values for fields the old
+  hardcoded UI never had (e.g. `discountAppliesTo: [booking]`,
+  `upgradeDurationMonths: 3`, free-text fields `"TBD"`).
+- `lib/reward-catalogue.ts`: `serializeRewardCatalogueItem`, `parseRewardCategory`,
+  and — the core of the validation design — `parseCategoryFields`, a
+  per-category allow-list (`CATEGORY_FIELDS`) that rejects any field not
+  valid for a given item's category with a clean 422, plus
+  `clearedFieldsForCategory` (nulls out now-irrelevant fields when a PATCH
+  changes an item's category, so a row never carries stale cross-category
+  data).
+- Routes, all `requireSystemAdmin`-gated except the public read: `GET`/
+  `POST /api/admin/rewards`, `PATCH`/`DELETE /api/admin/rewards/[id]`,
+  and `GET /api/rewards` (any authenticated user, active items only — what
+  `RewardsCatalogueModal` now calls instead of its old hardcoded
+  `CATALOGUE_REWARDS` array).
+- `lib/hooks/useAdminRewards.ts` + `lib/hooks/useRewardsCatalogue.ts`
+  (React Query, mirrors `useAdminTrainingVideos.ts`'s conventions).
+- `components/AdminRewards.tsx` (new `/admin-rewards` route) — grid of
+  cards, active toggle per item, Edit/Delete, and an Add/Edit modal whose
+  fields render conditionally per selected category. Delete uses a
+  confirm modal copied from `AdminCertificatesTraining.tsx`'s
+  `DeleteVideoModal` pattern.
+- `components/RewardsCatalogueModal.tsx`: hardcoded array removed, now
+  fetches via `useRewardsCatalogue()`; icon lookup keys off **category**
+  (7 fixed icons) rather than a fixed per-item id, so any newly-added
+  catalogue item still gets a sensible icon. The "View redeemed rewards"
+  placeholder list is untouched — still a separate, still-open item (no
+  `GET` endpoint exists yet for a user's own `RewardGrant` rows).
+
+**Bug caught during live verification (not just unit tests):**
+`RewardItemModal`'s form values were seeded via
+`useState(initialItem ? formValuesFromItem(initialItem) : EMPTY_FORM)`.
+Since this modal component is rendered once in `AdminRewards` and reused
+across every add/edit (never unmounted between clicks), that initializer
+only ever runs on the component's very first mount — clicking "Edit" on a
+second item after the first left the form showing the *first* item's stale
+values, not the newly-clicked item's. Caught by actually clicking through
+Edit on multiple different items in the browser, not by trusting the code
+read. Fixed with the exact `resetKey` pattern this codebase already
+established in `TrainingVideoModal.tsx` ("adjust state during render when a
+prop changes," keyed off `open` + the item's id) — a real, existing
+precedent in the repo for this exact React pitfall, not a new pattern
+invented here.
+
+**Also hit mid-session:** the dev server that had been running since before
+this session's `prisma migrate dev`/`prisma generate` had the *old* Prisma
+Client cached in its Node process — `GET /api/admin/rewards` 500'd with an
+empty body under the running instance despite `curl` confirming the schema
+and DB were correct. Killing and restarting the dev server (`npm run dev`)
+resolved it immediately. Worth remembering: a schema/migration change made
+mid-session invalidates an already-running dev server's in-memory Prisma
+Client — restart it, don't assume the code is wrong first.
+
+**Verified live end-to-end**, real cookie-jar logins against the dev
+server/DB (`alice.admin@spacesnap.sg` for admin actions,
+`ethan@example.com` for the user-facing modal): created a new
+`consumable`-category "Coffee Voucher" item and confirmed it rendered
+correctly in `RewardsCatalogueModal` (icon, description, "Coffee × 2")
+alongside the seeded 7, then deleted it; toggled Discount Voucher inactive
+and confirmed it disappeared from the modal, then reactivated it; edited
+Legal Consultancy's partner name, confirmed persistence, then reverted it
+to the seeded `"TBD"`; confirmed a 422 on `PATCH .../rewards/1` with
+`prizeQuantity` (a `lucky_draw`-only field) against the `discount`-category
+Discount Voucher item, via direct `curl`. Dev DB confirmed back to exactly
+its 7 seeded rows via direct `psql` query afterward. `npm test` 287/287
+(also re-ran `npm run test:db:setup` to apply the new migration to the
+isolated test DB, per this repo's own stated convention), `npx tsc
+--noEmit`/`eslint .` clean, `next build` clean with all four new routes
+listed.
+
+## Rewards Catalogue follow-up: Credit Cost + Quantity Cap + Fully Redeemed (2026-07-22, same day)
+
+Two fields the product owner caught missing right after the Sprint 6.7/6.8/6.9
+session above closed — both universal to every category, not per-category
+like the earlier fields:
+
+- `creditCost` (Decimal, per item) — how many earned credits a redemption
+  costs. Every card in both `AdminRewards.tsx` and `RewardsCatalogueModal.tsx`
+  now shows it.
+- `quantityAvailable` (Int, nullable — null = unlimited) + `redeemedCount`
+  (Int, server-only, never accepted from any admin request body) — a
+  computed `fullyRedeemed` flag (`isFullyRedeemed`, `lib/reward-catalogue.ts`)
+  drives a "Fully Redeemed" badge in both UIs once `redeemedCount >=
+  quantityAvailable`.
+
+**Explicitly flagged, not silently glossed over:** this is capacity
+*tracking*, not a working redemption feature. `redeemedCount` has no writer
+anywhere in this codebase yet — no redemption/issuance flow exists for this
+catalogue (same gap Sprint 6.6/6.7 already flagged: only `lib/reward-grants.ts`'s
+unrelated `RewardGrant` discount-redemption logic exists). Verified the
+"Fully Redeemed" badge actually renders correctly by directly setting
+`redeemed_count = 5` on the seeded `VC Pitch Ticket` row (which has
+`quantity_available = 5`) via `psql`, confirming the badge appeared in both
+`/admin-rewards` and `RewardsCatalogueModal` (as `ethan@example.com`), then
+reverting it back to `0`.
+
+Migration `20260722060956_reward_catalogue_credit_cost_quantity`. Seeded
+placeholder `creditCost`/`quantityAvailable` values per item (Discount
+Voucher 50/unlimited, VC Pitch Ticket 500/5, Legal Consultancy 400/10,
+Exclusive Event Invite 200/20, Lucky Draw Ticket 100/50, Premium Tier
+Upgrade 1000/unlimited, Consumable Redemption 50/unlimited).
+
+**Hit again, same root cause as earlier this session:** the already-running
+dev server (started before *this* migration + `prisma generate`) served
+`undefined` for the new fields — its in-memory Prisma Client predated the
+schema change. Restarting `npm run dev` fixed it immediately. Second time
+this exact gotcha has bitten this session; worth remembering going forward
+that a schema/migration change always needs a dev-server restart, not just
+`prisma generate`, since the running Node process already has the old
+client `require`d into memory.
+
+Verified live: `PATCH /api/admin/rewards/9` with a negative `creditCost` →
+clean 422; negative `quantityAvailable` → clean 422; valid partial
+`creditCost`-only update → 200, persisted, then reverted. `npm test` 287/287
+(re-ran `test:db:setup` for the new migration), `tsc`/`eslint` clean, `next
+build` clean.
+
+## Sprint 6.10 raised, not built: Supplier Tier Auto-Calculation
+
+Same session, the product owner also asked that `Company.supplierTier`
+(currently admin-manual-only, Sprint 6) become **automatically computed**
+from spend + rating, with the manual admin override removed, plus a
+supplier-facing UI card to surface it (none exists yet — no analog to the
+Sprint 6.5 "User Tier" dashboard card on the supplier side).
+
+**Deliberately not built this session** — logged as Sprint 6.10 in
+`SPRINT_PLAN_NEXTJS_REWRITE.md` instead, per the user's own "figure out
+supplier tier" framing (a planning ask, not an execution one) and this
+repo's standing convention of not guessing thresholds/definitions a product
+owner hasn't confirmed (see Sprint 6.5's reward-tier model, Sprint 6's
+cancellation-window percentages, etc. — all confirmed with the product
+owner before being built, never invented). Open questions logged there:
+what "spend" means (gross/net, what window), what "rating" means (which
+aggregate, minimum sample size), the actual tier thresholds, whether an
+existing aggregate (`SupplierPayable`, ratings) already has the right
+number to read live from, and where the supplier-facing card should live.

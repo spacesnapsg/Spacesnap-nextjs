@@ -459,28 +459,184 @@ percentage.
 
 ---
 
-## Sprint 6.7: Admin UI — Activate/Deactivate Rewards Catalogue Items
+## Sprint 6.7: Admin UI — Activate/Deactivate Rewards Catalogue Items — Closed 2026-07-22
 
-- [ ] Admin UI (Certificates & Training or a new Rewards tab — TBD when this
-  sprint starts) to activate/deactivate each of the 7 catalogue reward types
-  from Sprint 6.6.
-- [ ] Wire it for real: an inactive reward must not render in
-  `RewardsCatalogueModal` for any user. Requires a real schema home for
-  "reward catalogue item" (not on `RewardGrant` itself, which represents an
-  issued/redeemed grant, not a catalogue definition) — a new model/table,
-  scoped when this sprint starts.
-- [ ] Decide whether the "View redeemed rewards" active-vouchers list gets a
-  real `GET` endpoint in this same pass, since it's the natural place to add
-  one (both need a user-facing `RewardGrant` read path).
+- [x] New nav slot: `AdminNavbar.tsx`'s "Companies" link (redundant — both
+  `/admin-users` and `/admin-companies` already rendered the same
+  `AdminUsersCompanies` component with its own internal Users/Companies tab
+  switcher, confirmed with the user before changing) was replaced with a
+  **Rewards** link (`/admin-rewards`, `Gift` icon), and "Users" renamed to
+  **"Users & Coys"**. `AdminUsersCompanies.tsx` itself is untouched — the
+  Companies tab is still reachable from Users & Coys, just no longer a
+  top-level nav item.
+- [x] Real schema home for "reward catalogue item": new `RewardCatalogueItem`
+  model + `RewardCatalogueCategory`/`RewardDiscountAppliesTo` enums
+  (migration `20260722041412_reward_catalogue_items`), distinct from
+  `RewardGrant` (an issued/redeemed grant, not a catalogue definition) per
+  this item's own original note. Seeded with the original 7 items from
+  Sprint 6.6's hardcoded `CATALOGUE_REWARDS` array.
+- [x] Admin UI: `components/AdminRewards.tsx` (`/admin-rewards`) —
+  activate/deactivate toggle per item, plus (see Sprint 6.9 below) full
+  add/edit/delete.
+- [x] Wired for real: `GET /api/rewards` (active items only) replaces
+  `RewardsCatalogueModal.tsx`'s hardcoded array; verified live an
+  admin-deactivated item stops rendering for a real user
+  (`ethan@example.com`) without a page reload lag.
+- [ ] **Not done, explicitly deferred**: the "View redeemed rewards"
+  active-vouchers list in `RewardsCatalogueModal.tsx` is still placeholder
+  data (`PLACEHOLDER_ACTIVE_VOUCHERS`) — no `GET` endpoint exists yet for a
+  user's own `RewardGrant` rows. Out of scope for this session (only the
+  catalogue grid was asked for); still an open item.
 
 ---
 
-## Sprint 6.8: Admin UI — Customize Reward Values
+## Sprint 6.8: Admin UI — Customize Reward Values — Closed 2026-07-22, broader scope than originally written
 
-- [ ] Admin UI to set the Discount Voucher's `%` value.
-- [ ] Admin UI to set the Consumable Redemption's value.
-- [ ] Both values should be editable per-catalogue-item (not global constants),
-  building on whichever catalogue-item schema Sprint 6.7 introduces.
+**Scope correction, confirmed directly with the user before building:** this
+item's original wording ("set the Discount Voucher's `%`", "set the
+Consumable Redemption's value") undersold what was actually needed. Each of
+the 7 reward types has its own genuinely different customizable fields, not
+just two numeric values — see `RewardCatalogueItem`'s schema comment
+(Sprint 6.7 above) for the full field list per category (discount `%` +
+applies-to; pitch-ticket/consultancy partner + subject; event name/info;
+lucky-draw prize + quantity; tier-upgrade duration in months; consumable
+name + quantity). The base `description` shown on each card is also
+admin-editable, confirmed with the user. All of this ships in the same
+`AdminRewards.tsx`/`RewardItemModal` built for Sprint 6.7 — one edit modal
+whose fields render conditionally per the item's `category`.
+
+- [x] Admin UI to set the Discount Voucher's `%` (plus which categories it
+  applies to — Booking/Equipment/Certification Fee, multi-select).
+- [x] Admin UI to set the Consumable Redemption's name + quantity (not just
+  a bare "value").
+- [x] Every other reward type's own fields (see above) are editable too, per
+  the corrected scope.
+- [x] All values are per-catalogue-item, not global constants — confirmed
+  via `PATCH /api/admin/rewards/[id]`, which only accepts the fields valid
+  for that item's own category (`lib/reward-catalogue.ts`'s per-category
+  allow-list) — sending a field that doesn't belong to the category is a
+  clean 422, verified live (e.g. `prizeQuantity` on a `discount` item).
+
+---
+
+## Sprint 6.9: Admin UI — Add/Delete Rewards Catalogue Items — Closed 2026-07-22 (added mid-session per user request)
+
+Not in the original plan — added when the user asked for full add/delete
+capability on top of the Sprint 6.7/6.8 customization work, rather than a
+fixed set of 7 catalogue items. Changed the schema approach: no fixed
+`RewardCatalogueItemKey` enum tied to exactly 7 rows — identity is just the
+row's `id`, `category` determines which fields apply, and there is no limit
+on how many items can exist per category.
+
+- [x] `POST /api/admin/rewards` — create a new catalogue item (any category,
+  admin-chosen name/description + that category's fields).
+- [x] `DELETE /api/admin/rewards/[id]` — hard delete (no other table
+  references `RewardCatalogueItem`, confirmed against the schema, so no
+  cascade concerns).
+- [x] `AdminRewards.tsx`: "Add Reward" button opens the same modal used for
+  editing (category picker + conditional fields), plus a delete-confirm
+  modal mirroring `AdminCertificatesTraining.tsx`'s existing
+  `DeleteVideoModal` pattern.
+- [x] Icon lookup in `RewardsCatalogueModal.tsx` keys off **category** (7
+  fixed icons), not a fixed per-item id, so a newly-admin-added item
+  automatically gets a sensible icon.
+
+**Bug caught and fixed during live verification, not just unit-tested:**
+`RewardItemModal`'s form state was initialized from `useState(initialItem ?
+formValuesFromItem(initialItem) : EMPTY_FORM)` — since the modal component
+is mounted once and reused across every add/edit rather than remounted per
+item, that initializer only ever ran on the very first mount, so opening
+"Edit" on a second item showed the *first* item's (or a blank) form, not the
+clicked item's own data. Fixed with the same "adjust state during render
+when a prop changes" `resetKey` pattern this codebase already uses in
+`TrainingVideoModal.tsx` (keyed off `open` + the item's id). Verified live
+after the fix: editing "Legal Consultancy" after having just edited/added
+other items now correctly loads its own Subject/Partner values every time.
+
+**Verified live end-to-end** (real cookie-jar login as
+`alice.admin@spacesnap.sg`, dev server/DB): created a new `consumable`-
+category "Coffee Voucher" item, confirmed it rendered correctly (icon,
+description, "Coffee × 2") in `RewardsCatalogueModal` for `ethan@example.com`
+alongside the other 7, then deleted it — gone from both the admin list and
+the modal. Toggled Discount Voucher inactive → confirmed it disappeared
+from the modal → reactivated. Edited Legal Consultancy's partner name,
+confirmed it persisted, then reverted it back to the seeded `"TBD"` so the
+dev DB ends this session at exactly its original 7 seeded rows (confirmed
+via direct `psql` query). `npm test` 287/287, `npx tsc --noEmit`/`eslint .`
+clean, `next build` clean with `/admin-rewards`, `/api/rewards`,
+`/api/admin/rewards`, and `/api/admin/rewards/[id]` all listed.
+
+**Follow-up, same day, caught late by the product owner:** two fields were
+missing from the original 6.7/6.8/6.9 design — universal to every category,
+not per-category:
+- [x] `creditCost` (Decimal, per-item) — how many earned credits a
+  redemption of this item costs. Admin-editable in the same
+  `RewardItemModal`, shown on every card in both the admin list and
+  `RewardsCatalogueModal`.
+- [x] `quantityAvailable` (Int, nullable — null = unlimited) + `redeemedCount`
+  (Int, server-only, never accepted from the admin PATCH/POST body) — how
+  many total redemptions admin is willing to give out. When
+  `redeemedCount >= quantityAvailable`, the item is "Fully Redeemed" (a
+  computed `fullyRedeemed` flag, `lib/reward-catalogue.ts`'s
+  `isFullyRedeemed`) and shows a "Fully Redeemed" badge in both UIs.
+
+**Important, explicitly flagged rather than silently glossed over: this is
+display/capacity-tracking only.** `redeemedCount` can never actually
+increment yet — no redemption/issuance flow exists anywhere in this
+codebase for the catalogue (confirmed still true, same gap Sprint 6.6/6.7
+already flagged: only server-side `lib/reward-grants.ts` redemption logic
+exists, and that's for the unrelated `RewardGrant` discount-redemption
+mechanic, not this catalogue). Building an actual "user spends N earned
+credits, gets a `RewardGrant`/redemption row, `redeemedCount` increments" flow
+is a separate, still-open item for whenever this catalogue's real
+issuance/redemption path gets built.
+
+Migration `20260722060956_reward_catalogue_credit_cost_quantity`. Verified
+live: seeded placeholder `creditCost`s (Discount Voucher 50, VC Pitch Ticket
+500, etc.) and `quantityAvailable` caps render correctly in both UIs;
+`npm test` (re-ran `test:db:setup` for the new migration), `tsc`, `eslint`,
+`next build` all clean.
+
+---
+
+## Sprint 6.10: Supplier Tier — Automatic Calculation (planning only, not yet built)
+
+Raised by the product owner same session as the reward-catalogue follow-up
+above, but explicitly **not built this session** — flagged here as an open
+item per this file's own "figure out X" convention (see Sprint 6.7's
+original "TBD when this sprint starts" phrasing), not guessed at.
+
+- [ ] `Company.supplierTier` (free/preferred/top) is currently **manual-only**
+  — `PATCH /api/admin/companies/[id]/supplier-tier`, system-admin-set, "no
+  automatic gating logic" by the field's own schema comment (Sprint 6,
+  closed 2026-07-21). The product owner now wants this **automatically
+  computed** from the supplier's spend and rating, with the admin manual
+  override UI **removed** (not just supplemented).
+- [ ] Open questions to resolve before this can be built, none guessed at:
+  - What "spend" means here — gross booking volume through the company's
+    listings? Net of commission? Over what window (matches Sprint 6.5's
+    reward-tier rolling 3-month window, or all-time)?
+  - What "rating" means — average of which ratings (`lib/ratings.ts` exists
+    for booking ratings, scope/aggregation not confirmed)? Minimum sample
+    size before a rating counts?
+  - The actual free/preferred/top thresholds for both dimensions, and
+    whether both spend AND rating must clear a bar (Sprint 6.5's reward-tier
+    model requires both bookings-count AND spend) or either alone suffices.
+  - Whether an existing `SupplierPayable`/completed-booking aggregate
+    already contains the right "spend" figure to read live from (matching
+    this codebase's "never stored denormalized" convention throughout —
+    `getSupplierPendingPayableBalance`, `getCreditBalance`, etc.) or a new
+    aggregate is needed.
+- [ ] Remove the manual tier `<select>` in `AdminUsersCompanies.tsx`'s
+  Companies tab (Sprint 6's own admin UI) once the automatic calculation
+  replaces it — do not leave both a manual override and an automatic
+  calculation fighting each other.
+- [ ] Supplier-facing UI: no card currently shows a supplier's own tier
+  anywhere in `(supplier)/supplier/page.tsx` or elsewhere — placement not
+  yet decided. The user (rewards) side already has a precedent to mirror:
+  the Sprint 6.5 "User Tier" dashboard card + `TierBenefitsModal` infographic
+  on the user dashboard. Whether the supplier equivalent lives on the main
+  supplier dashboard, the Supplier Profile page, or both is undecided.
 
 ---
 

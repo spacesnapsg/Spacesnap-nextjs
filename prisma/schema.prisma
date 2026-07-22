@@ -496,6 +496,89 @@ model RewardGrant {
   @@map("reward_grants")
 }
 
+// The redemption *catalogue* shown in RewardsCatalogueModal (Sprint 6.6) —
+// distinct from RewardGrant above, which represents an issued/redeemed
+// grant, not a catalogue definition. Sprint 6.9: this is an open-ended list
+// (admin can add/delete items, not a fixed set of 7) — identity is just
+// `id`; `category` fixes which of the fields below are meaningful for a
+// given row (enforced in the admin API, not a DB constraint). Every field
+// below other than the shared id/category/name/description/active columns
+// is nullable and only ever set for its own category — see each field's own
+// comment.
+enum RewardCatalogueCategory {
+  discount
+  pitch_ticket
+  consultancy
+  events
+  lucky_draw
+  tier_upgrade
+  consumable
+
+  @@map("reward_catalogue_category")
+}
+
+enum RewardDiscountAppliesTo {
+  booking
+  equipment
+  certification_fee
+
+  @@map("reward_discount_applies_to")
+}
+
+model RewardCatalogueItem {
+  id          BigInt                  @id @default(autoincrement())
+  category    RewardCatalogueCategory
+  name        String
+  description String
+  active      Boolean                 @default(true)
+
+  // Universal to every category (2026-07-22 addition, caught late by the
+  // product owner after the initial per-category fields shipped) — how many
+  // earned credits a redemption of this item costs.
+  creditCost Decimal @default(0) @db.Decimal(10, 2) @map("credit_cost")
+  // Total redemptions admin is willing to give out, null = unlimited. Once
+  // redeemedCount reaches this, the item is "Fully Redeemed" (see
+  // isFullyRedeemed, lib/reward-catalogue.ts) and should stop being
+  // redeemable — display-only for now: no redemption flow exists anywhere
+  // in this codebase yet (see Sprint 6.6/6.7's own notes), so this can
+  // never actually increment yet. Building the capacity fields ahead of
+  // that flow, same as this catalogue's other schema-before-wiring gaps.
+  quantityAvailable Int? @map("quantity_available")
+  // Never client-settable (no admin PATCH field for this) — only a real
+  // future redemption endpoint should ever increment it.
+  redeemedCount Int @default(0) @map("redeemed_count")
+
+  // category: discount
+  discountPercent   Decimal?                  @db.Decimal(5, 2) @map("discount_percent")
+  discountAppliesTo RewardDiscountAppliesTo[] @default([]) @map("discount_applies_to")
+
+  // category: pitch_ticket + consultancy share this ("who the partner is")
+  partnerName String? @map("partner_name")
+  // category: consultancy only — free text, not a dropdown; subject varies
+  // too much to enumerate ("Legal? Accounting? HR?")
+  consultancySubject String? @map("consultancy_subject")
+
+  // category: events
+  eventName String? @map("event_name")
+  eventInfo String? @map("event_info")
+
+  // category: lucky_draw
+  prizeDescription String? @map("prize_description")
+  prizeQuantity    Int?    @map("prize_quantity")
+
+  // category: tier_upgrade
+  upgradeDurationMonths Int? @map("upgrade_duration_months")
+
+  // category: consumable
+  consumableName     String? @map("consumable_name")
+  consumableQuantity Int?    @map("consumable_quantity")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("reward_catalogue_items")
+}
+
 // ---------------------------------------------------------------------------
 // Auth.js (NextAuth v5) — required by @auth/prisma-adapter, session strategy
 // "database" per auth.ts. Model names must stay User/Account/Session/
