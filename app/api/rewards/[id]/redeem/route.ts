@@ -7,6 +7,11 @@ import { redeemRewardCatalogueItem, RewardRedemptionError, serializeRewardRedemp
 
 // Any authenticated user — spend earned credits on a catalogue item. See
 // lib/reward-redemptions.ts for the atomic capacity/balance guard.
+//
+// 2026-07-22 fulfillment session: pitch_ticket/consultancy items require an
+// optional-in-the-schema-but-actually-required `selectedPartnerOption` body
+// field (validated against the item's own partnerOptions inside
+// redeemRewardCatalogueItem, not here) — every other category ignores it.
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!session?.user) return unauthorizedResponse();
@@ -15,8 +20,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const itemId = parseBigIntParam(id);
   if (itemId === null) return notFoundResponse("Reward not found.");
 
+  const body = await request.json().catch(() => null);
+  const selectedPartnerOption =
+    body && typeof body === "object" && typeof (body as Record<string, unknown>).selectedPartnerOption === "string"
+      ? ((body as Record<string, unknown>).selectedPartnerOption as string)
+      : undefined;
+
   try {
-    const redemption = await redeemRewardCatalogueItem(session.user.id, itemId);
+    const redemption = await redeemRewardCatalogueItem(session.user.id, itemId, { selectedPartnerOption });
     return NextResponse.json({ redemption: serializeRewardRedemption(redemption) }, { status: 201 });
   } catch (error) {
     if (error instanceof RewardRedemptionError) {

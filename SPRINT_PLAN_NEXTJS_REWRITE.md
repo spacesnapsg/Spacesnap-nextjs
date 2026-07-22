@@ -150,7 +150,7 @@ This is the sprint that didn't exist as its own thing in the original build — 
 - [x] ~~Consumables (2026-07-21, schema landed, write path not built): `Purchase.earnedCreditsApplied` needs the same discount-resolution wiring as the booking item above — a `purchased_spend`/Stripe charge for `credits - earnedCreditsApplied`, and if `earnedCreditsApplied > 0`, an `earned_spend` Transaction against that purchase, both inside `createPurchaseWithDebit`'s existing `$transaction`. `purchasedBalance` still covers the full `credits` amount when no discount is applied — unchanged path.~~ — **closed 2026-07-21**, same session as booking creation above. Resolved as purchasedBalance-funded (`purchased_spend`), not a Stripe charge — see that session's write-up for why the compliance boundary doesn't require Stripe here, unlike bookings.
 - [ ] Gigs (2026-07-21, schema landed via `GigTask`/`GigAssignment`, no write path built — see the dated amendment above for the full schema/enum reasoning): posting a task charges the poster `purchasedSpend` (`purchased_spend` Transaction, or real-time SGD, poster's choice — same principal-in-the-middle pattern as every other SpaceSnap-as-seller flow); completing an assignment resolves `payoutAmount` and settles it via either `earned_grant` (worker chose earned credit) or the new `gig_payout_sgd` (worker chose direct SGD, actual Stripe transfer still unbuilt, tracked for audit trail only). Belongs in the same execution pass as the booking/consumables items above, not a separately rediscovered task. **Explicitly deferred again 2026-07-21** — gigs stay shelved per this session's own scoping instruction.
 
-**New known gap, 2026-07-21 — RewardGrant issuance (schema + redemption landed, no issuance flow):** both bookings and consumables purchases can now redeem a `RewardGrant` as a discount (`lib/reward-grants.ts`), but nothing in this codebase ever creates one — no admin/promo UI, no referral flow, no gig-completion payout wiring. Grants can currently only be seeded directly via Prisma (tests do exactly this). A future session needs to decide where the first real issuance flow lives before this discount mechanic is reachable by an actual user.
+**New known gap, 2026-07-21 — RewardGrant issuance (schema + redemption landed, no issuance flow):** ~~both bookings and consumables purchases can now redeem a `RewardGrant` as a discount (`lib/reward-grants.ts`), but nothing in this codebase ever creates one~~ — **closed 2026-07-22**: redeeming a `discount`-category Rewards Catalogue item now mints a real `RewardGrant(booking_discount_pct)` with a 90-day expiry (`lib/reward-redemptions.ts`), the first real issuance path for a `RewardGrant`. Listed for the user via `GET /api/rewards/grants` and applied at checkout through `BookingModal`'s "Have a voucher?" dropdown. See CLAUDE1.md "Rewards Catalogue — Per-Category Fulfillment (2026-07-22)" and the Sprint 6.10 fulfillment items. (Referral flow and gig-completion payout remain separate, still-unbuilt issuance paths — but the "no issuance flow exists at all" blocker is gone.)
 
 **New schema items (not fixes to the above — tables with no home in this plan until the parity audit):**
 - [x] `check_ins` table (user_id, listing_id, booking_id nullable, checked_in_at, checked_out_at nullable) — the old app never had a working controller for this (table/model/factory existed, no route). This sprint should decide whether check-in updates booking status, previously unresolved/unconfirmed in the old codebase. **Decided (confirmed with product owner):** yes — check-in flips `confirmed`→`active`, check-out flips `active`→`completed`; see CLAUDE1.md "Sprint 3.5, New Schema Item — `check_ins` Table + Controller."
@@ -708,100 +708,69 @@ fresh test companies naturally compute to free-tier with zero rating/spend).
 `npx tsc --noEmit`, `eslint .` (2 pre-existing errors elsewhere, confirmed
 via `git stash` unrelated to this change), and `next build` all clean.
 
-### Rewards Catalogue — per-category redemption/fulfillment design (raised 2026-07-22, planning only, not yet built)
+### Rewards Catalogue — per-category redemption/fulfillment — mostly built 2026-07-22
 
-`RewardRedemption` (built same day, see the closed item above) only records
-*that* a user spent earned credits on a catalogue item — it says nothing
-about what happens next, and that differs by category. Confirmed with the
-product owner per-category below; **none of this is built yet**, same
-"don't guess, confirm first" posture as the supplier-tier item above.
+The design threads below were confirmed with the product owner over two
+rounds of questions (four design + four detail), then built the same day —
+see CLAUDE1.md "Rewards Catalogue — Per-Category Fulfillment (2026-07-22)"
+for the full write-up. `events`/`lucky_draw` remain explicitly deferred.
+Migration `20260722080000_reward_catalogue_fulfillment`. **Verified:** `npm
+test` 304/304 (11 new cases), `tsc`/`eslint`/`next build` clean, and live
+cookie-jar HTTP verification of every path (discount→grant+90d expiry,
+partner required/valid/invalid, tier_upgrade boost + single-active guard,
+admin concierge resolve + 403 guards) — dev DB restored to seeded baseline
+afterward. See CLAUDE1.md's "Verification — all green" section.
 
-- [ ] **`discount` (Discount Voucher) — confirmed, straightforward.** Used at
-  checkout: a "Have a voucher?" UI with a dropdown of the user's available
-  vouchers, applied to the charge.
-  - Open (not yet confirmed, this session's own inference): the natural
-    mechanism, given what's already in this codebase, is that redeeming a
-    `discount`-category catalogue item mints a `RewardGrant`
-    (`booking_discount_pct`, value = the item's `discountPercent`) at
-    redemption time — `resolveRewardGrantDiscount`/`redeemRewardGrant`
-    (`lib/reward-grants.ts`) already exist and are already wired into both
-    `createBookingWithDebit` and `createPurchaseWithDebit` via an optional
-    `rewardGrantId`. This would also close the standing "New known gap,
-    2026-07-21 — RewardGrant issuance" item under Sprint 3.5 (no issuance
-    flow has ever existed for `RewardGrant`) — the catalogue redemption
-    would become its first real issuance path. Not confirmed with the
-    product owner yet.
-  - Open: no endpoint exists to list a user's own available (unredeemed)
-    `RewardGrant` rows — needed to populate the checkout dropdown.
-  - Open: `discountAppliesTo` includes `certification_fee`, but no
-    certification/credential ever charges a fee anywhere in this codebase
-    (confirmed by grep) — this option currently has nothing to discount
-    against.
-  - Open: does the voucher/grant expire?
-- [ ] **`pitch_ticket` (VC Pitch Ticket) and `consultancy` (Legal
-  Consultancy) — confirmed, same flow for both.** Redeeming opens a modal
-  (at the rewards screen) letting the user pick their preferred VC/
-  consultancy option, which notifies the admin; the request then appears in
-  the Admin Overview UI. Scheduling itself happens outside the web app; once
-  it's arranged, the admin comes back and closes the case, at which point
-  the voucher is considered used.
-  - Open: what backs "select which preferred VC" — `RewardCatalogueItem`
-    only has a single `partnerName` per row today, not a set of options to
-    choose from. Does the admin create one catalogue item per VC/partner (so
-    "selecting" just means picking which catalogue item to redeem), or does
-    a single item need a new list-of-options field?
-  - Open: how "notify the admin" is actually implemented — `Notification`
-    is strictly `userId`-scoped (no admin/broadcast concept exists anywhere
-    in this schema today). Options: a new admin-facing queue that doesn't
-    route through `Notification` at all (the Admin Overview list item *is*
-    the notification), or a genuinely new broadcast-to-all-`system_admin`
-    mechanism.
-  - Open: the exact state machine (e.g. `pending` → `used`) and whether a
-    `cancelled`/`declined` path is needed.
-  - Open: what information the admin actually needs to see to resolve it
-    (contact details, timing preference, anything captured in the modal
-    beyond the VC/partner selection).
+- [x] **`discount` (Discount Voucher) — built.** Redeeming mints a real
+  `RewardGrant(booking_discount_pct, value = item.discountPercent,
+  grantedVia: "rewards_catalogue")` with a **90-day expiry** (confirmed).
+  `BookingModal`'s new "Have a voucher?" `<select>` (wired to the new
+  `GET /api/rewards/grants`) applies it via the already-existing
+  `rewardGrantId` create-booking param. **Closes the standing "New known gap,
+  2026-07-21 — RewardGrant issuance" item under Sprint 3.5** — this is the
+  first real issuance path for a `RewardGrant`.
+  - Resolved: **grant expires after 90 days** (`DISCOUNT_VOUCHER_GRANT_EXPIRY_DAYS`,
+    lazily enforced on read/redeem — same idiom as CreditHold/BookingCredit).
+  - Resolved: `GET /api/rewards/grants` (`listAvailableRewardGrants`) now
+    lists a user's own available/unexpired grants — populates the dropdown.
+  - Resolved: **`certification_fee` removed** from `RewardDiscountAppliesTo`
+    (nothing charges a cert fee; verified no row used it before dropping the
+    enum value).
+- [x] **`pitch_ticket` / `consultancy` — built.** Redeeming opens a
+  `PartnerPickerModal`, the choice is validated against the item's own
+  `partnerOptions` and snapshotted onto the redemption, which starts
+  `pending`. Surfaced on the Admin Overview page as a new "Pending Concierge
+  Requests" row (`ConciergeReviewModal`), where the admin marks it `used` or
+  `cancelled`.
+  - Resolved: **one item, multiple partner options** — `partnerName` (single)
+    replaced by `partnerOptions String[]`; the admin adds a list, the user
+    picks one at redemption.
+  - Resolved: **admin-queue-only notification** — no `Notification`/broadcast
+    change; the `GET /api/admin/reward-redemptions` list item *is* the
+    notification.
+  - Resolved: **`pending → used | cancelled`** state machine.
 - [ ] **`events` (Exclusive Event Invite) — explicitly deferred, do not
-  build.** Product owner is still deciding the events side of the business;
-  not to be activated at launch.
+  build.** Product owner still deciding the events side of the business.
 - [ ] **`lucky_draw` (Lucky Draw Ticket) — explicitly deferred, do not
   build, same reason as `events`.** Confirmed shape for whenever it does get
-  built: redeeming enters the user into a draw that's drawn on a set date
-  (a real "winner" concept), prize itself still TBD.
-- [ ] **`tier_upgrade` (Premium Tier Upgrade) — confirmed, but interacts
-  with existing Sprint 6.5 logic, needs its own confirmation before
-  building.** Redeeming bumps the user's reward tier for
-  `upgradeDurationMonths` (field already on the schema); once it expires,
-  the tier resets to its "last before-bump state."
-  - Open (this session's own inference, not yet confirmed): Sprint 6.5's
-    reward tier is never stored — it's always computed live off a rolling
-    3-month window (`computeUserRewardTier`, `lib/reward-tiers.ts`). Given
-    that "never denormalized" convention holds everywhere else in this
-    codebase, "resets to the before-bump state" most likely just means the
-    override stops applying once its expiry passes and the live computation
-    takes over again — not a frozen snapshot that gets restored. Needs
-    explicit confirmation before building, since the literal wording could
-    also be read as "freeze and later restore a stored snapshot."
-  - Open: does the bump run in parallel with the normal rolling-window
-    computation (so real activity during the bump still counts toward
-    whatever tier the user lands on afterward), or does it pause/exclude
-    that computation while active?
-  - Open: can a user redeem a second tier-upgrade while one is already
-    active — does it stack, extend the existing window, or get rejected?
-- [ ] **`consumable` (Consumable Redemption) — confirmed, already matches
-  what's built.** Manual, no inventory tie-in — the existing terminal
-  "redeemed" state from the 2026-07-22 redemption-flow session needs no
-  further backend work, only whatever the status/icon treatment below ends
-  up being.
-- [ ] **Cross-cutting: user-facing redemption status.** Confirmed: shown as
-  an icon under "View redeemed rewards" (`RewardsCatalogueModal.tsx`).
-  Requires a new status field on `RewardRedemption` (today every redemption
-  is implicitly terminal the instant it's created) — the actual state set
-  depends on the `pitch_ticket`/`consultancy` workflow above being designed
-  first (at minimum something like `pending` → `used`), and a decision on
-  which categories even need a non-trivial status versus staying
-  immediately-terminal (`discount`/`consumable` redemption is arguably done
-  the moment it's redeemed; `pitch_ticket`/`consultancy` clearly aren't).
+  built: redeeming enters the user into a draw drawn on a set date, prize TBD.
+- [x] **`tier_upgrade` (Premium Tier Upgrade) — built.** Redeeming resolves +
+  stores `expiresAt = now + upgradeDurationMonths`; `getUserRewardTier` bumps
+  the *effective* tier one level while active.
+  - Resolved: **compute-underneath, override display only** — the live
+    rolling-window computation keeps running (never paused/snapshotted); on
+    expiry there's no reset step, the live tier just takes back over. New
+    `baseTier`/`tierUpgradeActive`/`tierUpgradeExpiresAt` on `GET /api/me`,
+    surfaced on the dashboard's User Tier card.
+  - Resolved: **a second upgrade while one is active is rejected** (no
+    stacking/extension).
+- [x] **`consumable` (Consumable Redemption) — unchanged, already correct.**
+  Immediately-terminal `used` row, no fulfillment step.
+- [x] **Cross-cutting: user-facing redemption status — built.** New
+  `RewardRedemptionStatus` (`pending`/`used`/`cancelled`) on
+  `RewardRedemption`; shown as a status badge under "View redeemed rewards"
+  (`RewardsCatalogueModal.tsx`). `discount`/`consumable`/`tier_upgrade` are
+  created directly `used`; only `pitch_ticket`/`consultancy` start `pending`.
 
 ### Supplier Financials Page — UI built 2026-07-22, backend deliberately not wired
 
@@ -827,22 +796,45 @@ what a future session needs to decide/build before any of this is real.
   question (main supplier dashboard was the original proposal; the product
   owner instead specified the new Financials page for this session, so
   placed there instead).
-- [ ] **Purchased/Earned Credits cards — placeholder numbers, no backend
-  concept exists.** There is no company-level credit wallet anywhere in the
-  schema, distinct from a `User`'s `purchasedBalance`/`earnedBalance`
-  (`lib/credits.ts`). Before this can be real, needs a decision: is this the
-  same purchased/earned mechanic re-scoped to a `Company` (its own ledger,
-  its own `Transaction`-equivalent rows), or something else entirely? And if
-  it's a real company balance — how does a company actually earn or purchase
-  credits (revenue-based rebate on completed bookings, same shape as Sprint
-  6.5's user reward-tier rebate? Manual admin grant? Both)?
-- [ ] **"Platform Revenue" by listing type — placeholder chart, no backend
-  query exists.** `GET /api/supplier/revenue` (`lib/revenue.ts`) only returns
-  a single monthly total today, no split by listing type (space/equipment/
-  consumable). A real version needs a new query grouping the same
-  Transaction/Booking rows by the listing's category. The date-range toggle
-  (3/6/12 months) is real UI, just filtering placeholder data client-side —
-  swapping in a real endpoint would need it to accept a range param instead.
+- [x] **Purchased/Earned Credits cards — built + verified 2026-07-22.**
+  Confirmed with the product owner: a real company-level credit ledger (its
+  own `CompanyTransaction` model/table, migration
+  `20260722090000_company_transactions` — deliberately separate from
+  `Transaction`, not a `companyId` column bolted onto it, since
+  `Transaction.userId` is required and an automatic rebate isn't any one
+  member's action), real balance now, no spend flow yet. **Earned**: an
+  automatic rebate on completed bookings (`grantCompanyBookingRebate`,
+  `lib/company-credits.ts`, wired into `checkOutCheckIn` alongside
+  `createCompletedBookingPayable`/`grantRewardTierRebate`), sized off the
+  company's own live-computed supplier tier — free 1% / preferred 1.5% /
+  top 2%, **this session's own inference on the exact percentages, not
+  confirmed with the product owner** (flagged in `lib/company-credits.ts`'s
+  own comment, same posture as the Sprint 6 cancellation-window percentages
+  before their confirmation). **Purchased**: a real top-up flow, any company
+  member can trigger it (`POST /api/supplier/company/topup`, no
+  isCompanyAdmin-only gate), credits-only for now (no real Stripe charge, same
+  posture as the per-user wallet top-up). `GET /api/supplier/company` now
+  returns real `purchasedCredits`/`earnedCredits`; the Financials page's two
+  cards read real data and the Purchased card gained a "Top Up" button
+  (`CompanyTopUpModal.tsx`). Verified live (`ben@acmecoworking.sg`): balance
+  0→1000→1500 across two top-ups (additive), negative amount → 422,
+  non-supplier → 403; `npm test` 311/311 (7 new cases in
+  `lib/company-credits.test.ts`, including a fresh free-tier company's
+  completed booking earning exactly 1%), `tsc`/`eslint`/`next build` clean.
+- [x] **"Platform Revenue" by listing type — built + verified 2026-07-22.**
+  New `getCompanyRevenueByTypeAndMonth` (`lib/revenue.ts`) groups the caller's
+  own company's revenue transactions by listing type (space/equipment/
+  consumable) per calendar month, reusing the same `REVENUE_TRANSACTION_TYPES`/
+  negate-to-net-out-refunds semantics as every other aggregate in that module.
+  New `GET /api/supplier/revenue/by-type` accepts a `?months=` range param
+  (clamped to 3/6/12); the page's date-range toggle now refetches per range
+  (`useSupplierRevenueByType`) instead of slicing placeholder data
+  client-side, and the chart's placeholder `buildPlaceholderRevenueByType` is
+  gone. Live-verified (cookie-jar login as `ben@acmecoworking.sg`): `months=6`
+  returned 6 rows with the current month showing `space=4200` credits (Acme's
+  real completed-booking revenue), `months=3`→3 rows, `months=99`→clamped to
+  12, non-supplier → 403. `tsc`/`eslint`/`next build`/`npm test` (304/304) all
+  clean.
 - [ ] **Accounts Receivable, Receipts & Invoices — relocated, not newly
   built.** Moved as-is from the Supplier Profile page (same placeholder
   copy) per the product owner's request. Still the same standing gap flagged
@@ -896,6 +888,88 @@ what a future session needs to decide/build before any of this is real.
     ends up as a genuinely separate model. Which of those two paths is
     right depends on the schema decision above, so this is flagged rather
     than designed in detail yet.
+
+### User-Side Buyer Organization — Shared Purchased Credits (raised 2026-07-22, planning only, not yet built)
+
+Surfaced while discussing the Sprint 6.5 user reward tier: `User.companyId`
+already exists in the schema and isn't gated to `isSupplier` — so nothing
+technically stops a plain end-user (not a supplier) from belonging to a
+"company" too. Today this is dormant, not an active bug: confirmed by
+inspection that no live signup/invite flow ever assigns `companyId` to a
+non-supplier user (`app/api/auth/register/route.ts` explicitly has no role/
+company field; every non-supplier row with a `companyId` in this codebase
+comes only from `prisma/seed.ts`). But it raises a real product question the
+product owner then resolved over several turns, confirmed below — a
+distinct concept from the Sprint 6.10 supplier-tier thread above and from
+`Company` (which stays supplier/seller-only).
+
+- [x] **Reward tier stays strictly individual, confirmed — no pooling.**
+  Considered and rejected: pooling company members' bookings/spend into one
+  shared tier, with thresholds scaled per member to compensate for the
+  inflation pooling would cause. Rejected because scaled thresholds
+  mathematically approximate per-capita spend anyway (i.e., close to what
+  already exists per-user) while adding real costs the current model
+  doesn't have — a threshold that moves every time someone joins/leaves the
+  company, which then has to be surfaced in the UI so it doesn't look
+  arbitrary. `getUserRewardTierWindowStats` (`lib/reward-tiers.ts`) already
+  filters strictly by `userId` with no company join anywhere — this is a
+  decision to keep it that way, not a code change.
+- [x] **New concept, confirmed distinct from the supplier `Company` model:**
+  a buyer-side organization (name TBD, e.g. `BuyerOrganization`) — a
+  corporate customer account for a group of employees who share a
+  purchased-credit pool, as opposed to `Company` which is a *supplier*
+  (lists spaces/equipment/consumables, has certificates/training/payables).
+  Reusing `Company` for both was explicitly considered and rejected — it
+  would mix two unrelated concerns (seller vs. buyer) into one entity.
+- [x] **Only the purchased-credit pool is shared — confirmed, everything
+  else stays individual/per-user:**
+  - `earnedBalance`, the reward tier, and referrals are entirely unaffected
+    — untouched by this feature.
+  - **Rebates always go to whichever individual made the spend, never to
+    the shared org pool** — even though the *charge* may draw from shared
+    company funds, the earned-credit reward for that booking still lands in
+    the booking's own user's personal `earnedBalance`, exactly like today.
+    This is the direct, confirmed conclusion of "tiers are individual": the
+    reward for reaching a tier has to follow the same individual the tier
+    itself is computed for.
+  - **No separate "purchaser" role** — confirmed, any member of the buyer
+    organization can top up the shared pool (unlike `Company`'s
+    `isCompanyAdmin`, there's no admin-only gate here). Not yet
+    flagged/decided: whether this creates a griefing/abuse surface (any
+    member spending down shared funds another member paid for) — noted here
+    so a future session doesn't silently assume it's fine, but not blocking
+    the rest of this design.
+- [x] **Audit trail — confirmed, same toggle idiom as the supplier-side
+  Personal/Others thread, but structurally simpler.** The supplier version
+  needs a new `ActivityLog.actorUserId` (distinct from the existing
+  `userId`) because a supplier can act on a customer's booking — actor and
+  subject differ. That problem doesn't exist here: a purchased-credit
+  top-up or spend is always self-attributed (the person topping up or
+  booking is always the same person the ledger row is about), so **no
+  `ActivityLog` schema change is needed for this feature** — only a
+  relation-scoped query, same join pattern already used for the supplier
+  tier's rating/spend aggregation (`listing.companyId` there → the new
+  `User.buyerOrganizationId` here). "Personal" = my own topup/spend rows;
+  "Others" = my org-mates' rows (`user.buyerOrganizationId = mine AND userId
+  != mine`).
+- [ ] Not yet designed, still open:
+  - The new model's exact name/fields, and `User.buyerOrganizationId`
+    (nullable, separate from the existing supplier-side `companyId` — a
+    user shouldn't need any supplier association just to belong to a buyer
+    org).
+  - `Transaction` needs a new nullable FK (e.g. `buyerOrganizationId`)
+    alongside the existing `userId`, so a shared-pool-funded row records
+    both "who did this" and "whose pool it drew from" — same "trace the
+    ledger row back to what authorized it" idiom as `bookingId`/
+    `rewardGrantId`/`rewardRedemptionId` already on `Transaction`.
+  - How a user joins a buyer organization in the first place (invite code?
+    admin-added? — no flow exists today, same gap noted for the dormant
+    `companyId` case above).
+  - Where the Personal/Others toggle + activity feed lives in the UI —
+    presumably the user Financials/Wallet page, mirroring where the
+    supplier version was scoped, not yet placed.
+  - Whether a user can belong to at most one buyer organization or
+    (unlikely, but not ruled out) more than one.
 
 ---
 

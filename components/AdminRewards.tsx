@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, X } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
@@ -30,12 +30,11 @@ const CATEGORY_LABELS: Record<RewardCategory, string> = {
   consumable: "Consumable",
 };
 
-const APPLIES_TO_OPTIONS: RewardDiscountAppliesTo[] = ["booking", "equipment", "certification_fee"];
+const APPLIES_TO_OPTIONS: RewardDiscountAppliesTo[] = ["booking", "equipment"];
 
 const APPLIES_TO_LABELS: Record<RewardDiscountAppliesTo, string> = {
   booking: "Booking",
   equipment: "Equipment",
-  certification_fee: "Certification Fee",
 };
 
 // One line per card summarizing the category-specific fields — kept
@@ -50,11 +49,11 @@ function CategorySummary({ item }: { item: RewardCatalogueItem }) {
         </p>
       );
     case "pitch_ticket":
-      return <p className="text-xs text-muted-text">Partner: {item.partnerName || "—"}</p>;
+      return <p className="text-xs text-muted-text">Partners: {item.partnerOptions.length > 0 ? item.partnerOptions.join(", ") : "—"}</p>;
     case "consultancy":
       return (
         <p className="text-xs text-muted-text">
-          Subject: {item.consultancySubject || "—"} · Partner: {item.partnerName || "—"}
+          Subject: {item.consultancySubject || "—"} · Partners: {item.partnerOptions.length > 0 ? item.partnerOptions.join(", ") : "—"}
         </p>
       );
     case "events":
@@ -152,7 +151,7 @@ interface RewardFormValues {
   quantityAvailable: string;
   discountPercent: string;
   discountAppliesTo: RewardDiscountAppliesTo[];
-  partnerName: string;
+  partnerOptions: string[];
   consultancySubject: string;
   eventName: string;
   eventInfo: string;
@@ -171,7 +170,7 @@ const EMPTY_FORM: RewardFormValues = {
   quantityAvailable: "",
   discountPercent: "10",
   discountAppliesTo: ["booking"],
-  partnerName: "",
+  partnerOptions: [],
   consultancySubject: "",
   eventName: "",
   eventInfo: "",
@@ -191,7 +190,7 @@ function formValuesFromItem(item: RewardCatalogueItem): RewardFormValues {
     quantityAvailable: item.quantityAvailable?.toString() ?? "",
     discountPercent: item.discountPercent?.toString() ?? "10",
     discountAppliesTo: item.discountAppliesTo.length > 0 ? item.discountAppliesTo : ["booking"],
-    partnerName: item.partnerName ?? "",
+    partnerOptions: item.partnerOptions,
     consultancySubject: item.consultancySubject ?? "",
     eventName: item.eventName ?? "",
     eventInfo: item.eventInfo ?? "",
@@ -217,9 +216,9 @@ function buildInput(values: RewardFormValues, active: boolean): RewardCatalogueI
     case "discount":
       return { ...base, discountPercent: Number(values.discountPercent), discountAppliesTo: values.discountAppliesTo };
     case "pitch_ticket":
-      return { ...base, partnerName: values.partnerName.trim() };
+      return { ...base, partnerOptions: values.partnerOptions };
     case "consultancy":
-      return { ...base, consultancySubject: values.consultancySubject.trim(), partnerName: values.partnerName.trim() };
+      return { ...base, consultancySubject: values.consultancySubject.trim(), partnerOptions: values.partnerOptions };
     case "events":
       return { ...base, eventName: values.eventName.trim(), eventInfo: values.eventInfo.trim() };
     case "lucky_draw":
@@ -229,6 +228,68 @@ function buildInput(values: RewardFormValues, active: boolean): RewardCatalogueI
     case "consumable":
       return { ...base, consumableName: values.consumableName.trim(), consumableQuantity: Number(values.consumableQuantity) };
   }
+}
+
+// pitch_ticket/consultancy items now offer a LIST of partners (2026-07-22
+// fulfillment session, confirmed with the product owner) — the user picks
+// one at redemption time (RewardsCatalogueModal) instead of every item being
+// pinned to a single partner.
+function PartnerOptionsEditor({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+
+  function addOption() {
+    const trimmed = draft.trim();
+    if (trimmed.length === 0 || value.includes(trimmed)) {
+      setDraft("");
+      return;
+    }
+    onChange([...value, trimmed]);
+    setDraft("");
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="block text-xs text-muted-text">Partner options</label>
+      <div className="flex gap-2">
+        <Input
+          placeholder="Add a partner (e.g. firm/person name)"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addOption();
+            }
+          }}
+        />
+        <Button type="button" variant="ghost" onClick={addOption} className="h-11 px-4 text-sm shrink-0">
+          Add
+        </Button>
+      </div>
+      {value.length === 0 ? (
+        <p className="text-xs text-muted-text">No partners added yet.</p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {value.map((option) => (
+            <span
+              key={option}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border/40 bg-background px-3 py-1 text-xs text-body-text"
+            >
+              {option}
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((o) => o !== option))}
+                aria-label={`Remove ${option}`}
+                className="text-muted-text hover:text-error-red transition-colors"
+              >
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const textareaClassName =
@@ -366,11 +427,9 @@ function RewardItemModal({ open, onClose, initialItem }: { open: boolean; onClos
         )}
 
         {values.category === "pitch_ticket" && (
-          <Input
-            placeholder="Partner (e.g. VC firm name)"
-            value={values.partnerName}
-            onChange={(e) => setValues((v) => ({ ...v, partnerName: e.target.value }))}
-            required
+          <PartnerOptionsEditor
+            value={values.partnerOptions}
+            onChange={(partnerOptions) => setValues((v) => ({ ...v, partnerOptions }))}
           />
         )}
 
@@ -382,11 +441,9 @@ function RewardItemModal({ open, onClose, initialItem }: { open: boolean; onClos
               onChange={(e) => setValues((v) => ({ ...v, consultancySubject: e.target.value }))}
               required
             />
-            <Input
-              placeholder="Partner (firm/person)"
-              value={values.partnerName}
-              onChange={(e) => setValues((v) => ({ ...v, partnerName: e.target.value }))}
-              required
+            <PartnerOptionsEditor
+              value={values.partnerOptions}
+              onChange={(partnerOptions) => setValues((v) => ({ ...v, partnerOptions }))}
             />
           </>
         )}

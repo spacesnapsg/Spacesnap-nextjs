@@ -168,3 +168,85 @@ export async function getCompanyRevenueByMonth(companyId: bigint, months = 6): P
   }
   return result;
 }
+
+export interface CompanyRevenueByTypeMonth {
+  month: string; // "YYYY-MM"
+  // Numeric "credits" values (this app's cosmetic display unit) — the chart
+  // (recharts) needs numbers, not the formatted strings the text-display
+  // helpers above return. Revenue, not earned credits, so the
+  // earned-balance display constraint doesn't apply here.
+  space: number;
+  equipment: number;
+  consumable: number;
+}
+
+// Supplier Financials "Platform Revenue" chart — the caller's own company,
+// split by the LISTING TYPE each revenue transaction is attributable to, per
+// calendar month over the last `months` (including the current one). Same
+// REVENUE_TRANSACTION_TYPES / negate-to-net-out-refunds semantics as every
+// other aggregate in this module — a declined-then-refunded booking nets to
+// 0 in its bucket, not a negative. Replaces buildPlaceholderRevenueByType in
+// app/(supplier)/supplier-financials/page.tsx (Sprint 6.10).
+export async function getCompanyRevenueByTypeAndMonth(
+  companyId: bigint,
+  months = 12
+): Promise<CompanyRevenueByTypeMonth[]> {
+  const since = new Date();
+  since.setDate(1);
+  since.setHours(0, 0, 0, 0);
+  since.setMonth(since.getMonth() - (months - 1));
+
+  const listingTypeSelect = { listing: { select: { companyId: true, type: true } } };
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      type: { in: REVENUE_TRANSACTION_TYPES },
+      createdAt: { gte: since },
+      OR: [
+        { booking: { listing: { companyId } } },
+        { bulkOrderRequest: { listing: { companyId } } },
+        { purchase: { listing: { companyId } } },
+      ],
+    },
+    select: {
+      amount: true,
+      createdAt: true,
+      booking: { select: listingTypeSelect },
+      bulkOrderRequest: { select: listingTypeSelect },
+      purchase: { select: listingTypeSelect },
+    },
+  });
+
+  // month -> { space, equipment, consumables } running Decimal sums.
+  const buckets = new Map<string, { space: Prisma.Decimal; equipment: Prisma.Decimal; consumables: Prisma.Decimal }>();
+  function bucketFor(key: string) {
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { space: new Prisma.Decimal(0), equipment: new Prisma.Decimal(0), consumables: new Prisma.Decimal(0) };
+      buckets.set(key, bucket);
+    }
+    return bucket;
+  }
+
+  for (const t of transactions) {
+    const listing = t.booking?.listing ?? t.bulkOrderRequest?.listing ?? t.purchase?.listing ?? null;
+    if (!listing) continue;
+    const key = `${t.createdAt.getFullYear()}-${String(t.createdAt.getMonth() + 1).padStart(2, "0")}`;
+    const bucket = bucketFor(key);
+    bucket[listing.type] = bucket[listing.type].plus(t.amount);
+  }
+
+  const result: CompanyRevenueByTypeMonth[] = [];
+  const cursor = new Date(since);
+  for (let i = 0; i < months; i++) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    const bucket = buckets.get(key);
+    result.push({
+      month: key,
+      space: bucket ? sgdToCredits(Number(bucket.space.negated())) : 0,
+      equipment: bucket ? sgdToCredits(Number(bucket.equipment.negated())) : 0,
+      consumable: bucket ? sgdToCredits(Number(bucket.consumables.negated())) : 0,
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return result;
+}

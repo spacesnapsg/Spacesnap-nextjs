@@ -12,6 +12,7 @@ import {
   stripeConfigured,
 } from "@/components/StripeCardField";
 import { useCreateBooking, type BookingType, type Listing } from "@/lib/hooks/useListings";
+import { useMyRewardGrants } from "@/lib/hooks/useRewardsCatalogue";
 import { ApiRequestError } from "@/lib/api-client";
 
 const TYPE_BADGE_STYLES: Record<Listing["type"], string> = {
@@ -60,17 +61,35 @@ function BookingModalContent({
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [cardError, setCardError] = useState<string | null>(null);
   const [isCollectingCard, setIsCollectingCard] = useState(false);
+  const [selectedGrantId, setSelectedGrantId] = useState<string>("");
   const createBooking = useCreateBooking();
   const createCardPaymentMethod = useCreateCardPaymentMethod();
+  const { data: rewardGrants } = useMyRewardGrants();
+
+  // Only booking_discount_pct grants apply here — free_consumable_unit is
+  // the purchase-flow counterpart (lib/purchases.ts), a different
+  // RewardGrantType this modal never redeems.
+  const availableVouchers = (rewardGrants ?? []).filter((g) => g.type === "booking_discount_pct");
+  const selectedVoucher = availableVouchers.find((g) => g.id === selectedGrantId) ?? null;
 
   const activeDuration = DURATIONS.find((d) => d.key === duration) ?? DURATIONS[0];
 
   const selectedPrice =
     duration === "daily" ? listing.priceDay : duration === "weekly" ? listing.priceWeek : listing.priceMonth;
 
-  const creditApplied = appliedCredit ? Math.min(appliedCredit.amount, selectedPrice ?? 0) : 0;
-  const creditLeftover = appliedCredit ? Math.max(appliedCredit.amount - (selectedPrice ?? 0), 0) : 0;
-  const amountDue = Math.max((selectedPrice ?? 0) - creditApplied, 0);
+  // Client-side preview only — the server (resolveRewardGrantDiscount,
+  // lib/reward-grants.ts) computes the authoritative discount and re-checks
+  // the grant is still available/unexpired at charge time. Same ordering as
+  // createBookingWithDebit: the voucher discount is applied first, and any
+  // rebook BookingCredit only ever covers what's left after it.
+  const voucherDiscount = selectedVoucher
+    ? Math.min(((selectedPrice ?? 0) * selectedVoucher.value) / 100, selectedPrice ?? 0)
+    : 0;
+  const priceAfterVoucher = Math.max((selectedPrice ?? 0) - voucherDiscount, 0);
+
+  const creditApplied = appliedCredit ? Math.min(appliedCredit.amount, priceAfterVoucher) : 0;
+  const creditLeftover = appliedCredit ? Math.max(appliedCredit.amount - priceAfterVoucher, 0) : 0;
+  const amountDue = Math.max(priceAfterVoucher - creditApplied, 0);
 
   const isSubmitting = isCollectingCard || createBooking.isPending;
 
@@ -101,6 +120,7 @@ function BookingModalContent({
         endDate: toDateString(endDate),
         paymentMethodId,
         ...(appliedCredit ? { bookingCreditId: appliedCredit.id } : {}),
+        ...(selectedVoucher ? { rewardGrantId: selectedVoucher.id } : {}),
       },
       { onSuccess: onClose }
     );
@@ -156,6 +176,30 @@ function BookingModalContent({
             ))}
           </div>
           <p className="text-body-text font-medium mt-3">{selectedPrice} credits</p>
+
+          {availableVouchers.length > 0 && (
+            <div className="mt-3">
+              <label className="block text-xs text-muted-text mb-1">Have a voucher?</label>
+              <select
+                value={selectedGrantId}
+                onChange={(e) => setSelectedGrantId(e.target.value)}
+                className="bg-background border border-border/40 text-body-text rounded h-10 px-3 text-sm focus:outline-none focus:border-user-teal-start transition-colors w-full"
+              >
+                <option value="">No voucher</option>
+                {availableVouchers.map((grant) => (
+                  <option key={grant.id} value={grant.id}>
+                    {grant.value}% off
+                  </option>
+                ))}
+              </select>
+              {selectedVoucher && (
+                <p className="text-xs text-success-green mt-1.5">
+                  {selectedVoucher.value}% off applied — {voucherDiscount.toFixed(2)} credits saved.
+                </p>
+              )}
+            </div>
+          )}
+
           {appliedCredit && (
             <div className="mt-3 rounded-lg bg-background/60 border border-border/40 px-3 py-2.5 text-sm">
               <p className="text-muted-text">

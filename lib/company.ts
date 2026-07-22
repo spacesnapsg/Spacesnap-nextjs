@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { invoicingCadenceForSupplierTier } from "@/lib/booking-payments";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
+import { getCompanyPurchasedBalance, getCompanyEarnedBalance } from "@/lib/company-credits";
 import { sgdToCredits } from "@/lib/credit-units";
 
 // supplierTier/invoicingCadence/tierStats added 2026-07-22 (Sprint 6.10,
@@ -11,8 +12,17 @@ import { sgdToCredits } from "@/lib/credit-units";
 // session. spendCredits is converted at this API edge only (sgdToCredits) —
 // the underlying calculation stays true SGD end to end, same discipline as
 // every other credits-display figure in this codebase.
+//
+// purchasedCredits/earnedCredits added the same day, same session
+// (fulfillment follow-up) — the company-level counterpart of a user's
+// wallet, see lib/company-credits.ts. Real balances, no spend flow yet
+// (confirmed with the product owner).
 export async function serializeCompanyDetails(company: Company) {
-  const tierStatus = await getCompanySupplierTier(company.id);
+  const [tierStatus, purchasedBalance, earnedBalance] = await Promise.all([
+    getCompanySupplierTier(company.id),
+    getCompanyPurchasedBalance(company.id),
+    getCompanyEarnedBalance(company.id),
+  ]);
 
   return {
     id: company.id.toString(),
@@ -31,6 +41,8 @@ export async function serializeCompanyDetails(company: Company) {
       nextTier: tierStatus.nextTier,
       progressPercent: tierStatus.progressPercent,
     },
+    purchasedCredits: sgdToCredits(Number(purchasedBalance)),
+    earnedCredits: sgdToCredits(Number(earnedBalance)),
   };
 }
 

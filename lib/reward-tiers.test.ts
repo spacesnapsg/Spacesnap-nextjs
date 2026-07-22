@@ -9,7 +9,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, BookingType, type Listing } from "../app/generated/prisma/client";
-import { computeUserRewardTier, rebatePercentForTier, getUserRewardTierWindowStats } from "./reward-tiers";
+import { computeUserRewardTier, rebatePercentForTier, getUserRewardTierWindowStats, getUserRewardTier } from "./reward-tiers";
 import { createBookingWithDebit, confirmBookingWithAudit } from "./bookings";
 import { createCheckIn, checkOutCheckIn } from "./check-ins";
 
@@ -283,6 +283,56 @@ describe("reward tier rebate — creation-time snapshot, completion-time payout"
       assert.equal(rebateTx!.amount.toString(), "0.6"); // 50.00 * 1.2%
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("getUserRewardTier — Tier Upgrade boost (real DB)", () => {
+  // Seeds a tier_upgrade RewardRedemption directly (bypassing the full
+  // redeem flow / earned-balance check) — getUserRewardTier only reads the
+  // redemption's itemCategory + expiresAt, regardless of how the row got there.
+  async function seedTierUpgrade(userId: string, expiresAt: Date) {
+    return prisma.rewardRedemption.create({
+      data: {
+        userId,
+        itemName: "Premium Tier Upgrade",
+        itemCategory: "tier_upgrade",
+        creditCost: "0",
+        expiresAt,
+      },
+    });
+  }
+
+  test("an active tier_upgrade bumps a free-tier user's effective tier to starter, leaving baseTier free", async () => {
+    const user = await createUser();
+    try {
+      await seedTierUpgrade(user.id, new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+      const status = await getUserRewardTier(user.id);
+      assert.equal(status.baseTier, "free");
+      assert.equal(status.tier, "starter");
+      assert.equal(status.rebatePercent, 1.2);
+      assert.equal(status.tierUpgradeActive, true);
+      assert.ok(status.tierUpgradeExpiresAt);
+    } finally {
+      await prisma.rewardRedemption.deleteMany({ where: { userId: user.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  test("an EXPIRED tier_upgrade does not boost — the live computation takes back over with no reset step", async () => {
+    const user = await createUser();
+    try {
+      await seedTierUpgrade(user.id, new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+      const status = await getUserRewardTier(user.id);
+      assert.equal(status.baseTier, "free");
+      assert.equal(status.tier, "free");
+      assert.equal(status.tierUpgradeActive, false);
+      assert.equal(status.tierUpgradeExpiresAt, null);
+    } finally {
+      await prisma.rewardRedemption.deleteMany({ where: { userId: user.id } });
+      await prisma.user.delete({ where: { id: user.id } });
     }
   });
 });

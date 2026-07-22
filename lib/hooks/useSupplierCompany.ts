@@ -24,6 +24,10 @@ export interface CompanyDetails {
   supplierTier: SupplierTier;
   invoicingCadence: InvoicingCadence;
   tierStats: SupplierTierStats;
+  // 2026-07-22 fulfillment session — a real company-level credit balance
+  // (lib/company-credits.ts), no spend flow yet.
+  purchasedCredits: number;
+  earnedCredits: number;
 }
 
 export interface BusinessDetailsFields {
@@ -49,6 +53,21 @@ export function useUpdateSupplierCompany() {
       apiFetch<{ company: CompanyDetails }>("/api/supplier/company", {
         method: "PATCH",
         body: JSON.stringify(fields),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["supplier-company"] }),
+  });
+}
+
+// Any company member can top up the shared company wallet (confirmed with
+// the product owner) — credits-only for now, same posture as the per-user
+// wallet top-up (useTopUp, lib/hooks/useWallet.ts).
+export function useTopUpCompanyWallet() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (amount: number) =>
+      apiFetch<{ purchasedCredits: number }>("/api/supplier/company/topup", {
+        method: "POST",
+        body: JSON.stringify({ amount }),
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["supplier-company"] }),
   });

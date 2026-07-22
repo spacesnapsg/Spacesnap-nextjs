@@ -6,7 +6,9 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import Card from "@/components/Card";
 import SupplierRewardsCatalogueModal from "@/components/SupplierRewardsCatalogueModal";
 import SupplierTierBenefitsModal from "@/components/SupplierTierBenefitsModal";
+import CompanyTopUpModal from "@/components/CompanyTopUpModal";
 import { useSupplierCompany, type SupplierTier } from "@/lib/hooks/useSupplierCompany";
+import { useSupplierRevenueByType } from "@/lib/hooks/useSupplierRevenue";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 
 const TIER_LABELS: Record<SupplierTier, string> = {
@@ -134,14 +136,6 @@ function SupplierTierCard() {
   );
 }
 
-// Purchased/Earned figures below are placeholder — there is no company-level
-// credit wallet in the schema yet (distinct from a User's purchasedBalance/
-// earnedBalance, lib/credits.ts). Shipped per the product owner's own
-// "build the UI first" instruction; see Sprint 6.10 in
-// SPRINT_PLAN_NEXTJS_REWRITE.md for what a real company wallet would need.
-const PLACEHOLDER_PURCHASED_CREDITS = 0;
-const PLACEHOLDER_EARNED_CREDITS = 750;
-
 type RevenueRange = "3m" | "6m" | "12m";
 
 const REVENUE_RANGE_LABELS: Record<RevenueRange, string> = {
@@ -150,32 +144,13 @@ const REVENUE_RANGE_LABELS: Record<RevenueRange, string> = {
   "12m": "12 Months",
 };
 
-interface RevenueByTypeMonth {
-  label: string;
-  space: number;
-  equipment: number;
-  consumable: number;
+// "YYYY-MM" -> short month label ("2026-08" -> "Aug") for the chart's X axis.
+// Uses UTC so the label matches the month the server bucketed by, regardless
+// of the viewer's timezone.
+function shortMonthLabel(month: string): string {
+  const [year, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, m - 1, 1)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
 }
-
-// Placeholder monthly split — there is no "revenue by listing type" query
-// yet (GET /api/supplier/revenue only returns a single monthly total, see
-// lib/revenue.ts). Deterministic (not Math.random()) so it doesn't flicker
-// between server/client render. See Sprint 6.10 for the real endpoint this
-// is standing in for.
-function buildPlaceholderRevenueByType(): RevenueByTypeMonth[] {
-  const months = [
-    "Aug", "Sep", "Oct", "Nov", "Dec", "Jan",
-    "Feb", "Mar", "Apr", "May", "Jun", "Jul",
-  ];
-  return months.map((label, i) => ({
-    label,
-    space: 400 + ((i * 137) % 300),
-    equipment: 200 + ((i * 91) % 220),
-    consumable: 80 + ((i * 53) % 140),
-  }));
-}
-
-const REVENUE_DATA = buildPlaceholderRevenueByType();
 
 interface RevenueTooltipPayloadEntry {
   name: string;
@@ -213,7 +188,11 @@ function RevenueTooltip({
 function PlatformRevenueCard() {
   const [range, setRange] = useState<RevenueRange>("12m");
   const monthCount = range === "3m" ? 3 : range === "6m" ? 6 : 12;
-  const data = useMemo(() => REVENUE_DATA.slice(-monthCount), [monthCount]);
+  const { data: months, isLoading, isError } = useSupplierRevenueByType(monthCount);
+  const data = useMemo(
+    () => (months ?? []).map((m) => ({ ...m, label: shortMonthLabel(m.month) })),
+    [months]
+  );
 
   return (
     <Card className="mb-8">
@@ -221,24 +200,30 @@ function PlatformRevenueCard() {
         <div>
           <h2 className="text-lg font-semibold text-body-text">Platform Revenue</h2>
           <p className="text-xs text-muted-text mt-0.5">
-            Revenue by listing type — placeholder data, not wired to real bookings yet.
+            Your revenue by listing type, per month.
           </p>
         </div>
         <Pills options={["3m", "6m", "12m"]} labels={REVENUE_RANGE_LABELS} active={range} onChange={setRange} />
       </div>
 
       <div className="h-72">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-            <XAxis dataKey="label" stroke="#9ca3af" fontSize={12} />
-            <YAxis stroke="#9ca3af" fontSize={12} />
-            <Tooltip content={<RevenueTooltip />} />
-            <Bar dataKey="space" name="Space" fill="#9333ea" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-            <Bar dataKey="equipment" name="Equipment" fill="#1a9d96" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-            <Bar dataKey="consumable" name="Consumables" fill="#f59e0b" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-          </BarChart>
-        </ResponsiveContainer>
+        {isLoading ? (
+          <div className="h-full flex items-center justify-center text-sm text-muted-text">Loading…</div>
+        ) : isError ? (
+          <div className="h-full flex items-center justify-center text-sm text-error-red">Failed to load revenue.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+              <XAxis dataKey="label" stroke="#9ca3af" fontSize={12} />
+              <YAxis stroke="#9ca3af" fontSize={12} />
+              <Tooltip content={<RevenueTooltip />} />
+              <Bar dataKey="space" name="Space" fill="#9333ea" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="equipment" name="Equipment" fill="#1a9d96" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="consumable" name="Consumables" fill="#f59e0b" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-4 mt-4">
@@ -258,6 +243,8 @@ function PlatformRevenueCard() {
 
 export default function SupplierFinancialsPage() {
   const [rewardsOpen, setRewardsOpen] = useState(false);
+  const [topUpOpen, setTopUpOpen] = useState(false);
+  const { data: company } = useSupplierCompany();
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -279,8 +266,17 @@ export default function SupplierFinancialsPage() {
               </span>
               <span className="text-white/80 text-sm">Purchased Credits</span>
             </div>
-            <p className="text-white text-3xl font-extrabold">{PLACEHOLDER_PURCHASED_CREDITS} Credits</p>
-            <p className="text-white/70 text-xs mt-1">Not tracked yet — placeholder figure.</p>
+            <p className="text-white text-3xl font-extrabold">
+              {company ? company.purchasedCredits : "…"} Credits
+            </p>
+            <p className="text-white/70 text-xs mt-1 mb-4">Shared across your whole team.</p>
+            <button
+              type="button"
+              onClick={() => setTopUpOpen(true)}
+              className="w-full h-10 rounded font-medium bg-white text-supplier-purple-start hover:bg-white/90 transition-colors"
+            >
+              Top Up
+            </button>
           </div>
 
           <div className="bg-gradient-to-br from-supplier-purple-start to-user-teal-start rounded-card p-5">
@@ -290,8 +286,8 @@ export default function SupplierFinancialsPage() {
               </span>
               <span className="text-white/80 text-sm">Earned Credits</span>
             </div>
-            <p className="text-white text-3xl font-extrabold">{PLACEHOLDER_EARNED_CREDITS} Credits</p>
-            <p className="text-white/70 text-xs mt-1 mb-4">Placeholder figure — not tracked yet.</p>
+            <p className="text-white text-3xl font-extrabold">{company ? company.earnedCredits : "…"} Credits</p>
+            <p className="text-white/70 text-xs mt-1 mb-4">Earned automatically as your bookings complete.</p>
             <button
               type="button"
               onClick={() => setRewardsOpen(true)}
@@ -319,8 +315,9 @@ export default function SupplierFinancialsPage() {
       <SupplierRewardsCatalogueModal
         open={rewardsOpen}
         onClose={() => setRewardsOpen(false)}
-        earnedCredits={PLACEHOLDER_EARNED_CREDITS}
+        earnedCredits={company?.earnedCredits ?? 0}
       />
+      <CompanyTopUpModal open={topUpOpen} onClose={() => setTopUpOpen(false)} />
     </div>
   );
 }

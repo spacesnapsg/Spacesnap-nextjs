@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { createCompletedBookingPayable } from "@/lib/supplier-payables";
 import { grantRewardTierRebate, maybeConvertReferral } from "@/lib/reward-tiers";
+import { grantCompanyBookingRebate } from "@/lib/company-credits";
 
 export function serializeCheckIn(checkIn: CheckIn) {
   return {
@@ -150,6 +151,9 @@ export async function checkOutCheckIn(checkInId: bigint): Promise<CheckIn> {
       // lib/reward-tiers.ts for both functions' full design.
       await grantRewardTierRebate(tx, checkIn.bookingId);
       await maybeConvertReferral(tx, booking.userId, checkIn.bookingId, booking.sgdAmount);
+      // 2026-07-22 fulfillment session — the company-level counterpart of
+      // grantRewardTierRebate above, see lib/company-credits.ts.
+      await grantCompanyBookingRebate(tx, checkIn.bookingId);
     }
 
     const updated = await tx.checkIn.update({

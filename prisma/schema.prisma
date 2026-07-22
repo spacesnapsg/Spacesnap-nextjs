@@ -475,6 +475,63 @@ model SupplierPayable {
   @@map("supplier_payables")
 }
 
+// A per-COMPANY credit ledger, distinct from the per-USER purchased/earned
+// split (Transaction, lib/credits.ts) — same "live SUM, never denormalized"
+// idiom, same purchased/earned split, but never merged into the User
+// ledger: a company's own balance and an individual member's personal
+// wallet are unrelated concepts, same reasoning as why BuyerOrganization
+// (still just a planning thread as of this migration) would need its own
+// separate pooled ledger rather than reusing this one.
+//
+// Confirmed with the product owner 2026-07-22 (Sprint 6.10 Supplier
+// Financials "Purchased/Earned Credits cards" item): a REAL balance now,
+// but no spend flow yet — nothing redeems against `earned_rebate` here
+// today (the still-open Supplier Rewards Catalogue thread is the likely
+// future spender, once that catalogue's own per-category design is
+// settled; not guessed at here).
+enum CompanyTransactionType {
+  // A company member topping up the shared company wallet — confirmed: any
+  // member can do this, no isCompanyAdmin-only gate (mirrors the "no
+  // separate purchaser role" decision already made for the BuyerOrganization
+  // thread). Credits-only for now, same as the per-user wallet top-up
+  // (lib/wallet.ts) — no real Stripe charge backs this yet.
+  purchased_topup
+  // Automatic rebate paid out when one of the company's own bookings
+  // completes (checkOutCheckIn, lib/check-ins.ts) — confirmed: same shape
+  // as the user reward tier's completion-time rebate (lib/reward-tiers.ts),
+  // sized off the company's own live-computed supplier tier
+  // (lib/supplier-tiers.ts). The exact per-tier percentages are this
+  // session's own inference, not confirmed with the product owner — see
+  // COMPANY_REBATE_PERCENT's own comment in lib/company-credits.ts.
+  earned_rebate
+
+  @@map("company_transaction_type")
+}
+
+model CompanyTransaction {
+  id        BigInt                 @id @default(autoincrement())
+  companyId BigInt                 @map("company_id")
+  // Who triggered a purchased_topup — null for an earned_rebate row, which
+  // isn't any one member's action (it's paid out automatically on booking
+  // completion).
+  userId    String?                @map("user_id")
+  // Set only on an earned_rebate row — ties it back to the booking that
+  // earned it, same "trace the ledger row back to what authorized it"
+  // pattern as Transaction.rewardGrantId/bookingCreditId.
+  bookingId BigInt?                @map("booking_id")
+  type      CompanyTransactionType
+  amount    Decimal                @db.Decimal(10, 2)
+  description String?
+  createdAt DateTime               @default(now()) @map("created_at")
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  @@index([companyId])
+  @@map("company_transactions")
+}
+
 // A grant is issued with its own resolved type+value (e.g. `booking_discount_pct`
 // value 10 = 10% off) and can only ever be redeemed once, atomically with the
 // booking/purchase it discounts — see redeemRewardGrant (lib/reward-grants.ts),
@@ -491,6 +548,15 @@ model RewardGrant {
   status     RewardGrantStatus @default(available)
   grantedVia String            @map("granted_via")
   redeemedAt DateTime?         @map("redeemed_at")
+  // Nullable — only grants issued with a real deadline set this (e.g. a
+  // Discount Voucher redeemed from the rewards catalogue, 90 days per
+  // lib/reward-redemptions.ts's DISCOUNT_VOUCHER_GRANT_EXPIRY_DAYS). A grant
+  // with no expiresAt never expires, preserving every pre-2026-07-22 grant's
+  // behavior (seeded/created directly, no issuance flow existed before this).
+  // Lazily enforced at read/redeem time (resolveRewardGrantDiscount, the new
+  // GET /api/rewards/grants) — same "lazy expiry on read" idiom as
+  // CreditHold/BookingCredit, not a scheduled job.
+  expiresAt  DateTime?         @map("expires_at")
   createdAt  DateTime          @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -522,10 +588,13 @@ enum RewardCatalogueCategory {
   @@map("reward_catalogue_category")
 }
 
+// certification_fee was removed 2026-07-22 (Sprint 6.10 fulfillment session,
+// confirmed with the product owner) — no certification/credential in this
+// codebase ever charges a fee (confirmed by grep), so the option had nothing
+// to discount against. Re-add if a real cert-fee feature ever ships.
 enum RewardDiscountAppliesTo {
   booking
   equipment
-  certification_fee
 
   @@map("reward_discount_applies_to")
 }
@@ -557,8 +626,13 @@ model RewardCatalogueItem {
   discountPercent   Decimal?                  @db.Decimal(5, 2) @map("discount_percent")
   discountAppliesTo RewardDiscountAppliesTo[] @default([]) @map("discount_applies_to")
 
-  // category: pitch_ticket + consultancy share this ("who the partner is")
-  partnerName String? @map("partner_name")
+  // category: pitch_ticket + consultancy share this ("which partners can the
+  // user pick from"). Replaced 2026-07-22 (confirmed with the product owner)
+  // from a single partnerName to a list — a user picks their preferred
+  // partner at redemption time (RewardRedemption.selectedPartnerOption), one
+  // admin-managed catalogue item can now offer several partners instead of
+  // needing a separate item per partner.
+  partnerOptions String[] @default([]) @map("partner_options")
   // category: consultancy only — free text, not a dropdown; subject varies
   // too much to enumerate ("Legal? Accounting? HR?")
   consultancySubject String? @map("consultancy_subject")
@@ -586,6 +660,23 @@ model RewardCatalogueItem {
   @@map("reward_catalogue_items")
 }
 
+// Fulfillment status for a RewardRedemption (2026-07-22 fulfillment session,
+// confirmed with the product owner — see SPRINT_PLAN_NEXTJS_REWRITE.md
+// Sprint 6.10 "per-category redemption/fulfillment design"). Most categories
+// are done the instant they're redeemed (discount, consumable, tier_upgrade
+// — the effect fires immediately, there's nothing left to resolve) and are
+// created directly as `used`. pitch_ticket/consultancy are the only
+// categories that start `pending`: the admin needs to arrange scheduling
+// with the user's chosen partner out-of-band, then come back and mark the
+// case `used` (arranged) or `cancelled` (fell through, e.g. unreachable).
+enum RewardRedemptionStatus {
+  pending
+  used
+  cancelled
+
+  @@map("reward_redemption_status")
+}
+
 // A user spending earnedBalance on a RewardCatalogueItem — the actual
 // issuance/redemption flow that item's own `redeemedCount` field was added
 // ahead of (see that field's comment above). Distinct from RewardGrant: that
@@ -607,6 +698,22 @@ model RewardRedemption {
   itemName              String                   @map("item_name")
   itemCategory          RewardCatalogueCategory  @map("item_category")
   creditCost            Decimal                  @db.Decimal(10, 2) @map("credit_cost")
+  status                RewardRedemptionStatus   @default(used)
+  // category: pitch_ticket + consultancy only — which of the item's
+  // partnerOptions the user picked at redemption time. Snapshotted (not a
+  // live lookup into the item's own list) for the same reason
+  // itemName/itemCategory are — an admin later editing the item's partner
+  // list must never reshuffle what a user already selected.
+  selectedPartnerOption String?                  @map("selected_partner_option")
+  // category: tier_upgrade only — createdAt + the item's upgradeDurationMonths
+  // AT REDEMPTION TIME, resolved and stored once (same "snapshot, don't
+  // recompute against a possibly-deleted item" discipline as creditCost/
+  // itemName above). Also doubles as the "is an upgrade currently active"
+  // check (lib/reward-redemptions.ts rejects a second tier_upgrade
+  // redemption while one's expiresAt is still in the future) and as the
+  // window lib/reward-tiers.ts's getUserRewardTier reads to decide whether
+  // to apply the one-tier boost.
+  expiresAt             DateTime?                @map("expires_at")
   createdAt             DateTime                 @default(now()) @map("created_at")
 
   user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -691,12 +798,13 @@ model Company {
   createdAt            DateTime     @default(now()) @map("created_at")
   updatedAt            DateTime     @updatedAt @map("updated_at")
 
-  users            User[]
-  listings         Listing[]
-  certificates     Certificate[]
-  trainingVideos   TrainingVideo[]
-  trainingSessions TrainingSession[]
-  supplierPayables SupplierPayable[]
+  users               User[]
+  listings            Listing[]
+  certificates        Certificate[]
+  trainingVideos      TrainingVideo[]
+  trainingSessions    TrainingSession[]
+  supplierPayables    SupplierPayable[]
+  companyTransactions CompanyTransaction[]
 
   @@map("companies")
 }
@@ -776,6 +884,7 @@ model User {
   notifications           Notification[]
   referralSpendBonuses    ReferralSpendBonus[]
   rewardRedemptions       RewardRedemption[]
+  companyTransactions     CompanyTransaction[]
 
   @@map("users")
 }
@@ -1108,6 +1217,7 @@ model Booking {
   bookingCreditsSpent  BookingCredit[]  @relation("BookingCreditAppliedTo")
   supplierPayable      SupplierPayable?
   notifications        Notification[]
+  companyTransactions  CompanyTransaction[]
 
   @@map("bookings")
 }

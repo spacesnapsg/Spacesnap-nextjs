@@ -11,8 +11,8 @@ const APPLIES_TO_VALUES = Object.values(RewardDiscountAppliesTo);
 // clean 422 (parseCategoryFields below), never silently ignored or written.
 const CATEGORY_FIELDS: Record<RewardCatalogueCategory, readonly string[]> = {
   discount: ["discountPercent", "discountAppliesTo"],
-  pitch_ticket: ["partnerName"],
-  consultancy: ["consultancySubject", "partnerName"],
+  pitch_ticket: ["partnerOptions"],
+  consultancy: ["consultancySubject", "partnerOptions"],
   events: ["eventName", "eventInfo"],
   lucky_draw: ["prizeDescription", "prizeQuantity"],
   tier_upgrade: ["upgradeDurationMonths"],
@@ -24,7 +24,7 @@ const ALL_CATEGORY_FIELD_KEYS = [...new Set(Object.values(CATEGORY_FIELDS).flat(
 export interface RewardCategoryFieldValues {
   discountPercent?: Prisma.Decimal | null;
   discountAppliesTo?: RewardDiscountAppliesTo[];
-  partnerName?: string | null;
+  partnerOptions?: string[];
   consultancySubject?: string | null;
   eventName?: string | null;
   eventInfo?: string | null;
@@ -111,6 +111,19 @@ function parseAppliesTo(value: unknown): RewardDiscountAppliesTo[] | undefined {
   return value as RewardDiscountAppliesTo[];
 }
 
+// category: pitch_ticket + consultancy — the list of partners a user can
+// choose from at redemption time (RewardRedemption.selectedPartnerOption).
+// Blank entries are dropped rather than rejected outright, same leniency as
+// every other optional text field here — an admin saving with an empty row
+// mid-edit shouldn't 422.
+function parsePartnerOptions(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
+    throw new ApiValidationError({ partnerOptions: ["partnerOptions must be an array of strings."] });
+  }
+  return value.map((v) => v.trim()).filter((v) => v.length > 0);
+}
+
 // Validates that `body` only contains fields belonging to `category`
 // (per CATEGORY_FIELDS above), parses/validates each present field, and
 // returns the Prisma-ready values — nulling out every field NOT in this
@@ -131,7 +144,7 @@ export function parseCategoryFields(category: RewardCatalogueCategory, body: Rec
   return {
     discountPercent: parsePercent(body.discountPercent),
     discountAppliesTo: parseAppliesTo(body.discountAppliesTo),
-    partnerName: parseText(body.partnerName, "partnerName", { required: false }),
+    partnerOptions: parsePartnerOptions(body.partnerOptions),
     consultancySubject: parseText(body.consultancySubject, "consultancySubject", { required: false }),
     eventName: parseText(body.eventName, "eventName", { required: false }),
     eventInfo: parseText(body.eventInfo, "eventInfo", { required: false }),
@@ -152,7 +165,7 @@ export function clearedFieldsForCategory(newCategory: RewardCatalogueCategory): 
   const cleared: Partial<RewardCategoryFieldValues> = {};
   for (const key of ALL_CATEGORY_FIELD_KEYS) {
     if (!allowed.has(key)) {
-      (cleared as Record<string, unknown>)[key] = key === "discountAppliesTo" ? [] : null;
+      (cleared as Record<string, unknown>)[key] = key === "discountAppliesTo" || key === "partnerOptions" ? [] : null;
     }
   }
   return cleared;
@@ -171,7 +184,7 @@ export function serializeRewardCatalogueItem(item: RewardCatalogueItem) {
     fullyRedeemed: isFullyRedeemed(item),
     discountPercent: item.discountPercent ? Number(item.discountPercent) : null,
     discountAppliesTo: item.discountAppliesTo,
-    partnerName: item.partnerName,
+    partnerOptions: item.partnerOptions,
     consultancySubject: item.consultancySubject,
     eventName: item.eventName,
     eventInfo: item.eventInfo,

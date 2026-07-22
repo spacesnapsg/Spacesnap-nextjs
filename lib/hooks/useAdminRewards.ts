@@ -3,7 +3,7 @@ import { apiFetch } from "@/lib/api-client";
 
 export type RewardCategory = "discount" | "pitch_ticket" | "consultancy" | "events" | "lucky_draw" | "tier_upgrade" | "consumable";
 
-export type RewardDiscountAppliesTo = "booking" | "equipment" | "certification_fee";
+export type RewardDiscountAppliesTo = "booking" | "equipment";
 
 export interface RewardCatalogueItem {
   id: string;
@@ -17,7 +17,7 @@ export interface RewardCatalogueItem {
   fullyRedeemed: boolean;
   discountPercent: number | null;
   discountAppliesTo: RewardDiscountAppliesTo[];
-  partnerName: string | null;
+  partnerOptions: string[];
   consultancySubject: string | null;
   eventName: string | null;
   eventInfo: string | null;
@@ -37,7 +37,7 @@ export interface RewardCatalogueItemInput {
   quantityAvailable?: number | null;
   discountPercent?: number | null;
   discountAppliesTo?: RewardDiscountAppliesTo[];
-  partnerName?: string | null;
+  partnerOptions?: string[];
   consultancySubject?: string | null;
   eventName?: string | null;
   eventInfo?: string | null;

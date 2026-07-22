@@ -122,6 +122,34 @@ export interface UserRewardTierStatus {
   // progress bar reflects that, not a naive average of the two. 100 for the
   // top tier (Power), which has no nextTier to progress toward.
   progressPercent: number;
+  // The tier the live rolling-window computation alone would produce, with
+  // no Tier Upgrade redemption applied — see tierUpgradeActive below. Equal
+  // to `tier` whenever no upgrade is active.
+  baseTier: UserRewardTier;
+  tierUpgradeActive: boolean;
+  tierUpgradeExpiresAt: Date | null;
+}
+
+// 2026-07-22 fulfillment session (confirmed with the product owner, see
+// SPRINT_PLAN_NEXTJS_REWRITE.md Sprint 6.10's "tier_upgrade" design note):
+// a redeemed Premium Tier Upgrade (lib/reward-redemptions.ts) bumps the
+// user's EFFECTIVE tier one level up for its duration — it does not freeze
+// or replace the underlying rolling-window computation, which keeps running
+// the whole time (getUserRewardTierWindowStats above is untouched by this).
+// Once the upgrade's window (RewardRedemption.expiresAt) passes, there is no
+// explicit "reset" step: the live computation (baseTier) was never stopped,
+// so it simply takes back over on the very next read — same
+// never-denormalized principle as every other tier/balance in this codebase.
+async function getActiveTierUpgradeExpiry(
+  userId: string,
+  client: Prisma.TransactionClient | typeof prisma,
+  asOf: Date
+): Promise<Date | null> {
+  const active = await client.rewardRedemption.findFirst({
+    where: { userId, itemCategory: "tier_upgrade", expiresAt: { gt: asOf } },
+    orderBy: { expiresAt: "desc" },
+  });
+  return active?.expiresAt ?? null;
 }
 
 // Surfaces only the delta to the next tier (same "gaps only, not a full
@@ -133,7 +161,13 @@ export async function getUserRewardTier(
   asOf: Date = new Date()
 ): Promise<UserRewardTierStatus> {
   const stats = await getUserRewardTierWindowStats(userId, client, asOf);
-  const tier = computeUserRewardTier(stats.bookingCount, stats.spendSgd);
+  const baseTier = computeUserRewardTier(stats.bookingCount, stats.spendSgd);
+
+  const tierUpgradeExpiresAt = await getActiveTierUpgradeExpiry(userId, client, asOf);
+  // Already-Power upgrades are a harmless no-op — nextTier(baseTier) is null,
+  // so `?? baseTier` leaves the tier unchanged.
+  const tier = tierUpgradeExpiresAt ? nextTier(baseTier) ?? baseTier : baseTier;
+
   const next = nextTier(tier);
   const nextDef = next ? REWARD_TIERS.find((def) => def.tier === next)! : null;
 
@@ -155,6 +189,9 @@ export async function getUserRewardTier(
     bookingsToNextTier: nextDef ? Math.max(0, nextDef.minBookings - stats.bookingCount) : null,
     spendSgdToNextTier: nextDef ? Math.max(0, nextDef.minSpendSgd - stats.spendSgd) : null,
     progressPercent,
+    baseTier,
+    tierUpgradeActive: tierUpgradeExpiresAt !== null,
+    tierUpgradeExpiresAt,
   };
 }
 

@@ -13,6 +13,11 @@ export interface CurrentUserRewardTier {
   bookingsToNextTier: number | null;
   spendCreditsToNextTier: number | null;
   progressPercent: number;
+  // 2026-07-22 — set when a redeemed Premium Tier Upgrade is boosting `tier`
+  // above what the live rolling-window computation alone would produce.
+  baseTier: "free" | "starter" | "growth" | "power";
+  tierUpgradeActive: boolean;
+  tierUpgradeExpiresAt: string | null;
 }
 
 export interface CurrentUser {

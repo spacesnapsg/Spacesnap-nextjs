@@ -12,7 +12,12 @@ import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, TransactionType, RewardCatalogueCategory } from "../app/generated/prisma/client";
 import { getEarnedBalance, InsufficientCreditBalanceError } from "./credits";
-import { redeemRewardCatalogueItem, RewardRedemptionError } from "./reward-redemptions";
+import {
+  redeemRewardCatalogueItem,
+  resolveRewardRedemption,
+  RewardRedemptionError,
+  RewardRedemptionResolutionError,
+} from "./reward-redemptions";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -50,6 +55,7 @@ async function grantEarnedCredits(userId: string, sgdAmount: string) {
 }
 
 async function cleanup(userId: string, itemId: bigint) {
+  await prisma.rewardGrant.deleteMany({ where: { userId } });
   await prisma.rewardRedemption.deleteMany({ where: { userId } });
   await prisma.transaction.deleteMany({ where: { userId } });
   await prisma.activityLog.deleteMany({ where: { userId } });
@@ -170,5 +176,191 @@ describe("redeemRewardCatalogueItem", () => {
     } finally {
       await cleanup(user.id, item.id);
     }
+  });
+
+  test("a consumable redemption is immediately `used` (no fulfillment step)", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({ creditCost: "10" });
+    try {
+      await grantEarnedCredits(user.id, "10.00");
+      const redemption = await redeemRewardCatalogueItem(user.id, item.id);
+      assert.equal(redemption.status, "used");
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+});
+
+describe("redeemRewardCatalogueItem — discount category mints a RewardGrant", () => {
+  test("redeeming a discount item creates an available booking_discount_pct grant with a 90-day expiry", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({
+      category: RewardCatalogueCategory.discount,
+      creditCost: "10",
+      discountPercent: "15",
+      consumableName: null,
+      consumableQuantity: null,
+    });
+    try {
+      await grantEarnedCredits(user.id, "10.00");
+
+      const before = Date.now();
+      const redemption = await redeemRewardCatalogueItem(user.id, item.id);
+      assert.equal(redemption.status, "used");
+
+      const grants = await prisma.rewardGrant.findMany({ where: { userId: user.id } });
+      assert.equal(grants.length, 1);
+      assert.equal(grants[0].type, "booking_discount_pct");
+      assert.equal(grants[0].value.toString(), "15");
+      assert.equal(grants[0].status, "available");
+      assert.equal(grants[0].grantedVia, "rewards_catalogue");
+      assert.ok(grants[0].expiresAt);
+      // ~90 days out (allow a generous window for clock/slack).
+      const daysOut = (grants[0].expiresAt!.getTime() - before) / (24 * 60 * 60 * 1000);
+      assert.ok(daysOut > 89 && daysOut < 91, `expected ~90 days, got ${daysOut}`);
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+});
+
+describe("redeemRewardCatalogueItem — pitch_ticket/consultancy partner selection", () => {
+  test("rejects with 'partner_option_required' when no partner is chosen", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({
+      category: RewardCatalogueCategory.pitch_ticket,
+      creditCost: "10",
+      partnerOptions: ["Acme VC", "Beta Capital"],
+      consumableName: null,
+      consumableQuantity: null,
+    });
+    try {
+      await grantEarnedCredits(user.id, "10.00");
+      await assert.rejects(
+        () => redeemRewardCatalogueItem(user.id, item.id),
+        (e: unknown) => e instanceof RewardRedemptionError && e.reason === "partner_option_required"
+      );
+      const redemptions = await prisma.rewardRedemption.findMany({ where: { userId: user.id } });
+      assert.equal(redemptions.length, 0);
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+
+  test("rejects with 'invalid_partner_option' when the chosen partner is not offered", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({
+      category: RewardCatalogueCategory.pitch_ticket,
+      creditCost: "10",
+      partnerOptions: ["Acme VC"],
+      consumableName: null,
+      consumableQuantity: null,
+    });
+    try {
+      await grantEarnedCredits(user.id, "10.00");
+      await assert.rejects(
+        () => redeemRewardCatalogueItem(user.id, item.id, { selectedPartnerOption: "Nonexistent" }),
+        (e: unknown) => e instanceof RewardRedemptionError && e.reason === "invalid_partner_option"
+      );
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+
+  test("a valid partner choice starts the redemption `pending` and records the selection", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({
+      category: RewardCatalogueCategory.consultancy,
+      creditCost: "10",
+      consultancySubject: "Legal",
+      partnerOptions: ["Firm A", "Firm B"],
+      consumableName: null,
+      consumableQuantity: null,
+    });
+    try {
+      await grantEarnedCredits(user.id, "10.00");
+      const redemption = await redeemRewardCatalogueItem(user.id, item.id, { selectedPartnerOption: "Firm B" });
+      assert.equal(redemption.status, "pending");
+      assert.equal(redemption.selectedPartnerOption, "Firm B");
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+});
+
+describe("redeemRewardCatalogueItem — tier_upgrade single-active guard", () => {
+  test("a second tier_upgrade while one is active is rejected; the first sets expiresAt from the item's duration", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({
+      category: RewardCatalogueCategory.tier_upgrade,
+      creditCost: "10",
+      upgradeDurationMonths: 3,
+      consumableName: null,
+      consumableQuantity: null,
+    });
+    try {
+      await grantEarnedCredits(user.id, "30.00");
+
+      const first = await redeemRewardCatalogueItem(user.id, item.id);
+      assert.equal(first.status, "used");
+      assert.ok(first.expiresAt);
+      // ~3 months out.
+      assert.ok(first.expiresAt!.getTime() > Date.now());
+
+      await assert.rejects(
+        () => redeemRewardCatalogueItem(user.id, item.id),
+        (e: unknown) => e instanceof RewardRedemptionError && e.reason === "tier_upgrade_already_active"
+      );
+      // Only the first redemption exists; the balance was only debited once.
+      const redemptions = await prisma.rewardRedemption.findMany({ where: { userId: user.id } });
+      assert.equal(redemptions.length, 1);
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+});
+
+describe("resolveRewardRedemption", () => {
+  test("marks a pending redemption `used`", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({
+      category: RewardCatalogueCategory.pitch_ticket,
+      creditCost: "10",
+      partnerOptions: ["Acme VC"],
+      consumableName: null,
+      consumableQuantity: null,
+    });
+    try {
+      await grantEarnedCredits(user.id, "10.00");
+      const redemption = await redeemRewardCatalogueItem(user.id, item.id, { selectedPartnerOption: "Acme VC" });
+
+      const resolved = await resolveRewardRedemption(redemption.id, "used");
+      assert.equal(resolved.status, "used");
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+
+  test("rejects resolving an already-resolved redemption ('not_pending')", async () => {
+    const user = await createUser();
+    const item = await createCatalogueItem({ creditCost: "10" }); // consumable -> already `used`
+    try {
+      await grantEarnedCredits(user.id, "10.00");
+      const redemption = await redeemRewardCatalogueItem(user.id, item.id);
+
+      await assert.rejects(
+        () => resolveRewardRedemption(redemption.id, "used"),
+        (e: unknown) => e instanceof RewardRedemptionResolutionError && e.reason === "not_pending"
+      );
+    } finally {
+      await cleanup(user.id, item.id);
+    }
+  });
+
+  test("rejects resolving an unknown redemption id ('not_found')", async () => {
+    await assert.rejects(
+      () => resolveRewardRedemption(BigInt(999999999), "used"),
+      (e: unknown) => e instanceof RewardRedemptionResolutionError && e.reason === "not_found"
+    );
   });
 });

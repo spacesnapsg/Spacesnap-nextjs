@@ -455,6 +455,12 @@ export default function UserDashboardPage() {
             {currentUser && (
               <p className="text-xs text-muted-text mt-1">{currentUser.rewardTier.rebatePercent}% earned-credit rebate</p>
             )}
+            {currentUser?.rewardTier.tierUpgradeActive && (
+              <p className="text-xs text-user-teal-end mt-1">
+                Boosted from {REWARD_TIER_LABELS[currentUser.rewardTier.baseTier]} by a Tier Upgrade, active until{" "}
+                {new Date(currentUser.rewardTier.tierUpgradeExpiresAt!).toLocaleDateString()}
+              </p>
+            )}
             {currentUser?.rewardTier.nextTier && (
               <div className="mt-3">
                 <div className="flex items-center justify-between text-xs text-muted-text mb-1">

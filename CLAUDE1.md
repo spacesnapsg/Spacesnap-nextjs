@@ -4383,3 +4383,251 @@ exact seeded state (Ethan's earned balance back to 0, `reward_redemptions`
 empty). `npx tsc --noEmit`, `eslint .` clean on every touched file, `next
 build` clean with `/api/rewards/[id]/redeem` and `/api/rewards/redemptions`
 both listed.
+
+## Rewards Catalogue — Per-Category Fulfillment (2026-07-22)
+
+Closed the "per-category redemption/fulfillment design" planning thread
+logged under Sprint 6.10. The previous session (above) made every catalogue
+redemption debit credits + write a terminal `used` row regardless of
+category; this session gives the three categories that need real downstream
+effects their actual behaviour, all confirmed with the product owner before
+building (four design questions + four detail questions answered in chat —
+same "confirm, don't guess" posture as every other tier/percent/threshold in
+this codebase).
+
+**Explicitly still deferred, not touched:** `events` and `lucky_draw` (product
+owner still deciding that side of the business). `consumable` was already
+correct — an immediately-terminal `used` row, no further work.
+
+### Schema (migration `20260722080000_reward_catalogue_fulfillment`)
+
+- `RewardGrant.expiresAt` (nullable) — grants issued before this session had
+  no expiry and keep that behaviour (null = never expires); the catalogue's
+  Discount Voucher is the first issuer to set a real deadline (90 days).
+  Enforced lazily at read/redeem time (`resolveRewardGrantDiscount`,
+  `redeemRewardGrant`'s `updateMany` guard, and the new
+  `listAvailableRewardGrants` sweep) — same "expire on read, no cron" idiom as
+  `CreditHold`/`BookingCredit`.
+- `RewardDiscountAppliesTo` — dropped `certification_fee` (confirmed: nothing
+  in this codebase ever charges a certification fee, so the option had nothing
+  to discount against). Verified by direct query that no row used it before
+  recreating the enum (Postgres has no `ALTER TYPE ... DROP VALUE`).
+- `RewardCatalogueItem.partnerName` → `partnerOptions String[]` — a
+  pitch_ticket/consultancy item now offers a *list* of partners the user picks
+  from at redemption time, instead of one fixed partner per item (confirmed:
+  "one item, multiple partner options"). Existing `"TBD"` placeholder values
+  carried over as single-element arrays in the migration, nothing dropped.
+- `RewardRedemptionStatus` enum (`pending`/`used`/`cancelled`) +
+  `RewardRedemption.status` (default `used`), `.selectedPartnerOption`,
+  `.expiresAt`. Most categories are created directly as `used` (the effect
+  fires instantly); only pitch_ticket/consultancy start `pending`.
+
+### `lib/reward-redemptions.ts` — per-category branches inside the existing `$transaction`
+
+- **discount:** after the credit debit, mints a real
+  `RewardGrant(booking_discount_pct, value = item.discountPercent,
+  grantedVia: "rewards_catalogue", expiresAt: +90d)`. This is the grant the
+  checkout "Have a voucher?" dropdown lists — it also closes the standing
+  "New known gap, 2026-07-21 — RewardGrant issuance" item (no issuance flow
+  had ever existed for `RewardGrant`; the catalogue redemption is now its
+  first real issuance path).
+- **pitch_ticket / consultancy:** requires `selectedPartnerOption`, validated
+  against the item's own `partnerOptions` (`partner_option_required` /
+  `invalid_partner_option` errors); snapshots the choice onto the row and
+  starts it `pending` for the admin to resolve.
+- **tier_upgrade:** resolves `expiresAt = now + item.upgradeDurationMonths`
+  and stores it; rejects a second redemption while one is still active
+  (`tier_upgrade_already_active`) — confirmed: no stacking/extension.
+- New `resolveRewardRedemption(id, used|cancelled)` +
+  `listPendingConciergeRedemptions()` back the admin queue. Resolution guards
+  via `updateMany WHERE status: pending` (same concurrency discipline as
+  `redeemRewardGrant`), distinguishing `not_found` vs `not_pending`.
+
+### `lib/reward-tiers.ts` — Tier Upgrade boost
+
+`getUserRewardTier` now checks for an active `tier_upgrade` redemption
+(`expiresAt > now`) and, if present, bumps the *effective* tier one level
+above what the live rolling-window computation produces. Confirmed design:
+the boost overrides the *displayed/applied* tier only — the underlying
+`computeUserRewardTier` keeps running the whole time (never paused, never
+snapshotted), so when the window passes there is no "reset" step; the live
+computation simply takes back over on the next read. New response fields
+`baseTier`/`tierUpgradeActive`/`tierUpgradeExpiresAt` (surfaced through
+`GET /api/me` and the dashboard's User Tier card, which now shows "Boosted
+from Free … until <date>").
+
+### Routes + frontend
+
+- `GET /api/rewards/grants` — the caller's own available (unexpired)
+  `RewardGrant` rows (lazy-expires stale ones first). Closes the standing "no
+  endpoint to list a user's own available grants" gap.
+- `POST /api/rewards/[id]/redeem` now reads an optional
+  `selectedPartnerOption` from the body.
+- `GET /api/admin/reward-redemptions` + `PATCH .../[id]` — system-admin-only
+  concierge queue + resolve.
+- `RewardsCatalogueModal.tsx`: pitch_ticket/consultancy show a
+  `PartnerPickerModal` before redeeming; "View redeemed rewards" shows a real
+  status badge (pending/used/cancelled) + the chosen partner.
+- `AdminRewards.tsx`: `partnerName` input replaced with a `PartnerOptionsEditor`
+  (add/remove chips) for both categories.
+- `BookingModal.tsx`: a "Have a voucher?" `<select>` wired to
+  `GET /api/rewards/grants`, passing `rewardGrantId` to the existing
+  create-booking path (server already supported it; this is the first UI that
+  populates it). Client-side discount preview only — the server re-resolves
+  the authoritative discount.
+- Admin Overview (`app/(admin)/admin/dashboard/page.tsx`): new "Pending
+  Concierge Requests" row + `ConciergeReviewModal` (mark used/cancelled).
+
+### Verification — all green
+
+`npx tsc --noEmit` clean; `npm test` **304/304** (up from 293 — new
+`reward-redemptions.test.ts` cases: discount grant issuance + 90-day expiry,
+partner-required/invalid/valid, tier_upgrade single-active guard, resolve
+used/not_pending/not_found, consumable immediately-`used`; new
+`reward-tiers.test.ts` tier-upgrade boost + expired-no-boost cases). `eslint`
+clean on every touched file (the 2 pre-existing errors in
+`passport/page.tsx`/`db-constraints.test.ts` are unrelated, already
+documented). `next build` clean with `/api/rewards/grants`,
+`/api/admin/reward-redemptions[/id]`, `/api/supplier/revenue/by-type` all
+listed.
+
+**Live-verified** (real cookie-jar HTTP logins against the dev server, DB
+restored to its exact seeded baseline afterward — 0 redemptions/grants/
+reward-activity, earned balance back to 0):
+- Ethan (S$200 temp earned grant): redeemed Discount Voucher → `used` + a real
+  `booking_discount_pct` grant (value 10, `expiresAt` +90d) appeared in
+  `GET /api/rewards/grants`; VC Pitch Ticket without a partner → 422, with
+  `"TBD"` → `pending`, invalid partner → 422; Premium Tier Upgrade → `used`
+  with a +3mo `expiresAt`, a second attempt → 422 already-active;
+  `GET /api/me` then showed `tier=starter baseTier=free tierUpgradeActive=true
+  rebate=1.2`; wallet dropped exactly 2000 → 450 credits (50+500+1000 spent).
+- Admin (alice): the concierge queue listed Ethan's pending pitch ticket →
+  `PATCH .../3 {status:used}` resolved it → queue emptied → re-resolve → 422;
+  Ethan (non-admin) hitting the admin route → 403.
+- Ben (supplier): `GET /api/supplier/revenue/by-type?months=6` returned 6
+  rows, current month `space=4200` credits (Acme's real completed-booking
+  revenue); `months=3`→3 rows, `months=99`→clamped to 12; Ethan (non-supplier)
+  → 403. The Admin Overview "Pending Concierge Requests" row also confirmed
+  rendering in the browser (returns 200, "0 pending" at rest).
+
+**One step covered by tests, not re-run live:** actually consuming a minted
+voucher through a full Stripe booking (`createBookingWithDebit` +
+`rewardGrantId`) — the discount-sizing (`resolveRewardGrantDiscount`) and
+atomic redemption (`redeemRewardGrant`) already have dedicated passing tests
+and were exercised in the 2026-07-21 write-path session; this session only
+added the issuance + listing endpoints that feed the existing param, and both
+were verified above.
+
+## Supplier Financials — "Platform Revenue" by Listing Type (2026-07-22)
+
+Second item this session (after the rewards fulfillment above), from the
+Sprint 6.10 "Supplier Financials Page — backend not wired" list: the
+"Platform Revenue" chart on `(supplier)/supplier-financials/page.tsx` was a
+deterministic placeholder (`buildPlaceholderRevenueByType`) with a real
+3/6/12-month toggle that only sliced the fake data client-side.
+
+New `getCompanyRevenueByTypeAndMonth(companyId, months)` (`lib/revenue.ts`)
+buckets the caller's own company's revenue transactions by the attributable
+listing's `type` (space/equipment/consumables → the chart's space/equipment/
+consumable keys) per calendar month, reusing the module's existing
+`REVENUE_TRANSACTION_TYPES` + negate-to-net-out-refunds semantics (a
+declined-then-refunded booking nets to 0 in its bucket, not negative). Returns
+**numeric** credit values (recharts needs numbers, not the formatted strings
+the text helpers return) — revenue, so the earned-credit display constraint
+doesn't apply.
+
+New `GET /api/supplier/revenue/by-type?months=` (clamped to 3/6/12, else 12),
+new `useSupplierRevenueByType(months)` hook — the page's range toggle now
+refetches per range instead of slicing client-side. `buildPlaceholderRevenueByType`
+deleted; the "placeholder data, not wired to real bookings yet" copy replaced
+with "Your revenue by listing type, per month," plus loading/error states.
+
+Verified live (cookie-jar as `ben@acmecoworking.sg`): `months=6` → 6 rows,
+current month `space=4200` credits (Acme's real completed-booking revenue),
+`months=3`→3, `months=99`→12, non-supplier → 403. `tsc`/`eslint`/`next build`/
+`npm test` (304/304) all clean. Left explicitly untouched (still placeholder,
+still needs a product decision — see the Sprint 6.10 Supplier Financials
+list): the company-level Purchased/Earned credit cards and the separate
+Supplier Rewards Catalogue.
+
+## Supplier Financials — Company Credit Wallet (2026-07-22)
+
+Third item this session, after the Rewards Catalogue fulfillment and revenue
+chart above — the last remaining placeholder-decision item on the Supplier
+Financials page: the Purchased/Earned Credits cards
+(`PLACEHOLDER_PURCHASED_CREDITS = 0`, `PLACEHOLDER_EARNED_CREDITS = 750`).
+The Sprint 6.10 plan flagged this as needing a decision before it could be
+built; confirmed with the product owner (3 questions, all recommended
+defaults): a **real balance now, no spend flow yet**; **earned** accrues
+automatically as a rebate on completed bookings (same shape as the Sprint
+6.5 user reward-tier rebate); **purchased** has a real top-up flow any
+company member can trigger (no admin-only gate).
+
+### Schema: `CompanyTransaction`, a separate ledger from `Transaction`
+
+New model (migration `20260722090000_company_transactions`) — deliberately
+NOT a `companyId` column bolted onto the existing per-user `Transaction`
+table: `Transaction.userId` is a required field used throughout the
+codebase, and an automatic booking-completion rebate isn't any one member's
+action, so there's no natural user to attribute that row to. Instead,
+`CompanyTransaction` mirrors `Transaction`'s purchased/earned split and
+"live SUM, never denormalized" idiom independently, scoped by `companyId`
+(required), with `userId` (nullable — set on a `purchased_topup`, null on an
+`earned_rebate`) and `bookingId` (nullable — ties an `earned_rebate` row back
+to what earned it, same pattern as `Transaction.rewardGrantId`/
+`bookingCreditId`). Same precedent as `SupplierPayable` already being its own
+table rather than shoehorned into `Transaction`.
+
+### `lib/company-credits.ts`
+
+`getCompanyPurchasedBalance`/`getCompanyEarnedBalance` — live `SUM` per type,
+same shape as `getPurchasedBalance`/`getEarnedBalance` (`lib/credits.ts`).
+`createCompanyTopUp(companyId, userId, amount)` — credits-only for now, same
+posture as the per-user wallet top-up (no real Stripe charge backs this
+either). `grantCompanyBookingRebate(tx, bookingId)` — wired into
+`checkOutCheckIn` (`lib/check-ins.ts`) right alongside
+`createCompletedBookingPayable`/`grantRewardTierRebate`, same trigger point
+and "only a genuinely completed booking pays out anything" discipline. Sizes
+the rebate off the company's own live-computed supplier tier
+(`getCompanySupplierTier`, `lib/supplier-tiers.ts`) via a new
+`COMPANY_REBATE_PERCENT` table (free 1% / preferred 1.5% / top 2%) —
+**this session's own inference, not confirmed with the product owner**,
+flagged in the code the same way the Sprint 6 cancellation-window
+percentages were before their own confirmation.
+
+### API + frontend
+
+`serializeCompanyDetails` (`lib/company.ts`) gains `purchasedCredits`/
+`earnedCredits` (both live-computed, converted to the "credits" display unit
+at this API edge only). New `POST /api/supplier/company/topup`
+(`requireSupplier()` — already allows any supplier at the company, not just
+an admin, so no new auth helper was needed). `useSupplierCompany`'s
+`CompanyDetails` type gains both fields; new `useTopUpCompanyWallet` hook;
+new `CompanyTopUpModal.tsx` (mirrors `TopUpCreditsModal.tsx`'s preset/custom
+amount pattern). The Financials page's two cards now read real data, the
+Purchased Credits card gained a "Top Up" button, and the stale "not tracked
+yet" copy is gone.
+
+### Verification — all green
+
+`npx tsc --noEmit` clean; `npm test` **311/311** (up from 304 — new
+`lib/company-credits.test.ts`: `parseCompanyTopUpAmount` validation, balances
+start at zero, top-up adds cumulatively without touching the earned side, a
+fresh free-tier company's completed booking earns exactly 1% tied to that
+booking, a pending booking earns nothing). `eslint`/`next build` clean
+(`/api/supplier/company/topup` listed).
+
+**Live-verified** (cookie-jar HTTP as `ben@acmecoworking.sg`): `GET
+/api/supplier/company` showed real `purchasedCredits: 0, earnedCredits: 0`
+before touching anything; topped up 1000 then 500 credits → balance went
+0→1000→1500 (additive, not overwritten); a negative amount → 422; Ethan
+(non-supplier) hitting the top-up route → 403. All test
+`company_transactions` rows deleted afterward — Ben's company confirmed back
+to `purchased=0, earned=0`.
+
+**Still explicitly left untouched** (per the Sprint 6.10 Supplier Financials
+list): the Accounts Receivable/Receipts/Invoices card (blocked on Sprint 6's
+unbuilt Stripe payout mechanics) and the separate Supplier Rewards Catalogue
+redemption flow — the latter's own per-category effects (report generation,
+ad campaign duration, tier boost) are still undesigned, same open items
+Sprint 6.10 already flagged.

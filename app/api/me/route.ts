@@ -48,6 +48,14 @@ export async function GET() {
       spendCreditsToNextTier:
         rewardTier.spendSgdToNextTier !== null ? sgdToCredits(rewardTier.spendSgdToNextTier) : null,
       progressPercent: rewardTier.progressPercent,
+      // 2026-07-22 fulfillment session — a redeemed Premium Tier Upgrade
+      // (rewards catalogue) bumps `tier`/`rebatePercent` above one level for
+      // its duration; baseTier is what the live rolling-window computation
+      // alone would show, for the UI to explain the boost ("Starter,
+      // boosted from Free until 12 Oct").
+      baseTier: rewardTier.baseTier,
+      tierUpgradeActive: rewardTier.tierUpgradeActive,
+      tierUpgradeExpiresAt: rewardTier.tierUpgradeExpiresAt ? rewardTier.tierUpgradeExpiresAt.toISOString() : null,
     },
   });
 }
