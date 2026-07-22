@@ -5,12 +5,19 @@ export type SupplierTier = "free" | "preferred" | "top";
 export type InvoicingCadence = "monthly" | "biweekly" | "weekly";
 
 // Live-computed, not admin-set (Sprint 6.10) — see lib/supplier-tiers.ts.
+// baseTier/tierBoostActive/tierBoostExpiresAt added for the Supplier Rewards
+// Catalogue's `system` (Tier Boost) category — same "boost overrides the
+// displayed/applied tier only, never freezes the live computation" design as
+// the user reward tier's own tierUpgradeActive.
 export interface SupplierTierStats {
   averageRating: number | null;
   ratingCount: number;
   spendCredits: number;
   nextTier: SupplierTier | null;
   progressPercent: number;
+  baseTier: SupplierTier;
+  tierBoostActive: boolean;
+  tierBoostExpiresAt: string | null;
 }
 
 export interface CompanyDetails {

@@ -115,6 +115,31 @@ export interface SupplierTierStatus {
   // same "min of both ratios" idiom as getUserRewardTier's progressPercent.
   // 100 for the top tier, which has no nextTier to progress toward.
   progressPercent: number;
+  // The tier the live rating+spend computation alone would produce, with no
+  // Tier Boost (Supplier Rewards Catalogue, category `system`) applied — see
+  // tierBoostActive below. Equal to `tier` whenever no boost is active. Same
+  // "override the effective tier only, never freeze/reset the underlying
+  // computation" design as the user reward tier's own tier_upgrade boost
+  // (lib/reward-tiers.ts's baseTier/tierUpgradeActive).
+  baseTier: SupplierTier;
+  tierBoostActive: boolean;
+  tierBoostExpiresAt: Date | null;
+}
+
+// 2026-07-23 (Supplier Rewards Catalogue, category `system` — "Tier Boost"):
+// a redeemed boost bumps the company's EFFECTIVE tier one level up for its
+// duration, same non-freezing design as getUserRewardTier's tier_upgrade
+// boost — see that function's own comment for the full reasoning.
+async function getActiveTierBoostExpiry(
+  companyId: bigint,
+  client: Prisma.TransactionClient | typeof prisma,
+  asOf: Date
+): Promise<Date | null> {
+  const active = await client.supplierRewardRedemption.findFirst({
+    where: { companyId, itemCategory: "system", expiresAt: { gt: asOf } },
+    orderBy: { expiresAt: "desc" },
+  });
+  return active?.expiresAt ?? null;
 }
 
 export async function getCompanySupplierTier(
@@ -123,7 +148,13 @@ export async function getCompanySupplierTier(
   asOf: Date = new Date()
 ): Promise<SupplierTierStatus> {
   const stats = await getCompanySupplierTierStats(companyId, client, asOf);
-  const tier = computeSupplierTier(stats.averageRating, stats.spendSgd);
+  const baseTier = computeSupplierTier(stats.averageRating, stats.spendSgd);
+
+  const tierBoostExpiresAt = await getActiveTierBoostExpiry(companyId, client, asOf);
+  // Already-top boosts are a harmless no-op — nextTier(baseTier) is null, so
+  // `?? baseTier` leaves the tier unchanged.
+  const tier = tierBoostExpiresAt ? nextTier(baseTier) ?? baseTier : baseTier;
+
   const next = nextTier(tier);
   const nextDef = next ? SUPPLIER_TIERS.find((def) => def.tier === next)! : null;
 
@@ -143,5 +174,8 @@ export async function getCompanySupplierTier(
     spendSgd: stats.spendSgd,
     nextTier: next,
     progressPercent,
+    baseTier,
+    tierBoostActive: tierBoostExpiresAt !== null,
+    tierBoostExpiresAt,
   };
 }

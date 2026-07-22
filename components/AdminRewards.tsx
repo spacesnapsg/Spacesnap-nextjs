@@ -17,6 +17,7 @@ import {
   type RewardDiscountAppliesTo,
 } from "@/lib/hooks/useAdminRewards";
 import { ApiRequestError } from "@/lib/api-client";
+import SupplierRewardsTab from "@/components/AdminSupplierRewards";
 
 const CATEGORIES: RewardCategory[] = ["discount", "pitch_ticket", "consultancy", "events", "lucky_draw", "tier_upgrade", "consumable"];
 
@@ -548,7 +549,7 @@ function DeleteRewardModal({ item, onCancel, onConfirm }: { item: RewardCatalogu
   );
 }
 
-export default function AdminRewards() {
+function UserCatalogueTab() {
   const { data, isLoading, isError } = useAdminRewards();
   const [modalState, setModalState] = useState<{ open: boolean; item: RewardCatalogueItem | null }>({ open: false, item: null });
   const [deleteTarget, setDeleteTarget] = useState<RewardCatalogueItem | null>(null);
@@ -568,14 +569,7 @@ export default function AdminRewards() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
-      <div className="mb-8">
-        <h1 className="text-3xl sm:text-4xl font-extrabold bg-gradient-to-r from-admin-red-start to-admin-orange-end bg-clip-text text-transparent">
-          Rewards
-        </h1>
-        <p className="text-muted-text mt-1">Manage the redemption catalogue shown to users on the Financials page</p>
-      </div>
-
+    <>
       <Card>
         <div className="flex items-center justify-between gap-4 mb-6">
           <h2 className="text-lg font-semibold text-body-text">Rewards Catalogue</h2>
@@ -609,6 +603,49 @@ export default function AdminRewards() {
 
       <RewardItemModal open={modalState.open} initialItem={modalState.item} onClose={() => setModalState({ open: false, item: null })} />
       <DeleteRewardModal item={deleteTarget} onCancel={() => setDeleteTarget(null)} onConfirm={handleConfirmDelete} />
+    </>
+  );
+}
+
+type MainTab = "user" | "supplier";
+
+const MAIN_TABS: { id: MainTab; label: string }[] = [
+  { id: "user", label: "User Catalogue" },
+  { id: "supplier", label: "Supplier Catalogue" },
+];
+
+export default function AdminRewards() {
+  const [activeTab, setActiveTab] = useState<MainTab>("user");
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
+      <div className="mb-8">
+        <h1 className="text-3xl sm:text-4xl font-extrabold bg-gradient-to-r from-admin-red-start to-admin-orange-end bg-clip-text text-transparent">
+          Rewards
+        </h1>
+        <p className="text-muted-text mt-1">
+          {activeTab === "user"
+            ? "Manage the redemption catalogue shown to users on the Financials page"
+            : "Manage the redemption catalogue shown to suppliers on the Supplier Financials page"}
+        </p>
+      </div>
+
+      <div className="inline-flex bg-card border border-border rounded-full p-1 gap-1 w-fit mb-6">
+        {MAIN_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`h-9 px-4 rounded-full text-sm font-medium transition-colors ${
+              activeTab === tab.id ? "bg-gradient-to-r from-admin-red-start to-admin-orange-end text-white" : "text-muted-text hover:text-body-text"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "user" ? <UserCatalogueTab /> : <SupplierRewardsTab />}
     </div>
   );
 }

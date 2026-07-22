@@ -12,6 +12,8 @@ import {
   TransactionType,
   RewardCatalogueCategory,
   RewardDiscountAppliesTo,
+  SupplierRewardCategory,
+  SupplierReportTargetGroup,
 } from "../app/generated/prisma/client";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -22,6 +24,7 @@ const password = (plain: string) => bcrypt.hashSync(plain, 10);
 async function reset() {
   // Children first, in FK order, so this is safe to re-run.
   await prisma.rewardCatalogueItem.deleteMany();
+  await prisma.supplierRewardCatalogueItem.deleteMany();
   await prisma.quizAnswer.deleteMany();
   await prisma.quizQuestion.deleteMany();
   await prisma.videoCompletion.deleteMany();
@@ -794,6 +797,72 @@ async function main() {
     },
   });
 
+  // --- Supplier rewards catalogue (Sprint 6.10) ----------------------------
+  // Starter rows only, same "not a fixed list" convention as the user-facing
+  // catalogue above — admin can add/edit/delete freely via the Supplier
+  // Catalogue tab on /admin-rewards. Placeholder credit costs, same "use a
+  // random number first" posture the product owner gave for the original
+  // hardcoded PLACEHOLDER_REWARDS UI these rows replace.
+  await prisma.supplierRewardCatalogueItem.create({
+    data: {
+      category: SupplierRewardCategory.report,
+      name: "Targeted Insights Report",
+      description: "A statistics report on your chosen target group.",
+      reportTargetGroups: [SupplierReportTargetGroup.bookings, SupplierReportTargetGroup.equipment, SupplierReportTargetGroup.consumables],
+      creditCost: "800.00",
+      quantityAvailable: null,
+    },
+  });
+  await prisma.supplierRewardCatalogueItem.create({
+    data: {
+      category: SupplierRewardCategory.report,
+      name: "Platform Performance Report",
+      description: "Platform-wide analytics and performance benchmarks.",
+      creditCost: "1200.00",
+      quantityAvailable: null,
+    },
+  });
+  await prisma.supplierRewardCatalogueItem.create({
+    data: {
+      category: SupplierRewardCategory.ad,
+      name: "Popup Ad Campaign",
+      description: "Run a popup ad campaign for your listings.",
+      campaignDurationDays: 7,
+      creditCost: "400.00",
+      quantityAvailable: 10,
+    },
+  });
+  await prisma.supplierRewardCatalogueItem.create({
+    data: {
+      category: SupplierRewardCategory.ad,
+      name: "Spotlight Listing",
+      description: "Ensure your listing appears at the top of search results.",
+      campaignDurationDays: 14,
+      creditCost: "600.00",
+      quantityAvailable: 10,
+    },
+  });
+  await prisma.supplierRewardCatalogueItem.create({
+    data: {
+      category: SupplierRewardCategory.ad,
+      name: "Newsletter Feature",
+      description: "Be featured in our newsletter (EDM).",
+      campaignDurationDays: 1,
+      creditCost: "300.00",
+      quantityAvailable: 5,
+    },
+  });
+  await prisma.supplierRewardCatalogueItem.create({
+    data: {
+      category: SupplierRewardCategory.system,
+      name: "Tier Boost",
+      description: "Temporarily bump your supplier tier for a set duration.",
+      upgradeDurationMonths: 3,
+      creditCost: "1000.00",
+      quantityAvailable: null,
+    },
+  });
+
   console.log("Seed complete:", {
     companies: 3,
     users: 8,
@@ -803,6 +872,7 @@ async function main() {
     trainingSessions: 3,
     bookings: 5,
     rewardCatalogueItems: 7,
+    supplierRewardCatalogueItems: 6,
   });
 }
 

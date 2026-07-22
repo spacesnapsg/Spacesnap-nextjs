@@ -4631,3 +4631,180 @@ unbuilt Stripe payout mechanics) and the separate Supplier Rewards Catalogue
 redemption flow — the latter's own per-category effects (report generation,
 ad campaign duration, tier boost) are still undesigned, same open items
 Sprint 6.10 already flagged.
+
+## Supplier Rewards Catalogue — Schema, Redemption Flow, Admin/Supplier UI (2026-07-23)
+
+Closed the last open item on the Sprint 6.10 "Supplier Rewards Catalogue"
+list — the placeholder-only `SupplierRewardsCatalogueModal.tsx` (hardcoded
+`PLACEHOLDER_REWARDS`, every button disabled with "Coming Soon") now has a
+real schema, a real redemption flow, and admin CRUD, mirroring the
+user-facing Rewards Catalogue (Sprint 6.7/6.8/6.9/6.10 fulfillment) as
+closely as the two domains' actual differences allow.
+
+### Design calls, and why each wasn't re-asked from scratch
+
+Every open question the Sprint 6.10 note left behind had a directly
+analogous, already-confirmed decision sitting elsewhere in this same
+codebase — resolved by applying that precedent, not by guessing or
+re-opening a product conversation for something already settled in spirit:
+
+- **Separate schema, not an extension.** `report`/`ad`/`system` share zero
+  fields with `discount`/`pitch_ticket`/`consultancy`/`events`/`lucky_draw`/
+  `tier_upgrade`/`consumable`, and a redemption here needs to debit a
+  `Company`'s balance, not a `User`'s — the note's own "likely cleaner"
+  lean, just followed through.
+- **`report`/`ad` start `pending`; `system` resolves instantly.** This
+  isn't a new design — it's the identical shape the Sprint 6.10 fulfillment
+  session already gave `pitch_ticket`/`consultancy` (no automation exists,
+  so a human has to fulfil it) versus `tier_upgrade`/`consumable`/`discount`
+  (the effect fires immediately). `report`/`ad` have no report-generation
+  engine or ad-serving system in this codebase either, so the same reasoning
+  applies without modification.
+- **Tier Boost does not freeze/snapshot the underlying tier.** The exact
+  "freeze-and-restore or just stop applying" question was left open in
+  *two* places by the same earlier session (this item, and the user-facing
+  `tier_upgrade`'s own note) — but the user-facing side had already been
+  answered when it shipped: `getUserRewardTier`'s `baseTier`/
+  `tierUpgradeActive` design (live computation keeps running, the boost only
+  overrides what's *displayed/applied*, no reset step needed on expiry).
+  Applying that same answer to the supplier side isn't a fresh guess, it's
+  recognizing the two open questions were actually one question asked twice.
+- **A second admin surface, not a branch on the existing one.** Given the
+  schema came out as a separate model (previous bullet), teaching
+  `AdminRewards.tsx`'s single `RewardItemModal` to also branch on a
+  completely disjoint category set would have made one component do two
+  jobs. A tab switcher (User Catalogue / Supplier Catalogue) inside the
+  existing `/admin-rewards` page instead — same internal-tab idiom this
+  codebase already uses for `AdminUsersCompanies.tsx`'s Users/Companies
+  split, so no new top-level nav item was needed either.
+
+### Schema (migration `20260722162116_supplier_reward_catalogue`)
+
+`SupplierRewardCategory` (`report`/`ad`/`system`) and
+`SupplierReportTargetGroup` (`bookings`/`equipment`/`consumables`) enums.
+`SupplierRewardCatalogueItem` — same shared shape as `RewardCatalogueItem`
+(`active`, `creditCost`, `quantityAvailable`/`redeemedCount`) plus three
+category-specific fields: `reportTargetGroups` (report), `campaignDurationDays`
+(ad — a new, generic field; the old placeholder cards' "week-long"/"priority
+placement" copy was static text, not backed by anything configurable),
+`upgradeDurationMonths` (system, identical to the user-facing
+`tier_upgrade`'s own field). `SupplierRewardRedemption` — company-scoped
+mirror of `RewardRedemption`: `companyId` + `redeemedByUserId` (which member
+actually clicked redeem — display/audit only, the balance and item belong to
+the company) + the same snapshot fields (`itemName`/`itemCategory`/
+`creditCost`) so an admin editing/deleting the catalogue item afterward can't
+reshuffle redemption history. `CompanyTransactionType` gained `earned_spend`
+— the schema's own prior comment on `earned_rebate` had already named this
+catalogue as its anticipated spender. `CompanyTransaction` gained a nullable
+`supplierRewardRedemptionId` FK, same "trace the ledger row back to what
+authorized it" pattern as `Transaction.rewardRedemptionId`.
+
+### `lib/supplier-reward-catalogue.ts` + `lib/supplier-reward-redemptions.ts`
+
+Direct structural mirrors of `lib/reward-catalogue.ts`/`lib/reward-
+redemptions.ts` — same per-category `CATEGORY_FIELDS` allow-list (a field
+not valid for the chosen category is a clean 422), same
+`clearedFieldsForCategory` on a PATCH category change, same row-locked
+(`SELECT ... FOR UPDATE`) redeem transaction. Differences follow directly
+from the design calls above: no partner-picker step (report/ad have no
+`partnerOptions` equivalent), and the balance check is a new
+`assertSufficientCompanyEarnedBalance` (`lib/company-credits.ts`, mirrors
+`assertSufficientEarnedBalance` from `lib/credits.ts`) against
+`getCompanyEarnedBalance` — which itself now sums `earned_rebate` AND
+`earned_spend` together (previously only `earned_rebate`, since nothing
+spent against it before this session), same "purchased/earned as a signed
+sum of both directions" shape as the per-user balance.
+
+### `lib/supplier-tiers.ts` — Tier Boost
+
+`getCompanySupplierTier` gained `getActiveTierBoostExpiry` (checks for an
+unexpired `system`-category `SupplierRewardRedemption`) and now returns
+`baseTier`/`tierBoostActive`/`tierBoostExpiresAt` alongside the existing
+`tier` — `tier` itself becomes `nextTier(baseTier) ?? baseTier` while a boost
+is active, exactly mirroring `getUserRewardTier`'s own `baseTier`/
+`tierUpgradeActive` resolution. `grantCompanyBookingRebate`
+(`lib/company-credits.ts`) already read `getCompanySupplierTier(...).tier`
+to size the completion rebate — unchanged, but now automatically rebates at
+the *boosted* rate while a Tier Boost is active, same as the user-facing
+rebate already did for `tier_upgrade`.
+
+### Routes + frontend
+
+`GET/POST /api/admin/supplier-rewards`, `PATCH/DELETE
+/api/admin/supplier-rewards/[id]` (system-admin-only, mirrors `/api/admin/
+rewards`); `GET /api/supplier/rewards` (active items, any company member),
+`POST /api/supplier/rewards/[id]/redeem`, `GET /api/supplier/rewards/
+redemptions` (mirrors the user-facing `/api/rewards` trio, `requireSupplier()`
+instead of a bare session check); `GET /api/admin/supplier-reward-
+redemptions` + `PATCH .../[id]` (the concierge queue + resolve, mirrors
+`/api/admin/reward-redemptions`). `serializeCompanyDetails`
+(`lib/company.ts`) → `GET /api/supplier/company`'s `tierStats` gained
+`baseTier`/`tierBoostActive`/`tierBoostExpiresAt`.
+
+`components/AdminRewards.tsx`: the former page body became `UserCatalogueTab`,
+wrapped in a new tab switcher; `components/AdminSupplierRewards.tsx` is the
+new tab's content (`RewardItemModal` branches on `report`/`ad`/`system`
+instead of the 7 user-facing categories, same `resetKey` remount-avoidance
+pattern as the original). `components/SupplierRewardsCatalogueModal.tsx`
+rewritten from its hardcoded array to `useSupplierRewardsCatalogue`/
+`useRedeemSupplierReward`/`useMySupplierRewardRedemptions`
+(`lib/hooks/useSupplierRewardsCatalogue.ts`) — same "View redeemed rewards"
+toggle + status badges as the user-facing modal, no partner-picker step.
+`app/(supplier)/supplier-financials/page.tsx`'s `SupplierTierCard` gained a
+"Boosted from Free by a Tier Boost, active until …" line, same copy pattern
+as the user dashboard's own Tier card. Admin Overview
+(`app/(admin)/admin/dashboard/page.tsx`) gained a second
+`SupplierConciergeReviewModal` + "Pending Supplier Concierge Requests" row,
+company-scoped sibling of the existing `ConciergeReviewModal`.
+
+Seeded with the original 6 placeholder items (now real rows, not hardcoded
+UI data) — same "starter rows, not a fixed list, admin can add/edit/delete
+freely" convention as the user catalogue's own seed block.
+
+### Tests
+
+`lib/supplier-reward-redemptions.test.ts` — 10 cases against the real
+dev/test Postgres DB (earned balance seeded directly via an `earned_rebate`
+`CompanyTransaction` row, same convention as `lib/reward-redemptions.test.ts`):
+success (exact ledger debit, `redeemedCount` +1, all three rows written),
+insufficient balance, inactive item, fully-redeemed item, unknown id,
+unlimited-quantity repeat redemption, the Tier Boost single-active guard
+(plus asserting the effective tier actually bumps one level via
+`getCompanySupplierTier`), and `resolveSupplierRewardRedemption`'s
+used/not-pending/not-found paths. Registered in `package.json`'s `test`
+script. `npm test`: **321/321** (up from 311). `npx tsc --noEmit` clean,
+`eslint .` clean on every touched file (same 2 pre-existing errors elsewhere,
+unrelated), `next build` clean with every new route listed.
+
+### Live verification, not just unit-tested
+
+Dev server was stale (predated the migration/schema change — the same
+"kill and restart, `prisma generate` alone doesn't fix an already-running
+server" gotcha this file has now hit several times), restarted before
+testing. Real cookie-jar logins against the dev server/DB:
+
+- **`ben@acmecoworking.sg`** (Acme Coworking, temporarily granted a 2000-
+  credit company earned balance via a direct `psql earned_rebate` insert):
+  opened the real Supplier Rewards Catalogue modal on `/supplier-financials`
+  — all 6 seeded items rendered with real category summaries (target
+  groups, campaign-day placements, tier-boost duration). Redeemed "Popup Ad
+  Campaign" (400 credits, `ad`) — balance dropped exactly 2000→1600 live, no
+  reload; "View redeemed rewards" showed it `PENDING`. Redeemed "Tier Boost"
+  (1000 credits, `system`) — balance dropped to 600; the Supplier Tier card
+  live-updated **Free → Preferred**, invoicing cadence **Monthly → Biweekly**,
+  and showed "Boosted from Free by a Tier Boost, active until 23/10/2026";
+  every catalogue card's affordability state updated correctly (items over
+  600 credits flipped to "Not enough credits").
+- **`alice.admin@spacesnap.sg`**: the Admin Overview page's new "Pending
+  Supplier Concierge Requests" row showed "1 pending"; opening it listed the
+  real row — "Popup Ad Campaign — Acme Coworking Pte Ltd — requested by Ben
+  Ong (ben@acmecoworking.sg)"; "Mark Used" resolved it, the queue emptied
+  live on both the modal and the Overview page's counter.
+- Confirmed via direct `psql` query that both redemption rows landed
+  `used` in `supplier_reward_redemptions`.
+
+All test `company_transactions`/`supplier_reward_redemptions`/`activity_log`
+rows deleted and both items' `redeemed_count` reset to 0 afterward — dev DB
+confirmed back to its exact seeded state (Acme Coworking's `purchased=0,
+earned=0`, zero supplier reward redemptions, "Pending Supplier Concierge
+Requests" back to 0 in the live UI).

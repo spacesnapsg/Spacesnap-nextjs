@@ -87,6 +87,12 @@ function SupplierTierCard() {
         {company && (
           <p className="text-xs text-muted-text mt-1">{CADENCE_LABELS[company.invoicingCadence]} invoicing</p>
         )}
+        {company?.tierStats.tierBoostActive && (
+          <p className="text-xs text-supplier-purple-end mt-1">
+            Boosted from {TIER_LABELS[company.tierStats.baseTier]} by a Tier Boost, active until{" "}
+            {new Date(company.tierStats.tierBoostExpiresAt!).toLocaleDateString()}
+          </p>
+        )}
         {company && nextTier && (
           <div className="mt-3">
             <div className="flex items-center justify-between text-xs text-muted-text mb-1">

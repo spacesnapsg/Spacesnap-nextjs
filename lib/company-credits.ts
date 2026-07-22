@@ -2,6 +2,7 @@ import { Prisma, CompanyTransactionType, type CompanyTransaction } from "@/app/g
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { creditsToSgd } from "@/lib/credit-units";
+import { InsufficientCreditBalanceError } from "@/lib/credits";
 import { getCompanySupplierTier, type SupplierTier } from "@/lib/supplier-tiers";
 
 // A per-COMPANY credit ledger — see CompanyTransaction's own schema comment
@@ -25,10 +26,24 @@ export async function getCompanyEarnedBalance(
   client: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Prisma.Decimal> {
   const agg = await client.companyTransaction.aggregate({
-    where: { companyId, type: CompanyTransactionType.earned_rebate },
+    where: { companyId, type: { in: [CompanyTransactionType.earned_rebate, CompanyTransactionType.earned_spend] } },
     _sum: { amount: true },
   });
   return agg._sum.amount ?? new Prisma.Decimal(0);
+}
+
+// earned-balance counterpart to lib/credits.ts's assertSufficientEarnedBalance,
+// scoped to a company instead of a user. First caller: the Supplier Rewards
+// Catalogue redemption (lib/supplier-reward-redemptions.ts).
+export async function assertSufficientCompanyEarnedBalance(
+  tx: Prisma.TransactionClient,
+  companyId: bigint,
+  cost: Prisma.Decimal
+): Promise<void> {
+  const balance = await getCompanyEarnedBalance(companyId, tx);
+  if (balance.lt(cost)) {
+    throw new InsufficientCreditBalanceError(balance, cost);
+  }
 }
 
 export function parseCompanyTopUpAmount(body: unknown): Prisma.Decimal {

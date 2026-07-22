@@ -16,6 +16,10 @@ import {
 import { usePendingPromotions } from "@/lib/hooks/usePromotions";
 import { useAdminFinancials } from "@/lib/hooks/useAdminFinancials";
 import { usePendingConciergeRedemptions, useResolveRewardRedemption } from "@/lib/hooks/useAdminRewardRedemptions";
+import {
+  usePendingSupplierConciergeRedemptions,
+  useResolveSupplierRewardRedemption,
+} from "@/lib/hooks/useAdminSupplierRewardRedemptions";
 import { ApiRequestError } from "@/lib/api-client";
 
 function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Users }) {
@@ -201,20 +205,86 @@ function ConciergeReviewModal({ open, onClose }: { open: boolean; onClose: () =>
   );
 }
 
+// The report/ad "concierge" queue for the SUPPLIER-facing rewards catalogue
+// (Sprint 6.10) — company-scoped sibling of ConciergeReviewModal above. No
+// partner-selection concept here (report/ad items have no partnerOptions),
+// so the row is a plain name/company display, not a selectedPartnerOption.
+function SupplierConciergeReviewModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data: redemptions } = usePendingSupplierConciergeRedemptions();
+  const resolve = useResolveSupplierRewardRedemption();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleResolve(id: string, status: "used" | "cancelled") {
+    setError(null);
+    resolve.mutate(
+      { id, status },
+      { onError: (e) => setError(e instanceof ApiRequestError ? e.message : "Something went wrong.") }
+    );
+  }
+
+  const list = redemptions ?? [];
+
+  return (
+    <Modal open={open} onClose={onClose} className="w-full max-w-[560px]">
+      <h2 className="text-xl font-semibold text-body-text mb-1">Pending Supplier Concierge Requests</h2>
+      <p className="text-sm text-muted-text mb-6">
+        Generate the report or arrange the ad placement, then mark the request as done.
+      </p>
+
+      {error && <p className="text-sm text-error-red mb-4">{error}</p>}
+
+      {list.length === 0 ? (
+        <p className="text-sm text-muted-text text-center py-8">No pending supplier concierge requests.</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {list.map((redemption) => (
+            <div key={redemption.id} className="border border-border rounded p-4">
+              <p className="font-medium text-body-text">{redemption.itemName}</p>
+              <p className="text-xs text-muted-text mt-1">
+                {redemption.company.name} — requested by {redemption.redeemedByUser.name} ({redemption.redeemedByUser.email})
+              </p>
+              <div className="flex items-center gap-2 mt-3">
+                <Button
+                  disabled={resolve.isPending && resolve.variables?.id === redemption.id}
+                  onClick={() => handleResolve(redemption.id, "used")}
+                  className="!bg-gradient-to-r !from-admin-red-start !to-admin-orange-end h-9 px-4 text-sm"
+                >
+                  Mark Used
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={resolve.isPending && resolve.variables?.id === redemption.id}
+                  onClick={() => handleResolve(redemption.id, "cancelled")}
+                  className="h-9 px-4 text-sm"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export default function AdminOverviewPage() {
   const router = useRouter();
   const [certModalOpen, setCertModalOpen] = useState(false);
   const [conciergeModalOpen, setConciergeModalOpen] = useState(false);
+  const [supplierConciergeModalOpen, setSupplierConciergeModalOpen] = useState(false);
   const { data: usersData } = useAdminUsers();
   const { data: pendingCertificates } = usePendingCertificates();
   const { data: pendingPromotions } = usePendingPromotions();
   const { data: financials } = useAdminFinancials();
   const { data: pendingConcierge } = usePendingConciergeRedemptions();
+  const { data: pendingSupplierConcierge } = usePendingSupplierConciergeRedemptions();
 
   const totalUsers = usersData?.meta.total;
   const certCount = pendingCertificates?.length ?? 0;
   const promotionCount = pendingPromotions?.length ?? 0;
   const conciergeCount = pendingConcierge?.length ?? 0;
+  const supplierConciergeCount = pendingSupplierConcierge?.length ?? 0;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -277,11 +347,18 @@ export default function AdminOverviewPage() {
             count={conciergeCount}
             onReview={() => setConciergeModalOpen(true)}
           />
+          <ApprovalRow
+            icon={Handshake}
+            label="Pending Supplier Concierge Requests"
+            count={supplierConciergeCount}
+            onReview={() => setSupplierConciergeModalOpen(true)}
+          />
         </div>
       </Card>
 
       <CertificateReviewModal open={certModalOpen} onClose={() => setCertModalOpen(false)} />
       <ConciergeReviewModal open={conciergeModalOpen} onClose={() => setConciergeModalOpen(false)} />
+      <SupplierConciergeReviewModal open={supplierConciergeModalOpen} onClose={() => setSupplierConciergeModalOpen(false)} />
     </div>
   );
 }

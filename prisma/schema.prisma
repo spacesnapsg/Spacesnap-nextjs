@@ -234,6 +234,12 @@ enum ActivityActionType {
   // as a discount line; this is a standalone catalogue redemption).
   reward_redeemed
 
+  // Supplier Rewards Catalogue redemption (lib/supplier-reward-redemptions.ts,
+  // Sprint 6.10) — a company spending its own earned_rebate CompanyTransaction
+  // balance on a SupplierRewardCatalogueItem. Distinct from reward_redeemed
+  // above (that's a user spending their own personal earnedBalance).
+  supplier_reward_redeemed
+
   @@map("activity_action_type")
 }
 
@@ -504,29 +510,39 @@ enum CompanyTransactionType {
   // session's own inference, not confirmed with the product owner — see
   // COMPANY_REBATE_PERCENT's own comment in lib/company-credits.ts.
   earned_rebate
+  // A company spending its own earned_rebate balance on a
+  // SupplierRewardCatalogueItem (lib/supplier-reward-redemptions.ts, Sprint
+  // 6.10 — the spender this type's own comment above already anticipated).
+  // Negative amount, same sign convention as the per-user earned_spend
+  // Transaction type.
+  earned_spend
 
   @@map("company_transaction_type")
 }
 
 model CompanyTransaction {
-  id        BigInt                 @id @default(autoincrement())
-  companyId BigInt                 @map("company_id")
+  id                         BigInt                 @id @default(autoincrement())
+  companyId                  BigInt                 @map("company_id")
   // Who triggered a purchased_topup — null for an earned_rebate row, which
   // isn't any one member's action (it's paid out automatically on booking
   // completion).
-  userId    String?                @map("user_id")
+  userId                     String?                @map("user_id")
   // Set only on an earned_rebate row — ties it back to the booking that
   // earned it, same "trace the ledger row back to what authorized it"
   // pattern as Transaction.rewardGrantId/bookingCreditId.
-  bookingId BigInt?                @map("booking_id")
-  type      CompanyTransactionType
-  amount    Decimal                @db.Decimal(10, 2)
-  description String?
-  createdAt DateTime               @default(now()) @map("created_at")
+  bookingId                  BigInt?                @map("booking_id")
+  // Set only on an earned_spend row — ties it back to the Supplier Rewards
+  // Catalogue redemption that debited it.
+  supplierRewardRedemptionId BigInt?                @map("supplier_reward_redemption_id")
+  type                       CompanyTransactionType
+  amount                     Decimal                @db.Decimal(10, 2)
+  description                String?
+  createdAt                  DateTime               @default(now()) @map("created_at")
 
-  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  company                  Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user                     User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  booking                  Booking?                  @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  supplierRewardRedemption SupplierRewardRedemption? @relation(fields: [supplierRewardRedemptionId], references: [id], onDelete: SetNull)
 
   @@index([companyId])
   @@map("company_transactions")
@@ -609,7 +625,7 @@ model RewardCatalogueItem {
   // Universal to every category (2026-07-22 addition, caught late by the
   // product owner after the initial per-category fields shipped) — how many
   // earned credits a redemption of this item costs.
-  creditCost Decimal @default(0) @db.Decimal(10, 2) @map("credit_cost")
+  creditCost        Decimal @default(0) @map("credit_cost") @db.Decimal(10, 2)
   // Total redemptions admin is willing to give out, null = unlimited. Once
   // redeemedCount reaches this, the item is "Fully Redeemed" (see
   // isFullyRedeemed, lib/reward-catalogue.ts) and should stop being
@@ -617,13 +633,13 @@ model RewardCatalogueItem {
   // in this codebase yet (see Sprint 6.6/6.7's own notes), so this can
   // never actually increment yet. Building the capacity fields ahead of
   // that flow, same as this catalogue's other schema-before-wiring gaps.
-  quantityAvailable Int? @map("quantity_available")
+  quantityAvailable Int?    @map("quantity_available")
   // Never client-settable (no admin PATCH field for this) — only a real
   // future redemption endpoint should ever increment it.
-  redeemedCount Int @default(0) @map("redeemed_count")
+  redeemedCount     Int     @default(0) @map("redeemed_count")
 
   // category: discount
-  discountPercent   Decimal?                  @db.Decimal(5, 2) @map("discount_percent")
+  discountPercent   Decimal?                  @map("discount_percent") @db.Decimal(5, 2)
   discountAppliesTo RewardDiscountAppliesTo[] @default([]) @map("discount_applies_to")
 
   // category: pitch_ticket + consultancy share this ("which partners can the
@@ -632,10 +648,10 @@ model RewardCatalogueItem {
   // partner at redemption time (RewardRedemption.selectedPartnerOption), one
   // admin-managed catalogue item can now offer several partners instead of
   // needing a separate item per partner.
-  partnerOptions String[] @default([]) @map("partner_options")
+  partnerOptions     String[] @default([]) @map("partner_options")
   // category: consultancy only — free text, not a dropdown; subject varies
   // too much to enumerate ("Legal? Accounting? HR?")
-  consultancySubject String? @map("consultancy_subject")
+  consultancySubject String?  @map("consultancy_subject")
 
   // category: events
   eventName String? @map("event_name")
@@ -692,19 +708,19 @@ enum RewardRedemptionStatus {
 // out what the user actually redeemed. rewardCatalogueItemId is therefore
 // nullable/SetNull, not the source of truth for display.
 model RewardRedemption {
-  id                    BigInt                   @id @default(autoincrement())
-  userId                String                   @map("user_id")
-  rewardCatalogueItemId BigInt?                  @map("reward_catalogue_item_id")
-  itemName              String                   @map("item_name")
-  itemCategory          RewardCatalogueCategory  @map("item_category")
-  creditCost            Decimal                  @db.Decimal(10, 2) @map("credit_cost")
-  status                RewardRedemptionStatus   @default(used)
+  id                    BigInt                  @id @default(autoincrement())
+  userId                String                  @map("user_id")
+  rewardCatalogueItemId BigInt?                 @map("reward_catalogue_item_id")
+  itemName              String                  @map("item_name")
+  itemCategory          RewardCatalogueCategory @map("item_category")
+  creditCost            Decimal                 @map("credit_cost") @db.Decimal(10, 2)
+  status                RewardRedemptionStatus  @default(used)
   // category: pitch_ticket + consultancy only — which of the item's
   // partnerOptions the user picked at redemption time. Snapshotted (not a
   // live lookup into the item's own list) for the same reason
   // itemName/itemCategory are — an admin later editing the item's partner
   // list must never reshuffle what a user already selected.
-  selectedPartnerOption String?                  @map("selected_partner_option")
+  selectedPartnerOption String?                 @map("selected_partner_option")
   // category: tier_upgrade only — createdAt + the item's upgradeDurationMonths
   // AT REDEMPTION TIME, resolved and stored once (same "snapshot, don't
   // recompute against a possibly-deleted item" discipline as creditCost/
@@ -713,15 +729,121 @@ model RewardRedemption {
   // redemption while one's expiresAt is still in the future) and as the
   // window lib/reward-tiers.ts's getUserRewardTier reads to decide whether
   // to apply the one-tier boost.
-  expiresAt             DateTime?                @map("expires_at")
-  createdAt             DateTime                 @default(now()) @map("created_at")
+  expiresAt             DateTime?               @map("expires_at")
+  createdAt             DateTime                @default(now()) @map("created_at")
 
-  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  rewardCatalogueItem RewardCatalogueItem?  @relation(fields: [rewardCatalogueItemId], references: [id], onDelete: SetNull)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rewardCatalogueItem RewardCatalogueItem? @relation(fields: [rewardCatalogueItemId], references: [id], onDelete: SetNull)
   transactions        Transaction[]
 
   @@index([userId])
   @@map("reward_redemptions")
+}
+
+// Category for the SUPPLIER-facing (company) rewards catalogue — deliberately
+// a separate model tree from RewardCatalogueCategory above, not an extension
+// of it: report/ad/system share zero fields with discount/pitch_ticket/.../
+// consumable, and redemption here debits a Company's own earned_rebate
+// CompanyTransaction balance, not any individual user's earnedBalance. See
+// SPRINT_PLAN_NEXTJS_REWRITE.md Sprint 6.10 "Supplier Rewards Catalogue" for
+// the full design history.
+enum SupplierRewardCategory {
+  report
+  ad
+  system
+
+  @@map("supplier_reward_category")
+}
+
+// category: report, "Targeted Insights Report" only — which slice of the
+// company's own data the report covers, multi-select. "Platform Performance
+// Report" (the other seeded report item) has no extra fields, an empty array
+// here.
+enum SupplierReportTargetGroup {
+  bookings
+  equipment
+  consumables
+
+  @@map("supplier_report_target_group")
+}
+
+// report/ad redemptions have no automation behind them — no report-generation
+// engine, no ad-serving system exists anywhere in this codebase — so they
+// start pending and an admin fulfils the request out-of-band, then marks it
+// used/cancelled. Mirrors RewardRedemptionStatus's pitch_ticket/consultancy
+// precedent exactly. system (Tier Boost) redemptions resolve instantly, same
+// as tier_upgrade on the user-facing catalogue.
+enum SupplierRewardRedemptionStatus {
+  pending
+  used
+  cancelled
+
+  @@map("supplier_reward_redemption_status")
+}
+
+model SupplierRewardCatalogueItem {
+  id          BigInt                 @id @default(autoincrement())
+  category    SupplierRewardCategory
+  name        String
+  description String
+  active      Boolean                @default(true)
+
+  creditCost        Decimal @default(0) @map("credit_cost") @db.Decimal(10, 2)
+  quantityAvailable Int?    @map("quantity_available")
+  redeemedCount     Int     @default(0) @map("redeemed_count")
+
+  // category: report ("Targeted Insights Report" only)
+  reportTargetGroups SupplierReportTargetGroup[] @default([]) @map("report_target_groups")
+
+  // category: ad — length of the campaign/placement window in days, replaces
+  // the old hardcoded "week-long"/"priority placement" static copy the
+  // placeholder UI shipped with.
+  campaignDurationDays Int? @map("campaign_duration_days")
+
+  // category: system (Tier Boost) — same shape/semantics as
+  // RewardCatalogueItem.upgradeDurationMonths above.
+  upgradeDurationMonths Int? @map("upgrade_duration_months")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  redemptions SupplierRewardRedemption[]
+
+  @@map("supplier_reward_catalogue_items")
+}
+
+// A company spending its own earned_rebate CompanyTransaction balance on a
+// SupplierRewardCatalogueItem — the company-scoped mirror of RewardRedemption.
+// redeemedByUserId records which member actually clicked redeem (display/
+// audit only — the balance and the item belong to the company, not that
+// member personally). itemName/itemCategory/creditCost snapshotted at
+// redemption time, same reasoning as RewardRedemption's own fields.
+model SupplierRewardRedemption {
+  id                            BigInt                         @id @default(autoincrement())
+  companyId                     BigInt                         @map("company_id")
+  redeemedByUserId              String                         @map("redeemed_by_user_id")
+  supplierRewardCatalogueItemId BigInt?                        @map("supplier_reward_catalogue_item_id")
+  itemName                      String                         @map("item_name")
+  itemCategory                  SupplierRewardCategory         @map("item_category")
+  creditCost                    Decimal                        @map("credit_cost") @db.Decimal(10, 2)
+  status                        SupplierRewardRedemptionStatus @default(used)
+  // category: system (Tier Boost) only — createdAt + the item's
+  // upgradeDurationMonths AT REDEMPTION TIME, resolved and stored once.
+  // Doubles as the "is a boost currently active" check
+  // (lib/supplier-reward-redemptions.ts rejects a second system redemption
+  // while one's expiresAt is still in the future) and as what
+  // lib/supplier-tiers.ts reads to decide whether to bump the displayed
+  // tier — same dual role as RewardRedemption.expiresAt for tier_upgrade.
+  expiresAt                     DateTime?                      @map("expires_at")
+  createdAt                     DateTime                       @default(now()) @map("created_at")
+
+  company                     Company                      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  redeemedByUser              User                         @relation(fields: [redeemedByUserId], references: [id], onDelete: Cascade)
+  supplierRewardCatalogueItem SupplierRewardCatalogueItem? @relation(fields: [supplierRewardCatalogueItemId], references: [id], onDelete: SetNull)
+  companyTransactions         CompanyTransaction[]
+
+  @@index([companyId])
+  @@map("supplier_reward_redemptions")
 }
 
 // ---------------------------------------------------------------------------
@@ -775,36 +897,37 @@ model VerificationToken {
 // ---------------------------------------------------------------------------
 
 model Company {
-  id                   BigInt       @id @default(autoincrement())
+  id                   BigInt   @id @default(autoincrement())
   name                 String
-  businessName         String?      @map("business_name")
-  businessDescription  String?      @map("business_description")
-  contactEmail         String?      @map("contact_email")
-  businessLocation     String?      @map("business_location")
-  yearsOperating       Int?         @map("years_operating")
+  businessName         String?  @map("business_name")
+  businessDescription  String?  @map("business_description")
+  contactEmail         String?  @map("contact_email")
+  businessLocation     String?  @map("business_location")
+  yearsOperating       Int?     @map("years_operating")
   // Added for the supplier profile "Business Details" edit form — the
   // registration number and finance contact fields the old CODEBASE_SUMMARY.md
   // gap note said had no backing columns at all (distinct from contactEmail,
   // which is the company's general contact address, not accounts/finance).
-  registrationNumber   String?      @map("registration_number")
-  financeContactEmail  String?      @map("finance_contact_email")
-  financeContactPerson String?      @map("finance_contact_person")
+  registrationNumber   String?  @map("registration_number")
+  financeContactEmail  String?  @map("finance_contact_email")
+  financeContactPerson String?  @map("finance_contact_person")
   // Supplier payment tier (free/preferred/top) is deliberately NOT a column
   // here — it's live-computed from rating + rolling-window spend
   // (lib/supplier-tiers.ts, Sprint 6.10, confirmed with the product owner
   // 2026-07-22). It was a manual admin-set column/route until this session;
   // both were removed rather than left to fight the automatic calculation
   // (migration `20260722_remove_supplier_tier_column`).
-  createdAt            DateTime     @default(now()) @map("created_at")
-  updatedAt            DateTime     @updatedAt @map("updated_at")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
-  users               User[]
-  listings            Listing[]
-  certificates        Certificate[]
-  trainingVideos      TrainingVideo[]
-  trainingSessions    TrainingSession[]
-  supplierPayables    SupplierPayable[]
-  companyTransactions CompanyTransaction[]
+  users                     User[]
+  listings                  Listing[]
+  certificates              Certificate[]
+  trainingVideos            TrainingVideo[]
+  trainingSessions          TrainingSession[]
+  supplierPayables          SupplierPayable[]
+  companyTransactions       CompanyTransaction[]
+  supplierRewardRedemptions SupplierRewardRedemption[]
 
   @@map("companies")
 }
@@ -855,36 +978,37 @@ model User {
   createdAt              DateTime   @default(now()) @map("created_at")
   updatedAt              DateTime   @updatedAt @map("updated_at")
 
-  company      Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  referredBy   User?    @relation("UserReferrals", fields: [referredByUserId], references: [id], onDelete: SetNull)
-  referredUsers User[]  @relation("UserReferrals")
+  company       Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  referredBy    User?    @relation("UserReferrals", fields: [referredByUserId], references: [id], onDelete: SetNull)
+  referredUsers User[]   @relation("UserReferrals")
 
   accounts Account[]
   sessions Session[]
 
-  reviewedCertificates    Certificate[]               @relation("CertificateReviewer")
-  userCertificates        UserCertificate[]
-  signoffRequests         CertificateSignoffRequest[]
-  reviewedSignoffRequests CertificateSignoffRequest[] @relation("SignoffReviewer")
-  videoCompletions        VideoCompletion[]
-  bookings                Booking[]
-  bulkOrderRequests       BulkOrderRequest[]
-  purchases               Purchase[]
-  transactions            Transaction[]
-  checkIns                CheckIn[]
-  activityLogs            ActivityLog[]
-  trainingEnrollments     TrainingEnrollment[]
-  ratings                 Rating[]
-  quizAttempts            QuizAttempt[]
-  creditHolds             CreditHold[]
-  postedGigTasks          GigTask[]                   @relation("GigTaskPoster")
-  gigAssignments          GigAssignment[]             @relation("GigAssignmentWorker")
-  rewardGrants            RewardGrant[]
-  bookingCredits          BookingCredit[]
-  notifications           Notification[]
-  referralSpendBonuses    ReferralSpendBonus[]
-  rewardRedemptions       RewardRedemption[]
-  companyTransactions     CompanyTransaction[]
+  reviewedCertificates      Certificate[]               @relation("CertificateReviewer")
+  userCertificates          UserCertificate[]
+  signoffRequests           CertificateSignoffRequest[]
+  reviewedSignoffRequests   CertificateSignoffRequest[] @relation("SignoffReviewer")
+  videoCompletions          VideoCompletion[]
+  bookings                  Booking[]
+  bulkOrderRequests         BulkOrderRequest[]
+  purchases                 Purchase[]
+  transactions              Transaction[]
+  checkIns                  CheckIn[]
+  activityLogs              ActivityLog[]
+  trainingEnrollments       TrainingEnrollment[]
+  ratings                   Rating[]
+  quizAttempts              QuizAttempt[]
+  creditHolds               CreditHold[]
+  postedGigTasks            GigTask[]                   @relation("GigTaskPoster")
+  gigAssignments            GigAssignment[]             @relation("GigAssignmentWorker")
+  rewardGrants              RewardGrant[]
+  bookingCredits            BookingCredit[]
+  notifications             Notification[]
+  referralSpendBonuses      ReferralSpendBonus[]
+  rewardRedemptions         RewardRedemption[]
+  companyTransactions       CompanyTransaction[]
+  supplierRewardRedemptions SupplierRewardRedemption[]
 
   @@map("users")
 }
@@ -1213,8 +1337,8 @@ model Booking {
   transactions         Transaction[]
   checkIns             CheckIn[]
   rating               Rating?
-  bookingCreditsIssued BookingCredit[]  @relation("BookingCreditSource")
-  bookingCreditsSpent  BookingCredit[]  @relation("BookingCreditAppliedTo")
+  bookingCreditsIssued BookingCredit[]      @relation("BookingCreditSource")
+  bookingCreditsSpent  BookingCredit[]      @relation("BookingCreditAppliedTo")
   supplierPayable      SupplierPayable?
   notifications        Notification[]
   companyTransactions  CompanyTransaction[]
@@ -1253,17 +1377,17 @@ model Rating {
 // this sprint only wires the write path; verify by querying this table
 // directly after performing a hooked action.
 model ActivityLog {
-  id                      BigInt             @id @default(autoincrement())
-  userId                  String             @map("user_id")
-  actionType              ActivityActionType @map("action_type")
-  description             String
-  relatedListingId        BigInt?            @map("related_listing_id")
+  id                       BigInt             @id @default(autoincrement())
+  userId                   String             @map("user_id")
+  actionType               ActivityActionType @map("action_type")
+  description              String
+  relatedListingId         BigInt?            @map("related_listing_id")
   // Same idiom as relatedListingId — lets the training_enrolled/
   // training_waitlisted/training_waitlist_approved rows link back to the
   // actual TrainingSession (for a clickable feed entry opening its detail
   // modal) instead of the frontend parsing an id out of the description text.
-  relatedTrainingSessionId BigInt?           @map("related_training_session_id")
-  createdAt               DateTime           @default(now()) @map("created_at")
+  relatedTrainingSessionId BigInt?            @map("related_training_session_id")
+  createdAt                DateTime           @default(now()) @map("created_at")
 
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing         Listing?         @relation(fields: [relatedListingId], references: [id], onDelete: SetNull)
