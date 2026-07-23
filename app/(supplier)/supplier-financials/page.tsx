@@ -223,7 +223,7 @@ function PlatformRevenueCard() {
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="label" stroke="#9ca3af" fontSize={12} />
               <YAxis stroke="#9ca3af" fontSize={12} />
-              <Tooltip content={<RevenueTooltip />} />
+              <Tooltip content={<RevenueTooltip />} cursor={{ fill: "#ffffff", opacity: 0.06 }} />
               <Bar dataKey="space" name="Space" fill="#9333ea" radius={[4, 4, 0, 0]} isAnimationActive={false} />
               <Bar dataKey="equipment" name="Equipment" fill="#1a9d96" radius={[4, 4, 0, 0]} isAnimationActive={false} />
               <Bar dataKey="consumable" name="Consumables" fill="#f59e0b" radius={[4, 4, 0, 0]} isAnimationActive={false} />

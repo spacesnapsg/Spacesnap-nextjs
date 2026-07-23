@@ -92,6 +92,7 @@ export default function SupplierAnalyticsPage() {
                     fontSize: 13,
                   }}
                   labelStyle={{ color: "#e5e7eb" }}
+                  cursor={{ fill: "#ffffff", opacity: 0.06 }}
                 />
                 <Bar dataKey="revenue" fill="#9333ea" radius={[4, 4, 0, 0]} isAnimationActive={false} />
               </BarChart>
