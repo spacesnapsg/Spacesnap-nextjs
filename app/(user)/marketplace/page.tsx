@@ -14,6 +14,7 @@ import {
   MapPin,
   Package,
   Search,
+  Wrench,
   X,
 } from "lucide-react";
 import Button from "@/components/Button";
@@ -21,6 +22,7 @@ import Input from "@/components/Input";
 import BookingModal from "@/components/BookingModal";
 import RequestPurchaseModal from "@/components/RequestPurchaseModal";
 import RatingDisplay from "@/components/RatingDisplay";
+import CustomRequirementsModal from "@/components/CustomRequirementsModal";
 import { useListings, type Listing, type ListingType } from "@/lib/hooks/useListings";
 import { useCredentials, isCredentialHeld, type Credential } from "@/lib/hooks/useCredentials";
 
@@ -448,6 +450,58 @@ function MapView({
   );
 }
 
+function CustomRequirementsSection({
+  onMembershipInquiry,
+  onConsultationRequest,
+}: {
+  onMembershipInquiry: () => void;
+  onConsultationRequest: () => void;
+}) {
+  return (
+    <div className="mt-12">
+      <div className="text-center mb-6">
+        <h2 className="text-2xl font-bold text-body-text">Can&apos;t Find What You Need?</h2>
+        <p className="text-muted-text mt-1">We offer specialized services for custom requirements</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-card border border-border/10 rounded-card p-6">
+          <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-user-teal-start to-user-teal-end flex items-center justify-center mb-4">
+            <Building2 size={22} className="text-white" />
+          </div>
+          <h3 className="font-semibold text-body-text mb-2">Dedicated Space Membership</h3>
+          <p className="text-sm text-muted-text mb-5">
+            Need dedicated, long-term access (1+ years)? We connect you with verified space partners offering
+            membership plans for ongoing access to labs, kitchens, and workspaces tailored to your needs.
+          </p>
+          <Button onClick={onMembershipInquiry} className="w-full">
+            Submit Membership Inquiry
+          </Button>
+        </div>
+
+        <div className="bg-card border border-border/10 rounded-card p-6">
+          <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-supplier-purple-start to-supplier-purple-end flex items-center justify-center mb-4">
+            <Wrench size={22} className="text-white" />
+          </div>
+          <h3 className="font-semibold text-body-text mb-2">Infrastructure Consultancy</h3>
+          <p className="text-sm text-muted-text mb-5">
+            Got a need that doesn&apos;t fit a listing? Renovations, space planning, equipment sourcing,
+            consumables, logistics — whatever it is, our expert consultants and partners work with you to
+            sort it out.
+          </p>
+          <Button
+            variant="ghost"
+            onClick={onConsultationRequest}
+            className="w-full !border-0 !text-white bg-gradient-to-r from-supplier-purple-start to-supplier-purple-end"
+          >
+            Request Consultation
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MarketplacePage() {
   const [showStatusStrip, setShowStatusStrip] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
@@ -456,6 +510,7 @@ export default function MarketplacePage() {
   const [bookingListing, setBookingListing] = useState<Listing | null>(null);
   const [requestListing, setRequestListing] = useState<Listing | null>(null);
   const [requestMode, setRequestMode] = useState<"quick" | "bulk">("bulk");
+  const [requirementsModal, setRequirementsModal] = useState<"membership" | "consultancy" | null>(null);
 
   function handleRequestPurchase(listing: Listing, mode: "quick" | "bulk") {
     setRequestListing(listing);
@@ -591,7 +646,18 @@ export default function MarketplacePage() {
             onRequestPurchase={handleRequestPurchase}
           />
         )}
+
+        <CustomRequirementsSection
+          onMembershipInquiry={() => setRequirementsModal("membership")}
+          onConsultationRequest={() => setRequirementsModal("consultancy")}
+        />
       </div>
+
+      <CustomRequirementsModal
+        open={requirementsModal !== null}
+        onClose={() => setRequirementsModal(null)}
+        type={requirementsModal ?? "membership"}
+      />
 
       <BookingModal
         key={bookingListing?.id ?? "none"}
