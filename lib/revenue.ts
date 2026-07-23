@@ -127,48 +127,6 @@ export async function getRevenueTransactionFeed(limit = 25): Promise<RevenueTran
   });
 }
 
-export interface MonthlyRevenue {
-  month: string; // "YYYY-MM"
-  revenue: string;
-}
-
-// Supplier Dashboard "Revenue Over Time" — scoped to the caller's own
-// company, last `months` calendar months (including the current one).
-export async function getCompanyRevenueByMonth(companyId: bigint, months = 6): Promise<MonthlyRevenue[]> {
-  const since = new Date();
-  since.setDate(1);
-  since.setHours(0, 0, 0, 0);
-  since.setMonth(since.getMonth() - (months - 1));
-
-  const transactions = await prisma.transaction.findMany({
-    where: {
-      type: { in: REVENUE_TRANSACTION_TYPES },
-      createdAt: { gte: since },
-      OR: [
-        { booking: { listing: { companyId } } },
-        { bulkOrderRequest: { listing: { companyId } } },
-        { purchase: { listing: { companyId } } },
-      ],
-    },
-    select: { amount: true, createdAt: true },
-  });
-
-  const buckets = new Map<string, Prisma.Decimal>();
-  for (const t of transactions) {
-    const key = `${t.createdAt.getFullYear()}-${String(t.createdAt.getMonth() + 1).padStart(2, "0")}`;
-    buckets.set(key, (buckets.get(key) ?? new Prisma.Decimal(0)).plus(t.amount));
-  }
-
-  const result: MonthlyRevenue[] = [];
-  const cursor = new Date(since);
-  for (let i = 0; i < months; i++) {
-    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-    result.push({ month: key, revenue: formatAsCredits((buckets.get(key) ?? new Prisma.Decimal(0)).negated()) });
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
-  return result;
-}
-
 export interface CompanyRevenueByTypeMonth {
   month: string; // "YYYY-MM"
   // Numeric "credits" values (this app's cosmetic display unit) — the chart

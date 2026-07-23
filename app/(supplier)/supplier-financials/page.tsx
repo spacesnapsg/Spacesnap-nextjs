@@ -1,15 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { useSession } from "next-auth/react";
 import { Trophy, Wallet, Gift, Landmark } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Card from "@/components/Card";
+import Pagination from "@/components/Pagination";
+import DateRangePicker from "@/components/DateRangePicker";
 import SupplierRewardsCatalogueModal from "@/components/SupplierRewardsCatalogueModal";
 import SupplierTierBenefitsModal from "@/components/SupplierTierBenefitsModal";
 import CompanyTopUpModal from "@/components/CompanyTopUpModal";
 import { useSupplierCompany, type SupplierTier } from "@/lib/hooks/useSupplierCompany";
-import { useSupplierRevenueByType } from "@/lib/hooks/useSupplierRevenue";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
+import { useCompanyTransactions } from "@/lib/hooks/useCompanyTransactions";
+import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
 
 const TIER_LABELS: Record<SupplierTier, string> = {
   free: "Free",
@@ -33,37 +36,6 @@ const NEXT_TIER: Record<SupplierTier, { label: string; requirement: string } | n
   preferred: { label: "Top", requirement: "4.5★ rating & 100,000 credits spend" },
   top: null,
 };
-
-function Pills<T extends string>({
-  options,
-  labels,
-  active,
-  onChange,
-}: {
-  options: T[];
-  labels: Record<T, string>;
-  active: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((option) => (
-        <button
-          key={option}
-          type="button"
-          onClick={() => onChange(option)}
-          className={`h-8 px-3 rounded-full text-xs font-medium border transition-colors ${
-            active === option
-              ? "bg-supplier-purple-start/15 border-supplier-purple-start text-supplier-purple-end"
-              : "bg-card border-border text-muted-text hover:text-body-text"
-          }`}
-        >
-          {labels[option]}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function SupplierTierCard() {
   const { data: company, isLoading } = useSupplierCompany();
@@ -142,107 +114,67 @@ function SupplierTierCard() {
   );
 }
 
-type RevenueRange = "3m" | "6m" | "12m";
-
-const REVENUE_RANGE_LABELS: Record<RevenueRange, string> = {
-  "3m": "3 Months",
-  "6m": "6 Months",
-  "12m": "12 Months",
-};
-
-// "YYYY-MM" -> short month label ("2026-08" -> "Aug") for the chart's X axis.
-// Uses UTC so the label matches the month the server bucketed by, regardless
-// of the viewer's timezone.
-function shortMonthLabel(month: string): string {
-  const [year, m] = month.split("-").map(Number);
-  return new Date(Date.UTC(year, m - 1, 1)).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
-}
-
-interface RevenueTooltipPayloadEntry {
-  name: string;
-  value: number;
-  color: string;
-}
-
-function RevenueTooltip({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
-  payload?: RevenueTooltipPayloadEntry[];
-  label?: string;
-}) {
-  if (!active || !payload || payload.length === 0) return null;
-  const sum = payload.reduce((acc, entry) => acc + entry.value, 0);
-
-  return (
-    <div className="rounded-lg border border-border bg-[#151a23] px-3 py-2 text-xs">
-      <p className="text-body-text font-medium mb-1">{label}</p>
-      {payload.map((entry) => (
-        <p key={entry.name} style={{ color: entry.color }}>
-          {entry.name}: {entry.value} credits
-        </p>
-      ))}
-      <p className="text-body-text font-semibold mt-1 pt-1 border-t border-border/40">
-        Total: {sum} credits
-      </p>
-    </div>
-  );
-}
-
-function PlatformRevenueCard() {
-  const [range, setRange] = useState<RevenueRange>("12m");
-  const monthCount = range === "3m" ? 3 : range === "6m" ? 6 : 12;
-  const { data: months, isLoading, isError } = useSupplierRevenueByType(monthCount);
-  const data = useMemo(
-    () => (months ?? []).map((m) => ({ ...m, label: shortMonthLabel(m.month) })),
-    [months]
-  );
+// Company-admin-only ledger feed for CompanyTransaction — the shared
+// purchased/earned credit pool's audit trail had a write path
+// (lib/company-credits.ts) but nothing read it back until now (Sprint 6.10
+// "Supplier Analytics/Financials Reshuffle", 2026-07-23). Same pagination +
+// date-range treatment as every other audit-trail feed in this codebase.
+function CreditMovementCard() {
+  const range = useDateRangeFilter("all");
+  const { data, isLoading } = useCompanyTransactions({ from: range.from, to: range.to }, range.page);
+  const transactions = data?.transactions;
 
   return (
     <Card className="mb-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
-          <h2 className="text-lg font-semibold text-body-text">Platform Revenue</h2>
+          <h2 className="text-lg font-semibold text-body-text">Credit Movement</h2>
           <p className="text-xs text-muted-text mt-0.5">
-            Your revenue by listing type, per month.
+            Every top-up, rebate, and redemption against your company&apos;s shared credit pool.
           </p>
         </div>
-        <Pills options={["3m", "6m", "12m"]} labels={REVENUE_RANGE_LABELS} active={range} onChange={setRange} />
+        <DateRangePicker
+          preset={range.preset}
+          from={range.from}
+          to={range.to}
+          onPresetChange={range.changePreset}
+          onFromChange={range.changeFrom}
+          onToChange={range.changeTo}
+        />
       </div>
 
-      <div className="h-72">
-        {isLoading ? (
-          <div className="h-full flex items-center justify-center text-sm text-muted-text">Loading…</div>
-        ) : isError ? (
-          <div className="h-full flex items-center justify-center text-sm text-error-red">Failed to load revenue.</div>
-        ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="label" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} />
-              <Tooltip content={<RevenueTooltip />} cursor={{ fill: "#ffffff", opacity: 0.06 }} />
-              <Bar dataKey="space" name="Space" fill="#9333ea" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-              <Bar dataKey="equipment" name="Equipment" fill="#1a9d96" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-              <Bar dataKey="consumable" name="Consumables" fill="#f59e0b" radius={[4, 4, 0, 0]} isAnimationActive={false} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-
-      <div className="flex flex-wrap gap-4 mt-4">
-        <span className="flex items-center gap-1.5 text-xs text-muted-text">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#9333ea" }} /> Space
-        </span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-text">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#1a9d96" }} /> Equipment
-        </span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-text">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#f59e0b" }} /> Consumables
-        </span>
-      </div>
+      {isLoading ? (
+        <p className="text-sm text-muted-text py-4">Loading…</p>
+      ) : !transactions || transactions.length === 0 ? (
+        <p className="text-sm text-muted-text py-4">
+          No credit movement {range.from || range.to ? "in the selected date range" : "yet"}.
+        </p>
+      ) : (
+        <>
+          <div className="divide-y divide-border/40">
+            {transactions.map((t) => (
+              <div key={t.id} className="flex items-center justify-between gap-3 py-3">
+                <div>
+                  <p className="text-sm text-body-text">{t.description}</p>
+                  <p className="text-xs text-muted-text mt-0.5">
+                    {t.userName ?? "Automatic"} · {new Date(t.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                <p className={`text-sm font-medium whitespace-nowrap ${t.amount >= 0 ? "text-success-green" : "text-body-text"}`}>
+                  {t.amount >= 0 ? "+" : ""}
+                  {t.amount} Credits
+                </p>
+              </div>
+            ))}
+          </div>
+          <Pagination
+            page={range.page}
+            pageSize={data?.meta.pageSize ?? 10}
+            total={data?.meta.total ?? 0}
+            onPageChange={range.setPage}
+          />
+        </>
+      )}
     </Card>
   );
 }
@@ -251,6 +183,7 @@ export default function SupplierFinancialsPage() {
   const [rewardsOpen, setRewardsOpen] = useState(false);
   const [topUpOpen, setTopUpOpen] = useState(false);
   const { data: company } = useSupplierCompany();
+  const { data: session } = useSession();
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -305,7 +238,7 @@ export default function SupplierFinancialsPage() {
         </div>
       </div>
 
-      <PlatformRevenueCard />
+      {session?.user?.isCompanyAdmin && <CreditMovementCard />}
 
       <Card>
         <h3 className="flex items-center gap-2 text-base font-semibold text-body-text mb-2">

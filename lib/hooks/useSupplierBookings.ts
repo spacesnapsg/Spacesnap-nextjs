@@ -31,6 +31,28 @@ export function useSupplierBookings(status?: BookingStatus | "all") {
   });
 }
 
+export interface SupplierBookingsFeedResult {
+  bookings: SupplierBooking[];
+  meta: { page: number; pageSize: number; total: number };
+}
+
+// Paginated + date-range-filterable feed, distinct from useSupplierBookings'
+// full unpaginated list above — backs the Analytics page's "Recent Bookings"
+// table (Sprint 6.10, 2026-07-23). Mirrors useActivity's (lib/hooks/useActivity.ts)
+// query-building shape.
+export function useSupplierBookingsFeed(dateRange: { from: string | null; to: string | null }, page: number) {
+  const params = new URLSearchParams();
+  if (dateRange.from) params.set("from", dateRange.from);
+  if (dateRange.to) params.set("to", dateRange.to);
+  params.set("page", String(page));
+
+  return useQuery({
+    queryKey: ["supplier-bookings-feed", dateRange, page],
+    queryFn: () => apiFetch<SupplierBookingsFeedResult>(`/api/supplier/bookings/recent?${params.toString()}`),
+    placeholderData: (previousData) => previousData,
+  });
+}
+
 function useInvalidateSupplierBookings() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: ["supplier-bookings"] });

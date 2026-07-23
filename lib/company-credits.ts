@@ -1,9 +1,10 @@
 import { Prisma, CompanyTransactionType, type CompanyTransaction } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
-import { creditsToSgd } from "@/lib/credit-units";
+import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 import { InsufficientCreditBalanceError } from "@/lib/credits";
 import { getCompanySupplierTier, type SupplierTier } from "@/lib/supplier-tiers";
+import type { ActivityQuery } from "@/lib/activity";
 
 // A per-COMPANY credit ledger — see CompanyTransaction's own schema comment
 // for why this is a separate table from the per-user Transaction ledger
@@ -126,4 +127,57 @@ export async function grantCompanyBookingRebate(tx: Prisma.TransactionClient, bo
       description: `Booking #${booking.id} — ${rebatePercent}% company rebate (${tier} tier).`,
     },
   });
+}
+
+// Paginated (10/page default), date-range-filterable feed of the shared
+// CompanyTransaction ledger — the write path (createCompanyTopUp/
+// grantCompanyBookingRebate above, plus the Supplier Rewards Catalogue's
+// earned_spend debit) has existed since Sprint 6.10, but nothing read it
+// back until this (Sprint 6.10 "Supplier Analytics/Financials Reshuffle",
+// 2026-07-23) — backs the Financials page's company-admin-only "Credit
+// Movement" card. Same pagination/date-range shape as every other
+// audit-trail feed (getWalletTransactionsPage, getBuyerOrgTransactions).
+export async function getCompanyTransactionsPage(companyId: bigint, query: ActivityQuery) {
+  const where: Prisma.CompanyTransactionWhereInput = {
+    companyId,
+    ...(query.from || query.to
+      ? {
+          createdAt: {
+            ...(query.from ? { gte: query.from } : {}),
+            ...(query.to ? { lte: query.to } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.companyTransaction.findMany({
+      where,
+      include: { user: { select: { name: true } } },
+      orderBy: { createdAt: "desc" },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }),
+    prisma.companyTransaction.count({ where }),
+  ]);
+
+  return { items, total, page: query.page, pageSize: query.pageSize };
+}
+
+export function serializeCompanyTransaction(
+  t: Awaited<ReturnType<typeof getCompanyTransactionsPage>>["items"][number]
+) {
+  // earned_spend (a redemption debit) is the only type that reduces the
+  // balance — mirrors the sign convention getCompanyEarnedBalance's own
+  // SUM relies on (a negative amount already, per how
+  // lib/supplier-reward-redemptions.ts writes it), so no extra negation
+  // needed here, just pass amount through as-is.
+  return {
+    id: t.id.toString(),
+    type: t.type,
+    amount: sgdToCredits(Number(t.amount)),
+    description: t.description ?? t.type,
+    userName: t.user?.name ?? null,
+    createdAt: t.createdAt.toISOString(),
+  };
 }

@@ -1227,44 +1227,73 @@ role's pages are reachable, not "at least that role."
   accounts/companies deleted afterward, dev DB back to its exact seeded
   state.
 
-### Supplier Analytics/Financials Reshuffle + Company Credit Movement (raised 2026-07-23, planning only)
+### Supplier Analytics/Financials Reshuffle + Company Credit Movement (raised 2026-07-23, closed same day)
 
-Three items from the product owner, not yet built. Grounded against the
-current pages by direct inspection (not guessed): "Analytics" (nav label,
-`SupplierNavbar.tsx`) routes to `/supplier`
-(`app/(supplier)/supplier/page.tsx`, component `SupplierAnalyticsPage`,
-already has the "Recent Bookings" table); "Financials" routes to
-`/supplier-financials` (`app/(supplier)/supplier-financials/page.tsx`,
-already has the "Platform Revenue" card).
+Three items from the product owner. Grounded against the current pages by
+direct inspection (not guessed): "Analytics" (nav label, `SupplierNavbar.tsx`)
+routes to `/supplier` (`app/(supplier)/supplier/page.tsx`, component
+`SupplierAnalyticsPage`, already had the "Recent Bookings" table);
+"Financials" routes to `/supplier-financials`
+(`app/(supplier)/supplier-financials/page.tsx`, already had the "Platform
+Revenue" card).
 
-- [ ] **Move the "Platform Revenue" card from Financials to Analytics.**
-  Straight relocation of the existing card (`app/(supplier)/supplier-financials/page.tsx`
-  → `app/(supplier)/supplier/page.tsx`) — no new data, `useSupplierRevenue`
-  already backs it.
-- [ ] **Analytics' "Recent Bookings" table needs pagination + a date-range
-  picker.** Currently `[...(bookings ?? [])].slice(0, 10)` client-side off
-  the full `useSupplierBookings()` result — same unbounded-feed shape the
-  Recent Activity/Credit Movement work above just closed everywhere else in
-  this codebase, just not yet applied to the supplier side. Should reuse the
-  same `lib/hooks/useDateRangeFilter.ts`/`components/DateRangePicker.tsx`/`components/Pagination.tsx`
-  built for that work rather than a bespoke supplier-side copy — needs a
-  paginated `GET /api/supplier/bookings` (currently returns everything
-  unpaginated) or a dedicated paginated endpoint alongside it, mirroring how
-  `GET /api/buyer-organization/activity` was split out rather than bolted
-  onto an existing bulk endpoint.
-- [ ] **Supplier Financials should show Credit Movement — company-admin
-  only.** The underlying ledger already exists and already has a write
-  path — `CompanyTransaction` (`prisma/schema.prisma`) via
-  `lib/company-credits.ts`/`lib/supplier-reward-redemptions.ts` — but
-  **no route or UI anywhere reads it back**, confirmed by grep (only those
-  two lib files reference `CompanyTransaction` at all). This is the
-  supplier-side mirror of the buyer-org Credit Movement feed built above,
-  same treatment (paginated, date-range picker) once a
-  `GET /api/supplier/company/transactions`-shaped route exists, gated on
-  `isCompanyAdmin` (mirrors `requireBuyerOrgAdmin` in `lib/buyer-org-auth.ts`
-  — no equivalent company-admin-only guard currently wraps a financials
-  route, would need adding or reusing whatever already gates
-  `/api/supplier/company/members`).
+- [x] **Move the "Platform Revenue" card from Financials to Analytics —
+  closed 2026-07-23.** Relocated `PlatformRevenueCard` (+ its `Pills`/
+  `RevenueTooltip` helpers) from `app/(supplier)/supplier-financials/page.tsx`
+  to `app/(supplier)/supplier/page.tsx`, replacing the page's old "Revenue
+  Over Time" card. **Correction to this item's own premise**: that old card
+  was backed by `useSupplierRevenue`/`GET /api/supplier/revenue`
+  (`getCompanyRevenueByMonth`, `lib/revenue.ts`), not the relocated card's
+  own `useSupplierRevenueByType` as this item originally assumed — the two
+  were separate charts (a flat monthly total vs. a by-listing-type
+  breakdown). Since Platform Revenue is a strict superset of Revenue Over
+  Time (same total, broken down further, with a real 3/6/12-month range
+  picker vs. none), the old chart was superseded, not left duplicated —
+  removed `useSupplierRevenue`, `GET /api/supplier/revenue`, and
+  `getCompanyRevenueByMonth` entirely after confirming by grep they had no
+  other callers.
+- [x] **Analytics' "Recent Bookings" table pagination + date-range picker —
+  closed 2026-07-23.** New `getSupplierBookingsFeed` (`lib/bookings.ts`,
+  reuses `ActivityQuery`/`parseActivityQuery` from `lib/activity.ts`, same
+  idiom as `getWalletTransactionsPage`) + new `GET /api/supplier/bookings/recent`
+  — a **dedicated endpoint**, not pagination bolted onto `GET
+  /api/supplier/bookings`, per this item's own note: that route's full
+  unpaginated list is still relied on elsewhere (supplier-requests' status
+  tabs, supplier-profile's rating aggregate), confirmed by grep before
+  touching it. New `useSupplierBookingsFeed` hook, wired into the Recent
+  Bookings table with `useDateRangeFilter`/`DateRangePicker`/`Pagination` —
+  the exact shared pieces this item called out, not a bespoke copy. The
+  "Active Bookings" stat card kept reading the original unpaginated
+  `useSupplierBookings()` hook unchanged, since it's a point-in-time count
+  unaffected by the table's own date filter.
+- [x] **Supplier Financials Credit Movement, company-admin only — closed
+  2026-07-23.** New `getCompanyTransactionsPage`/`serializeCompanyTransaction`
+  (`lib/company-credits.ts`, direct mirror of `getBuyerOrgTransactions`) +
+  new `GET /api/supplier/company/transactions`, gated by the existing
+  `requireCompanyAdmin` (`lib/supplier-auth.ts`) — already the right guard,
+  no new auth helper needed (it already backs the company business-details
+  edit route). New `useCompanyTransactions` hook (defines its own
+  `CompanyTransactionType` string union rather than importing the generated
+  Prisma enum, matching `BookingStatus`/`ActivityActionType`'s existing
+  frontend convention). New `CreditMovementCard` on the Financials page,
+  rendered only when `session.user.isCompanyAdmin`.
+  - **Verified live** (real cookie-jar HTTP + browser session,
+    `ben@acmecoworking.sg` / `chandra@acmecoworking.sg`, both real seeded
+    Acme Coworking accounts): topped up 250 credits via the existing
+    `POST /api/supplier/company/topup` — the new feed immediately showed the
+    real row (`purchased_topup`, +250 credits, "Ben Ong", correct
+    description); `chandra` (`isCompanyAdmin: false`) got a real `403` from
+    the new route and the Financials page correctly rendered no Credit
+    Movement card for her at all, while `ben` saw it. Analytics page
+    confirmed via browser session: Platform Revenue renders on `/supplier`
+    with real by-type data, Recent Bookings shows the date-range picker and
+    all 3 of Acme's seeded bookings. Test top-up row deleted via direct
+    `psql` afterward — dev DB confirmed back to its exact prior state
+    (0 `company_transactions` rows for Acme).
+  - `npm test` **389/389**, `npx tsc --noEmit` clean, `npx eslint .` clean on
+    every touched file (2 pre-existing errors elsewhere, confirmed via
+    `git stash` unrelated to this session), `next build` clean — both new
+    routes listed, `/api/supplier/revenue` gone.
 
 ---
 

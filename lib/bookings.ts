@@ -26,6 +26,7 @@ import {
 import { sgdToCredits } from "@/lib/credit-units";
 import { getUserRewardTier, rebatePercentForTier } from "@/lib/reward-tiers";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
+import type { ActivityQuery } from "@/lib/activity";
 
 export { RewardGrantNotRedeemableError };
 
@@ -103,6 +104,43 @@ const bookingWithRatingArgs = {
 } satisfies Prisma.BookingDefaultArgs;
 
 export type BookingWithRating = Prisma.BookingGetPayload<typeof bookingWithRatingArgs>;
+
+// Paginated (10/page default), date-range-filterable feed of a company's own
+// bookings — backs the supplier Analytics page's "Recent Bookings" table
+// (Sprint 6.10 "Supplier Analytics/Financials Reshuffle", 2026-07-23). A
+// dedicated endpoint, not a page/pageSize param bolted onto GET
+// /api/supplier/bookings — that route's full unpaginated list is still
+// relied on elsewhere (supplier-requests' status tabs, supplier-profile's
+// rating aggregate), same "split out, don't overload" precedent as GET
+// /api/buyer-organization/activity. Reuses ActivityQuery from lib/activity.ts
+// (its `types` field is simply unused here, same idiom as
+// getWalletTransactionsPage).
+export async function getSupplierBookingsFeed(companyId: bigint, query: ActivityQuery) {
+  const where: Prisma.BookingWhereInput = {
+    listing: { companyId },
+    ...(query.from || query.to
+      ? {
+          createdAt: {
+            ...(query.from ? { gte: query.from } : {}),
+            ...(query.to ? { lte: query.to } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.booking.findMany({
+      where,
+      ...bookingWithRelationsArgs,
+      orderBy: { createdAt: "desc" },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }),
+    prisma.booking.count({ where }),
+  ]);
+
+  return { items, total, page: query.page, pageSize: query.pageSize };
+}
 
 export function serializeBooking(booking: Booking | BookingWithRelations | BookingWithRating) {
   return {
