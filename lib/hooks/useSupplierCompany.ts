@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
 export type SupplierTier = "free" | "preferred" | "top";
-export type InvoicingCadence = "monthly" | "biweekly" | "weekly";
+export type PayoutCadence = "monthly" | "biweekly" | "weekly";
 
 // Live-computed, not admin-set (Sprint 6.10) — see lib/supplier-tiers.ts.
 // baseTier/tierBoostActive/tierBoostExpiresAt added for the Supplier Rewards
@@ -10,8 +10,9 @@ export type InvoicingCadence = "monthly" | "biweekly" | "weekly";
 // displayed/applied tier only, never freezes the live computation" design as
 // the user reward tier's own tierUpgradeActive.
 export interface SupplierTierStats {
-  averageRating: number | null;
-  ratingCount: number;
+  bookingCount: number;
+  cancelledCount: number;
+  cancellationRate: number;
   spendCredits: number;
   nextTier: SupplierTier | null;
   progressPercent: number;
@@ -29,7 +30,7 @@ export interface CompanyDetails {
   financeContactEmail: string | null;
   financeContactPerson: string | null;
   supplierTier: SupplierTier;
-  invoicingCadence: InvoicingCadence;
+  payoutCadence: PayoutCadence;
   tierStats: SupplierTierStats;
   // 2026-07-22 fulfillment session — a real company-level credit balance
   // (lib/company-credits.ts), no spend flow yet.

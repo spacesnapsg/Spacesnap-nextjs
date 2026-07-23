@@ -138,27 +138,62 @@ export interface CompanyRevenueByTypeMonth {
   consumable: number;
 }
 
+export interface CompanyRevenueByTypeRange {
+  // Either months (the original preset toggle) or an explicit from/to date
+  // range (2026-07-23, Platform Revenue date picker) — from/to wins when
+  // given. months stays the fallback for the initial/no-filter state.
+  months?: number;
+  from?: Date;
+  to?: Date;
+}
+
+// Hard cap on bucket count regardless of how wide a custom from/to range is
+// — an "All time" pick on a years-old company shouldn't generate hundreds of
+// mostly-empty monthly buckets.
+const MAX_REVENUE_BUCKETS = 60;
+
+function startOfMonth(d: Date): Date {
+  const start = new Date(d);
+  start.setDate(1);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
 // Supplier Financials "Platform Revenue" chart — the caller's own company,
 // split by the LISTING TYPE each revenue transaction is attributable to, per
-// calendar month over the last `months` (including the current one). Same
-// REVENUE_TRANSACTION_TYPES / negate-to-net-out-refunds semantics as every
-// other aggregate in this module — a declined-then-refunded booking nets to
-// 0 in its bucket, not a negative. Replaces buildPlaceholderRevenueByType in
-// app/(supplier)/supplier-financials/page.tsx (Sprint 6.10).
+// calendar month. Same REVENUE_TRANSACTION_TYPES / negate-to-net-out-refunds
+// semantics as every other aggregate in this module — a declined-then-
+// refunded booking nets to 0 in its bucket, not a negative. Replaces
+// buildPlaceholderRevenueByType in app/(supplier)/supplier-financials/page.tsx
+// (Sprint 6.10). Extended 2026-07-23 to accept an explicit from/to date
+// range (Platform Revenue's date picker) instead of only a fixed month
+// countback — still bucketed monthly, since the chart itself is monthly bars.
 export async function getCompanyRevenueByTypeAndMonth(
   companyId: bigint,
-  months = 12
+  { months = 12, from, to }: CompanyRevenueByTypeRange = {}
 ): Promise<CompanyRevenueByTypeMonth[]> {
-  const since = new Date();
-  since.setDate(1);
-  since.setHours(0, 0, 0, 0);
-  since.setMonth(since.getMonth() - (months - 1));
+  const until = to ? startOfMonth(to) : startOfMonth(new Date());
+  let since: Date;
+  if (from) {
+    since = startOfMonth(from);
+  } else {
+    since = new Date(until);
+    since.setMonth(since.getMonth() - (months - 1));
+  }
+
+  let bucketCount = (until.getFullYear() - since.getFullYear()) * 12 + (until.getMonth() - since.getMonth()) + 1;
+  if (bucketCount < 1) bucketCount = 1;
+  if (bucketCount > MAX_REVENUE_BUCKETS) {
+    bucketCount = MAX_REVENUE_BUCKETS;
+    since = new Date(until);
+    since.setMonth(since.getMonth() - (bucketCount - 1));
+  }
 
   const listingTypeSelect = { listing: { select: { companyId: true, type: true } } };
   const transactions = await prisma.transaction.findMany({
     where: {
       type: { in: REVENUE_TRANSACTION_TYPES },
-      createdAt: { gte: since },
+      createdAt: { gte: since, ...(to ? { lte: to } : {}) },
       OR: [
         { booking: { listing: { companyId } } },
         { bulkOrderRequest: { listing: { companyId } } },
@@ -195,7 +230,7 @@ export async function getCompanyRevenueByTypeAndMonth(
 
   const result: CompanyRevenueByTypeMonth[] = [];
   const cursor = new Date(since);
-  for (let i = 0; i < months; i++) {
+  for (let i = 0; i < bucketCount; i++) {
     const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
     const bucket = buckets.get(key);
     result.push({

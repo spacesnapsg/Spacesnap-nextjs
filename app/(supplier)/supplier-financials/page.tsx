@@ -27,13 +27,14 @@ const CADENCE_LABELS: Record<string, string> = {
 };
 
 // Requirement copy matches the real thresholds in lib/supplier-tiers.ts
-// (confirmed correct against the infographic by the product owner,
-// 2026-07-22) — the label/requirement text is static since the thresholds
-// themselves are constants, but progressPercent below comes from the live
-// GET /api/supplier/company response (company.tierStats), not a placeholder.
+// (confirmed by the product owner 2026-07-23 — bookings/cancellation-rate/
+// spend, replacing the original rating-based criteria) — the label/
+// requirement text is static since the thresholds themselves are constants,
+// but progressPercent below comes from the live GET /api/supplier/company
+// response (company.tierStats), not a placeholder.
 const NEXT_TIER: Record<SupplierTier, { label: string; requirement: string } | null> = {
-  free: { label: "Preferred", requirement: "4.0★ rating & 50,000 credits spend" },
-  preferred: { label: "Top", requirement: "4.5★ rating & 100,000 credits spend" },
+  free: { label: "Preferred", requirement: "50 bookings, <10% cancellation rate & 50,000 credits spend" },
+  preferred: { label: "Top", requirement: "100 bookings, <3% cancellation rate & 100,000 credits spend" },
   top: null,
 };
 
@@ -57,7 +58,11 @@ function SupplierTierCard() {
           {isLoading || !company ? "…" : TIER_LABELS[company.supplierTier]}
         </p>
         {company && (
-          <p className="text-xs text-muted-text mt-1">{CADENCE_LABELS[company.invoicingCadence]} invoicing</p>
+          // Every tier pays out biweekly as of 2026-07-23 (see
+          // SUPPLIER_TIER_PAYOUT_CADENCE, lib/booking-payments.ts) —
+          // CADENCE_LABELS keeps monthly/weekly too, for any SupplierPayable
+          // row snapshotted before that change.
+          <p className="text-xs text-muted-text mt-1">{CADENCE_LABELS[company.payoutCadence]} payout</p>
         )}
         {company?.tierStats.tierBoostActive && (
           <p className="text-xs text-supplier-purple-end mt-1">

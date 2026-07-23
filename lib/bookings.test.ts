@@ -799,7 +799,7 @@ describe("declineBookingPendingResolution — supplier penalty against commissio
       assert.equal(payable!.grossAmount.toString(), "0");
       assert.equal(payable!.penaltyDeduction.toString(), "0");
       assert.equal(payable!.netAmount.toString(), "0");
-      assert.equal(payable!.invoicingCadence, "monthly"); // default supplierTier: free
+      assert.equal(payable!.payoutCadence, "biweekly"); // every tier is biweekly now, incl. default supplierTier: free
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

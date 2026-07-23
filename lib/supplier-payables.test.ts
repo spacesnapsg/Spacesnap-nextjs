@@ -89,17 +89,17 @@ describe("getSupplierPendingPayableBalance", () => {
     }
   });
 
-  test("only sums rows with status 'pending' — invoiced/paid rows are excluded", async () => {
+  test("only sums rows with status 'pending' — scheduled/paid rows are excluded", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
       const listing = await createSpaceListing(company.id, "5.00");
       const booking = await completeBooking(user.id, listing, daysFromNow(10));
 
-      // Manually move the row to 'invoiced' (no write-path builds this yet —
+      // Manually move the row to 'scheduled' (no write-path builds this yet —
       // see the still-open Sprint 6 Invoice/Receipt gap) to prove the query
       // filters on status rather than summing every row for the company.
-      await prisma.supplierPayable.update({ where: { bookingId: booking.id }, data: { status: "invoiced" } });
+      await prisma.supplierPayable.update({ where: { bookingId: booking.id }, data: { status: "scheduled" } });
 
       const balance = await getSupplierPendingPayableBalance(company.id);
       assert.equal(balance.toString(), "0");

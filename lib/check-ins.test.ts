@@ -212,7 +212,7 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
       assert.equal(payable!.grossAmount.toString(), "9"); // 10 - 10% commission (1)
       assert.equal(payable!.penaltyDeduction.toString(), "0");
       assert.equal(payable!.netAmount.toString(), "9");
-      assert.equal(payable!.invoicingCadence, "monthly"); // default supplierTier: free
+      assert.equal(payable!.payoutCadence, "biweekly"); // every tier is biweekly now, incl. default supplierTier: free
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

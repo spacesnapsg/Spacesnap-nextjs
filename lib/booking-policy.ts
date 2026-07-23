@@ -3,7 +3,7 @@
 //
 // Split out of lib/booking-payments.ts (2026-07-21, Cancel/Modify Booking UI
 // session): these calculators are pure and Prisma-free, but booking-payments
-// imports the generated Prisma client for its SupplierTier→InvoicingCadence
+// imports the generated Prisma client for its SupplierTier→PayoutCadence
 // mapping, which must not be pulled into the browser bundle. The Cancel/
 // Modify modals import THIS module to preview refund/fee tiers client-side —
 // the same functions the server routes execute, so the preview can't drift

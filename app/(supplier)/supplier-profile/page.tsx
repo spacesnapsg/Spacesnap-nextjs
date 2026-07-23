@@ -7,8 +7,6 @@ import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
-import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
-import { useSupplierBookings } from "@/lib/hooks/useSupplierBookings";
 import { useRequestPromotion } from "@/lib/hooks/usePromotions";
 import { useSupplierCompany, useUpdateSupplierCompany, type BusinessDetailsFields } from "@/lib/hooks/useSupplierCompany";
 import {
@@ -47,7 +45,7 @@ function CompanyAdminAccessCard({ promotionRequested }: { promotionRequested: bo
 
   if (session?.user?.isCompanyAdmin) {
     return (
-      <Card className="mt-6">
+      <Card>
         <p className="text-xs text-muted-text mb-3">Company Admin Access</p>
         <span className="inline-flex items-center gap-1.5 bg-supplier-purple-start/20 text-supplier-purple-end border border-supplier-purple-start/30 rounded-full px-3 py-1.5 text-xs font-semibold">
           <CheckCircle2 size={14} />
@@ -65,7 +63,7 @@ function CompanyAdminAccessCard({ promotionRequested }: { promotionRequested: bo
 
   if (existingAdmin) {
     return (
-      <Card className="mt-6">
+      <Card>
         <p className="text-xs text-muted-text mb-3">Company Admin Access</p>
         <p className="text-sm text-muted-text">
           Ask your company admin, <span className="text-body-text font-medium">{existingAdmin.name}</span>, to
@@ -76,7 +74,7 @@ function CompanyAdminAccessCard({ promotionRequested }: { promotionRequested: bo
   }
 
   return (
-    <Card className="mt-6">
+    <Card>
       <p className="text-xs text-muted-text mb-3">Company Admin Access</p>
       <p className="text-sm text-muted-text mb-4">
         Request access to manage your company&apos;s suppliers and billing
@@ -325,8 +323,6 @@ function BusinessDetailsCard() {
 
 export default function SupplierProfilePage() {
   const { data: user, isLoading: userLoading } = useCurrentUser();
-  const { data: listings } = useSupplierListings();
-  const { data: bookings } = useSupplierBookings();
   const [editing, setEditing] = useState(false);
   const [nameEdit, setNameEdit] = useState<string | null>(null);
   const [titleEdit, setTitleEdit] = useState<string | null>(null);
@@ -355,20 +351,6 @@ export default function SupplierProfilePage() {
     setEditing((e) => !e);
   }
 
-  const completedBookingsCount = (bookings ?? []).filter((b) => b.status === "completed").length;
-
-  const ratingTotals = (listings ?? []).reduce(
-    (acc, listing) => {
-      if (listing.ratingCount > 0 && listing.averageRating !== null) {
-        acc.weightedSum += listing.averageRating * listing.ratingCount;
-        acc.count += listing.ratingCount;
-      }
-      return acc;
-    },
-    { weightedSum: 0, count: 0 }
-  );
-  const overallAverageRating = ratingTotals.count > 0 ? ratingTotals.weightedSum / ratingTotals.count : null;
-
   if (userLoading) {
     return <p className="text-sm text-muted-text text-center py-16">Loading profile…</p>;
   }
@@ -383,7 +365,7 @@ export default function SupplierProfilePage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 flex flex-col gap-6">
           <Card>
             <div className="flex flex-col items-center text-center">
               <div className="relative">
@@ -454,37 +436,12 @@ export default function SupplierProfilePage() {
               </Button>
             </div>
           </Card>
+          <TeamMembersCard />
           <CompanyAdminAccessCard promotionRequested={user?.promotionRequested ?? false} />
         </div>
 
         <div className="lg:col-span-2 flex flex-col gap-6">
           <BusinessDetailsCard />
-          <TeamMembersCard />
-
-          <Card>
-            <h3 className="text-base font-semibold text-body-text mb-2">Listing Stats</h3>
-            <div>
-              <div className="flex items-center justify-between py-2.5 border-b border-border/40">
-                <p className="text-sm text-muted-text">Total Listings</p>
-                <p className="text-sm font-semibold text-body-text">{(listings ?? []).length}</p>
-              </div>
-              <div className="flex items-center justify-between py-2.5 border-b border-border/40">
-                <p className="text-sm text-muted-text">Total Completed Bookings</p>
-                <p className="text-sm font-semibold text-body-text">{completedBookingsCount}</p>
-              </div>
-              <div className="flex items-center justify-between py-2.5 border-b border-border/40 last:border-b-0">
-                <p className="text-sm text-muted-text">Average Rating</p>
-                {overallAverageRating !== null ? (
-                  <p className="text-sm font-semibold text-body-text">
-                    {overallAverageRating.toFixed(1)} / 5{" "}
-                    <span className="text-muted-text font-normal">({ratingTotals.count})</span>
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-text italic">No ratings yet</p>
-                )}
-              </div>
-            </div>
-          </Card>
         </div>
       </div>
     </div>

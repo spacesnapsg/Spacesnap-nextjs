@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { CalendarCheck, Package } from "lucide-react";
+import { useMemo } from "react";
+import { CalendarCheck, CheckCircle2, Package, Star } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Card from "@/components/Card";
 import Pagination from "@/components/Pagination";
@@ -33,45 +33,6 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: string; 
     </Card>
   );
 }
-
-function Pills<T extends string>({
-  options,
-  labels,
-  active,
-  onChange,
-}: {
-  options: T[];
-  labels: Record<T, string>;
-  active: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((option) => (
-        <button
-          key={option}
-          type="button"
-          onClick={() => onChange(option)}
-          className={`h-8 px-3 rounded-full text-xs font-medium border transition-colors ${
-            active === option
-              ? "bg-supplier-purple-start/15 border-supplier-purple-start text-supplier-purple-end"
-              : "bg-card border-border text-muted-text hover:text-body-text"
-          }`}
-        >
-          {labels[option]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-type RevenueRange = "3m" | "6m" | "12m";
-
-const REVENUE_RANGE_LABELS: Record<RevenueRange, string> = {
-  "3m": "3 Months",
-  "6m": "6 Months",
-  "12m": "12 Months",
-};
 
 // "YYYY-MM" -> short month label ("2026-08" -> "Aug") for the chart's X axis.
 // Uses UTC so the label matches the month the server bucketed by, regardless
@@ -122,9 +83,8 @@ function RevenueTooltip({
 // picker), so useSupplierRevenue/GET /api/supplier/revenue were removed
 // rather than left as an unused duplicate.
 function PlatformRevenueCard() {
-  const [range, setRange] = useState<RevenueRange>("12m");
-  const monthCount = range === "3m" ? 3 : range === "6m" ? 6 : 12;
-  const { data: months, isLoading, isError } = useSupplierRevenueByType(monthCount);
+  const range = useDateRangeFilter("all");
+  const { data: months, isLoading, isError } = useSupplierRevenueByType({ from: range.from, to: range.to });
   const data = useMemo(
     () => (months ?? []).map((m) => ({ ...m, label: shortMonthLabel(m.month) })),
     [months]
@@ -132,14 +92,21 @@ function PlatformRevenueCard() {
 
   return (
     <Card className="mb-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
           <h2 className="text-lg font-semibold text-body-text">Platform Revenue</h2>
           <p className="text-xs text-muted-text mt-0.5">
             Your revenue by listing type, per month.
           </p>
         </div>
-        <Pills options={["3m", "6m", "12m"]} labels={REVENUE_RANGE_LABELS} active={range} onChange={setRange} />
+        <DateRangePicker
+          preset={range.preset}
+          from={range.from}
+          to={range.to}
+          onPresetChange={range.changePreset}
+          onFromChange={range.changeFrom}
+          onToChange={range.changeTo}
+        />
       </div>
 
       <div className="h-72">
@@ -178,12 +145,30 @@ function PlatformRevenueCard() {
 }
 
 export default function SupplierAnalyticsPage() {
-  // "Active Bookings" stays the full unpaginated feed (unaffected by the
-  // Recent Bookings table's own date-range filter below — it's a
-  // point-in-time stat, not part of that feed).
+  // Stat row stays the full unpaginated feeds (unaffected by the Recent
+  // Bookings table's own date-range filter below — these are point-in-time
+  // stats, not part of that feed).
   const { data: bookings, isLoading: bookingsStatLoading } = useSupplierBookings();
   const { data: listings, isLoading: listingsLoading } = useSupplierListings();
-  const activeBookings = (bookings ?? []).filter((b) => b.status === "active" || b.status === "confirmed").length;
+
+  const activeListingsCount = (listings ?? []).filter((l) => l.isAvailable).length;
+  const completedBookingsCount = (bookings ?? []).filter((b) => b.status === "completed").length;
+  const totalListingsCount = (listings ?? []).length;
+
+  // Relocated from the supplier-profile "Listing Stats" card (2026-07-23) —
+  // same weighted-average-across-listings logic, moved rather than
+  // duplicated.
+  const ratingTotals = (listings ?? []).reduce(
+    (acc, listing) => {
+      if (listing.ratingCount > 0 && listing.averageRating !== null) {
+        acc.weightedSum += listing.averageRating * listing.ratingCount;
+        acc.count += listing.ratingCount;
+      }
+      return acc;
+    },
+    { weightedSum: 0, count: 0 }
+  );
+  const overallAverageRating = ratingTotals.count > 0 ? ratingTotals.weightedSum / ratingTotals.count : null;
 
   const bookingsRange = useDateRangeFilter("all");
   const { data: bookingsData, isLoading: bookingsLoading } = useSupplierBookingsFeed(
@@ -201,16 +186,26 @@ export default function SupplierAnalyticsPage() {
         <p className="text-muted-text mt-1">Track your listings performance</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatCard
-          label="Active Bookings"
-          value={bookingsStatLoading ? "…" : String(activeBookings)}
+          label="Active Listing"
+          value={listingsLoading ? "…" : String(activeListingsCount)}
+          icon={CheckCircle2}
+        />
+        <StatCard
+          label="Completed Listing"
+          value={bookingsStatLoading ? "…" : String(completedBookingsCount)}
           icon={CalendarCheck}
         />
         <StatCard
-          label="Total Listings"
-          value={listingsLoading ? "…" : String((listings ?? []).length)}
+          label="Total Listing"
+          value={listingsLoading ? "…" : String(totalListingsCount)}
           icon={Package}
+        />
+        <StatCard
+          label="Average Rating"
+          value={listingsLoading ? "…" : overallAverageRating !== null ? `${overallAverageRating.toFixed(1)} / 5` : "No ratings yet"}
+          icon={Star}
         />
       </div>
 

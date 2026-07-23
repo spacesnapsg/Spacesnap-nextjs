@@ -228,9 +228,10 @@ const SUPPLIER_TIER_BADGE_STYLES: Record<SupplierTier, string> = {
 };
 
 // Read-only — Sprint 6.10 replaced the manual admin `<select>` with a live
-// calculation off rating + rolling-window spend (lib/supplier-tiers.ts), per
-// the product owner's own "remove the manual override, not just supplement
-// it" instruction. No admin action can change this anymore.
+// calculation off rolling-window booking volume, cancellation rate, and
+// spend (lib/supplier-tiers.ts), per the product owner's own "remove the
+// manual override, not just supplement it" instruction. No admin action can
+// change this anymore.
 function SupplierTierBadge({ tier }: { tier: SupplierTier }) {
   return (
     <span

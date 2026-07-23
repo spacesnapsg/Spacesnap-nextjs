@@ -21,7 +21,7 @@ import {
   calculateModificationTerms,
   applyRefundCap,
   PLATFORM_COMMISSION_PERCENT_BOOKINGS,
-  invoicingCadenceForSupplierTier,
+  payoutCadenceForSupplierTier,
 } from "@/lib/booking-payments";
 import { sgdToCredits } from "@/lib/credit-units";
 import { getUserRewardTier, rebatePercentForTier } from "@/lib/reward-tiers";
@@ -801,7 +801,7 @@ export async function declineBookingPendingResolution(
   const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
   const penaltyDeduction = commissionAmount.mul(supplierPenaltyPercent).div(100).toDecimalPlaces(2);
   const { tier: existingSupplierTier } = await getCompanySupplierTier(existing.listing.companyId);
-  const invoicingCadence = invoicingCadenceForSupplierTier(existingSupplierTier);
+  const payoutCadence = payoutCadenceForSupplierTier(existingSupplierTier);
   const creditExpiresAt = new Date(declinedAt.getTime() + BOOKING_CREDIT_REFUND_OBLIGATION_DAYS * 24 * 60 * 60 * 1000);
 
   return prisma.$transaction(async (tx) => {
@@ -842,7 +842,7 @@ export async function declineBookingPendingResolution(
         grossAmount: new Prisma.Decimal(0),
         penaltyDeduction,
         netAmount: penaltyDeduction.negated(),
-        invoicingCadence,
+        payoutCadence,
       },
     });
 
@@ -1136,7 +1136,7 @@ export async function cancelBookingWithRefund(
   const paymentIntentId = paymentTransaction?.stripePaymentIntentId ?? null;
 
   const { tier: cancelSupplierTier } = await getCompanySupplierTier(existing.listing.companyId);
-  const invoicingCadence = invoicingCadenceForSupplierTier(cancelSupplierTier);
+  const payoutCadence = payoutCadenceForSupplierTier(cancelSupplierTier);
 
   if (stripeRefundAmount.gt(0) && paymentIntentId !== null) {
     try {
@@ -1199,7 +1199,7 @@ export async function cancelBookingWithRefund(
           grossAmount: new Prisma.Decimal(0),
           penaltyDeduction: new Prisma.Decimal(0),
           netAmount: new Prisma.Decimal(0),
-          invoicingCadence,
+          payoutCadence,
         },
       });
 

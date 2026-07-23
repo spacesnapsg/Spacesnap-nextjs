@@ -1,17 +1,20 @@
 import type { Company } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
-import { invoicingCadenceForSupplierTier } from "@/lib/booking-payments";
+import { payoutCadenceForSupplierTier } from "@/lib/booking-payments";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 import { getCompanyPurchasedBalance, getCompanyEarnedBalance } from "@/lib/company-credits";
 import { sgdToCredits } from "@/lib/credit-units";
 
-// supplierTier/invoicingCadence/tierStats added 2026-07-22 (Sprint 6.10,
+// supplierTier/payoutCadence/tierStats added 2026-07-22 (Sprint 6.10,
 // supplier Financials page) — live-computed (lib/supplier-tiers.ts), not
 // read off a stored column; the manual admin-set route was removed the same
 // session. spendCredits is converted at this API edge only (sgdToCredits) —
 // the underlying calculation stays true SGD end to end, same discipline as
-// every other credits-display figure in this codebase.
+// every other credits-display figure in this codebase. payoutCadence
+// (renamed from invoicingCadence 2026-07-23 — this is SpaceSnap paying OUT
+// to the supplier, not the other way around) is flat "biweekly" for every
+// tier as of the same rename.
 //
 // purchasedCredits/earnedCredits added the same day, same session
 // (fulfillment follow-up) — the company-level counterpart of a user's
@@ -33,10 +36,11 @@ export async function serializeCompanyDetails(company: Company) {
     financeContactEmail: company.financeContactEmail,
     financeContactPerson: company.financeContactPerson,
     supplierTier: tierStatus.tier,
-    invoicingCadence: invoicingCadenceForSupplierTier(tierStatus.tier),
+    payoutCadence: payoutCadenceForSupplierTier(tierStatus.tier),
     tierStats: {
-      averageRating: tierStatus.averageRating,
-      ratingCount: tierStatus.ratingCount,
+      bookingCount: tierStatus.bookingCount,
+      cancelledCount: tierStatus.cancelledCount,
+      cancellationRate: tierStatus.cancellationRate,
       spendCredits: sgdToCredits(tierStatus.spendSgd),
       nextTier: tierStatus.nextTier,
       progressPercent: tierStatus.progressPercent,

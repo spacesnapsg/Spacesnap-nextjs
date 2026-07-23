@@ -90,15 +90,17 @@ export async function createCompanyTopUp(
 }
 
 // Rebate % per the company's own live-computed supplier tier
-// (lib/supplier-tiers.ts) — this session's own inference, NOT confirmed with
-// the product owner (flagged per this codebase's "confirm major decisions,
-// flag minor numeric choices" convention, same posture as the cancellation-
-// window percentages introduced in Sprint 6). Deliberately modest and
-// monotonic with tier; revisit if the product owner specifies real numbers.
+// (lib/supplier-tiers.ts) — corrected 2026-07-23 to the product owner's own
+// confirmed numbers, sourced from the updated
+// public/rewards/supplier-reward-tiers-infographic.png (1%/1.2%/1.5%).
+// Previously an unconfirmed inference (1%/1.5%/2%) flagged per this
+// codebase's "confirm major decisions, flag minor numeric choices"
+// convention — now resolved, don't let this drift from that image again
+// without updating both together.
 const COMPANY_REBATE_PERCENT: Record<SupplierTier, number> = {
   free: 1,
-  preferred: 1.5,
-  top: 2,
+  preferred: 1.2,
+  top: 1.5,
 };
 
 // Written once a booking's service is actually rendered (checkOutCheckIn,

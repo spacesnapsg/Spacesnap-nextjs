@@ -442,26 +442,37 @@ model BookingCredit {
 // "check the balance, then deduct" step is needed anywhere; the SUM already
 // reflects it, and can go negative (supplier owes SpaceSnap back) if
 // penalties exceed pending earnings.
+// Renamed 2026-07-23 from "invoiced" to "scheduled" — this ledger tracks
+// what SpaceSnap owes a supplier (a payout SpaceSnap issues), not something
+// the supplier invoices SpaceSnap for; "invoiced" had it backwards. Not yet
+// set by any real code path (no payout-run job exists yet — see the open
+// Sprint 6 Invoice/Receipt gap), same as before the rename.
 enum SupplierPayableStatus {
   pending
-  invoiced
+  scheduled
   paid
 
   @@map("supplier_payable_status")
 }
 
-// Snapshot of the company's supplier tier cadence AT THE TIME this payable
-// was created — deliberately not a live join, so a mid-cycle tier change
-// never reaches back and reshuffles a payable that's already pending/
-// invoiced. The tier itself is never stored (lib/supplier-tiers.ts computes
-// it live from rating + rolling-window spend, Sprint 6.10) — this column
-// just holds the cadence that tier mapped to at creation time.
-enum InvoicingCadence {
+// Snapshot of the company's supplier tier payout cadence AT THE TIME this
+// payable was created — deliberately not a live join, so a mid-cycle tier
+// change never reaches back and reshuffles a payable that's already
+// pending/scheduled. The tier itself is never stored (lib/supplier-tiers.ts
+// computes it live from bookings/cancellation-rate/spend, Sprint 6.10) —
+// this column just holds the cadence that tier mapped to at creation time.
+// Renamed 2026-07-23 from InvoicingCadence — this is SpaceSnap paying OUT to
+// the supplier, not the supplier invoicing SpaceSnap; "invoicing" had the
+// direction of money flow backwards. Every tier maps to biweekly as of the
+// same rename (see SUPPLIER_TIER_PAYOUT_CADENCE, lib/booking-payments.ts) —
+// monthly/weekly stay in the enum only because pre-existing SupplierPayable
+// rows may have snapshotted them before that change.
+enum PayoutCadence {
   monthly
   biweekly
   weekly
 
-  @@map("invoicing_cadence")
+  @@map("payout_cadence")
 }
 
 model SupplierPayable {
@@ -472,7 +483,7 @@ model SupplierPayable {
   penaltyDeduction Decimal               @default(0) @map("penalty_deduction") @db.Decimal(10, 2)
   netAmount        Decimal               @map("net_amount") @db.Decimal(10, 2)
   status           SupplierPayableStatus @default(pending)
-  invoicingCadence InvoicingCadence      @map("invoicing_cadence")
+  payoutCadence    PayoutCadence         @map("payout_cadence")
   createdAt        DateTime              @default(now()) @map("created_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)

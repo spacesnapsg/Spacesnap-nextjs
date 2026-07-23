@@ -1,6 +1,6 @@
 import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { invoicingCadenceForSupplierTier } from "@/lib/booking-payments";
+import { payoutCadenceForSupplierTier } from "@/lib/booking-payments";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 
 // Live-computed, never stored denormalized — same "SUM over the ledger"
@@ -49,7 +49,7 @@ export async function createCompletedBookingPayable(tx: Prisma.TransactionClient
       grossAmount,
       penaltyDeduction: new Prisma.Decimal(0),
       netAmount: grossAmount,
-      invoicingCadence: invoicingCadenceForSupplierTier(tier),
+      payoutCadence: payoutCadenceForSupplierTier(tier),
     },
   });
 }

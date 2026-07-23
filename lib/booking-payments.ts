@@ -1,4 +1,4 @@
-import { InvoicingCadence } from "@/app/generated/prisma/client";
+import { PayoutCadence } from "@/app/generated/prisma/client";
 import type { SupplierTier } from "@/lib/supplier-tiers";
 
 // The pure refund/fee/cap calculators moved to lib/booking-policy.ts
@@ -20,16 +20,25 @@ export {
   MODIFICATION_FEE_PERCENT,
 } from "@/lib/booking-policy";
 
-// Snapshot of the live-computed supplier tier's cadence (lib/supplier-tiers.ts)
-// AT SupplierPayable-creation time (see SupplierPayable.invoicingCadence's
-// own schema comment for why this is a snapshot, not a live join). Confirmed
-// with the product owner 2026-07-21.
-const SUPPLIER_TIER_INVOICING_CADENCE: Record<SupplierTier, InvoicingCadence> = {
-  free: InvoicingCadence.monthly,
-  preferred: InvoicingCadence.biweekly,
-  top: InvoicingCadence.weekly,
+// Snapshot of the live-computed supplier tier's payout cadence
+// (lib/supplier-tiers.ts) AT SupplierPayable-creation time (see
+// SupplierPayable.payoutCadence's own schema comment for why this is a
+// snapshot, not a live join). Originally tier-differentiated
+// (monthly/biweekly/weekly), confirmed with the product owner 2026-07-21;
+// flattened to biweekly for every tier per the product owner's 2026-07-23
+// correction (no more monthly cadence, tier no longer affects payout
+// frequency — only the rebate % does). Renamed from
+// InvoicingCadence/invoicingCadenceForSupplierTier the same day — this is
+// SpaceSnap paying OUT to the supplier on this cadence, not the supplier
+// invoicing SpaceSnap. PayoutCadence.monthly/weekly stay in the Prisma enum
+// unchanged since existing SupplierPayable rows snapshotted from before this
+// change may still hold them.
+const SUPPLIER_TIER_PAYOUT_CADENCE: Record<SupplierTier, PayoutCadence> = {
+  free: PayoutCadence.biweekly,
+  preferred: PayoutCadence.biweekly,
+  top: PayoutCadence.biweekly,
 };
 
-export function invoicingCadenceForSupplierTier(tier: SupplierTier): InvoicingCadence {
-  return SUPPLIER_TIER_INVOICING_CADENCE[tier];
+export function payoutCadenceForSupplierTier(tier: SupplierTier): PayoutCadence {
+  return SUPPLIER_TIER_PAYOUT_CADENCE[tier];
 }
