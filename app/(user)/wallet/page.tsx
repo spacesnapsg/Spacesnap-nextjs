@@ -176,7 +176,7 @@ export default function FinancialsPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-6">
-        <div className="bg-gradient-to-br from-user-teal-start to-user-teal-end rounded-card p-5">
+        <div className="bg-gradient-to-br from-user-teal-start to-user-teal-end rounded-card p-5 flex flex-col h-full">
           <div className="flex items-center justify-between mb-3">
             <span className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center">
               <Wallet size={16} className="text-white" />
@@ -190,13 +190,13 @@ export default function FinancialsPage() {
           <button
             type="button"
             onClick={() => setTopUpOpen(true)}
-            className="w-full h-10 rounded font-medium bg-white text-user-teal-start hover:bg-white/90 transition-colors"
+            className="w-full h-10 rounded font-medium bg-white text-user-teal-start hover:bg-white/90 transition-colors mt-auto"
           >
             Top Up Credits
           </button>
         </div>
 
-        <div className="bg-gradient-to-br from-user-teal-start to-supplier-purple-start rounded-card p-5">
+        <div className="bg-gradient-to-br from-user-teal-start to-supplier-purple-start rounded-card p-5 flex flex-col h-full">
           <div className="flex items-center justify-between mb-3">
             <span className="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center">
               <Gift size={16} className="text-white" />
@@ -210,7 +210,7 @@ export default function FinancialsPage() {
           <button
             type="button"
             onClick={() => setRewardsOpen(true)}
-            className="w-full h-10 rounded font-medium bg-white text-supplier-purple-start hover:bg-white/90 transition-colors"
+            className="w-full h-10 rounded font-medium bg-white text-supplier-purple-start hover:bg-white/90 transition-colors mt-auto"
           >
             Check out your redeemable rewards!
           </button>
