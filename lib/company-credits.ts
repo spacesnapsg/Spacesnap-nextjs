@@ -11,12 +11,18 @@ import type { ActivityQuery } from "@/lib/activity";
 // (lib/credits.ts), not a companyId column bolted onto it. Same "live SUM,
 // never denormalized" principle as getCreditBalance/
 // getSupplierPendingPayableBalance/getUserRewardTier.
+//
+// Includes purchased_spend (Sprint 6.12, Bumps/Pins) alongside
+// purchased_topup — mirrors getPurchasedBalance's own type list
+// (lib/credits.ts) exactly; purchased_spend rows are written with a
+// negative amount (see purchaseBumps below), so summing both types in one
+// aggregate is correct, not a double-count.
 export async function getCompanyPurchasedBalance(
   companyId: bigint,
   client: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Prisma.Decimal> {
   const agg = await client.companyTransaction.aggregate({
-    where: { companyId, type: CompanyTransactionType.purchased_topup },
+    where: { companyId, type: { in: [CompanyTransactionType.purchased_topup, CompanyTransactionType.purchased_spend] } },
     _sum: { amount: true },
   });
   return agg._sum.amount ?? new Prisma.Decimal(0);
@@ -164,6 +170,50 @@ export async function getCompanyTransactionsPage(companyId: bigint, query: Activ
   ]);
 
   return { items, total, page: query.page, pageSize: query.pageSize };
+}
+
+// Sprint 6.12 — placeholder pricing, explicitly NOT a real product-owner
+// number (per the "use a random figure for now" instruction this feature
+// was scoped under). Don't treat this as confirmed; flag it the same way
+// COMPANY_REBATE_PERCENT above was flagged before its real numbers landed.
+export const BUMP_UNIT_COST_CREDITS = 50;
+
+export class InsufficientCompanyPurchasedBalanceError extends Error {
+  constructor() {
+    super("Insufficient purchased credit balance for this purchase.");
+  }
+}
+
+// "Ammo" purchase — increments Company.bumpsAvailable, debits
+// purchasedBalance via a purchased_spend row. Spending (not just holding)
+// company funds is gated to company admins at the route layer
+// (requireCompanyAdmin), stricter than purchased_topup's "any member" gate.
+export async function purchaseBumps(companyId: bigint, quantity: number, userId: string) {
+  const cost = new Prisma.Decimal(creditsToSgd(quantity * BUMP_UNIT_COST_CREDITS)).toDecimalPlaces(2);
+
+  return prisma.$transaction(async (tx) => {
+    const balance = await getCompanyPurchasedBalance(companyId, tx);
+    if (balance.lt(cost)) {
+      throw new InsufficientCompanyPurchasedBalanceError();
+    }
+
+    await tx.companyTransaction.create({
+      data: {
+        companyId,
+        userId,
+        type: CompanyTransactionType.purchased_spend,
+        amount: cost.negated(),
+        description: `Purchased ${quantity} Bump${quantity === 1 ? "" : "s"}`,
+      },
+    });
+
+    const company = await tx.company.update({
+      where: { id: companyId },
+      data: { bumpsAvailable: { increment: quantity } },
+    });
+
+    return { bumpsAvailable: company.bumpsAvailable };
+  });
 }
 
 export function serializeCompanyTransaction(

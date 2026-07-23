@@ -25,6 +25,15 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Lazy expiry, same idiom as getAvailableCreditBalance's credit-hold
+  // expiry (no scheduled-job infra in this codebase) — clears any pin whose
+  // window has passed before the main query runs, so an expired pin can
+  // never sort into the Pinned tier below.
+  await prisma.listing.updateMany({
+    where: { pinnedUntil: { lt: new Date() } },
+    data: { pinnedAt: null, pinnedUntil: null },
+  });
+
   const listings = await prisma.listing.findMany({
     where: {
       ...(type ? { type: type as ListingType } : {}),
@@ -40,7 +49,15 @@ export async function GET(request: NextRequest) {
         : {}),
     },
     include: { requiredCertificates: { include: { certificate: true } }, company: { select: { name: true } } },
-    orderBy: { id: "asc" },
+    // Sprint 6.12 — was `{ id: "asc" }` (oldest-first, not actually
+    // date-based at all, confirmed by reading this route before assuming
+    // otherwise). Pinned listings (non-null pinnedAt, already lazily
+    // cleared of expired ones above) sort first, ordered by pin recency;
+    // everything else falls back to boostedAt, bumped by activateBump
+    // (lib/listings.ts). The frontend still renders pinned listings in
+    // their own separate "Pinned" section rather than relying on this
+    // order alone — see the marketplace page's own comment.
+    orderBy: [{ pinnedAt: { sort: "desc", nulls: "last" } }, { boostedAt: "desc" }],
   });
 
   const ratingAggregates = await getListingRatingAggregates(listings.map((l) => l.id));

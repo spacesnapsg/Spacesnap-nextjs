@@ -62,6 +62,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.companyId = user.companyId;
         token.isBuyerOrgAdmin = user.isBuyerOrgAdmin;
         token.buyerOrganizationId = user.buyerOrganizationId;
+        // Sprint 6.12 — stamp real request-level activity for the EDM
+        // popup's 6-hour trigger (lib/edm-campaigns.ts). Fire-and-forget is
+        // deliberately not used here: this is the first-sign-in branch, so
+        // there's no risk of racing the per-request re-check below within
+        // the same token's lifetime.
+        await prisma.user.update({ where: { id: user.id! }, data: { lastActivityAt: new Date() } });
         return token;
       }
 
@@ -70,21 +76,32 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       // read so a suspend takes effect immediately instead of waiting out
       // the token's lifetime. Returning null here forces sign-out: the core
       // session handler clears the session cookie instead of returning a body.
-      const current = await prisma.user.findUnique({
-        where: { id: token.id },
-        select: {
-          status: true,
-          isSupplier: true,
-          isMember: true,
-          isCompanyAdmin: true,
-          isSystemAdmin: true,
-          companyId: true,
-          isBuyerOrgAdmin: true,
-          buyerOrganizationId: true,
-        },
-      });
+      // Folds the Sprint 6.12 lastActivityAt stamp into this same existing
+      // per-request round trip (an UPDATE instead of a SELECT) rather than
+      // adding a second query. update() throws P2025 instead of resolving
+      // null when the row no longer exists (unlike findUnique), so the
+      // not-found case moves into the catch below.
+      let current;
+      try {
+        current = await prisma.user.update({
+          where: { id: token.id },
+          data: { lastActivityAt: new Date() },
+          select: {
+            status: true,
+            isSupplier: true,
+            isMember: true,
+            isCompanyAdmin: true,
+            isSystemAdmin: true,
+            companyId: true,
+            isBuyerOrgAdmin: true,
+            buyerOrganizationId: true,
+          },
+        });
+      } catch {
+        return null;
+      }
 
-      if (!current || current.status === "suspended") {
+      if (current.status === "suspended") {
         return null;
       }
 

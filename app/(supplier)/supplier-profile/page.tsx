@@ -17,6 +17,8 @@ import {
   useResolveCompanyJoinRequest,
 } from "@/lib/hooks/useCompanyMembers";
 import { ApiRequestError } from "@/lib/api-client";
+import SupplierEdmCard from "@/components/SupplierEdmCard";
+import ListingBoostCatalogueCard from "@/components/ListingBoostCatalogueCard";
 
 function getInitials(name: string) {
   return name
@@ -441,6 +443,8 @@ export default function SupplierProfilePage() {
         </div>
 
         <div className="lg:col-span-2 flex flex-col gap-6">
+          <ListingBoostCatalogueCard />
+          <SupplierEdmCard />
           <BusinessDetailsCard />
         </div>
       </div>

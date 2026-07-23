@@ -1295,6 +1295,72 @@ Revenue" card).
     `git stash` unrelated to this session), `next build` clean — both new
     routes listed, `/api/supplier/revenue` gone.
 
+### Supplier Tier Criteria Swap + Rebate Correction + Payout Cadence Rename (2026-07-23, same day, immediate follow-on)
+
+**Documented retroactively** — this work (commit `58fd40e`) landed without a
+same-session write-up here or in `CLAUDE1.md`; the entry below and the
+Supplier Profile reshuffle closures above it were reconstructed from the
+diff/commit message after the fact, not re-verified live. Flagging that
+distinction rather than implying a fresh verification pass that didn't
+happen.
+
+- [x] **Supplier tier criteria swap — rating replaced by booking volume +
+  cancellation rate, per the product owner's updated infographic
+  (`public/rewards/supplier-reward-tiers-infographic.png`).**
+  `computeSupplierTier`/`getCompanySupplierTierStats`/`SupplierTierStatus`
+  (`lib/supplier-tiers.ts`) changed from `(averageRating, spendSgd)` to
+  `(bookingCount, cancellationRate, spendSgd)` — all three now AND'd, same
+  "highest tier whose every condition is met" model as before.
+  **Preferred**: min 50 completed bookings, cancellation rate under 10%,
+  50,000 credits (S$5,000) spend. **Top**: min 100 bookings, under 3%
+  cancellation rate, 100,000 credits (S$10,000) spend. `bookingCount`
+  counts the company's own `completed` bookings in the rolling
+  `REWARD_TIER_WINDOW_MONTHS` window (same window as spend);
+  `cancellationRate = cancelledCount / (bookingCount + cancelledCount)`
+  over that same window, `0` when there are no finalized bookings yet (no
+  data to penalize on, not a false 100%). Progress-bar math
+  (`progressPercent`) extended to bottleneck on all three ratios, with the
+  cancellation-rate ratio inverted since it's a max-threshold (lower is
+  better) unlike the other two min-thresholds. `serializeCompanyDetails`
+  (`lib/company.ts`)'s `tierStats` shape changed to match
+  (`averageRating`/`ratingCount` → `bookingCount`/`cancelledCount`/
+  `cancellationRate`) — a breaking response-shape change on
+  `GET /api/supplier/company`, no versioning, matching this codebase's
+  existing convention of not versioning internal API responses.
+- [x] **Rebate percentages corrected — 1% / 1.2% / 1.5%, replacing an
+  earlier unconfirmed 1% / 1.5% / 2% guess.** `COMPANY_REBATE_PERCENT`
+  (`lib/company-credits.ts`) updated to match the product owner's real
+  infographic numbers. `SupplierTierBenefitsModal.tsx`'s image swap (old
+  stale-numbers asset → the real one) is the source of truth for these —
+  its own comment now warns against letting the constant drift from the
+  image again without updating both together.
+- [x] **`InvoicingCadence`/`invoicingCadence` renamed to
+  `PayoutCadence`/`payoutCadence` throughout — schema, migration, lib, UI
+  copy.** Direction-of-money-flow correction: this ledger is SpaceSnap
+  paying a supplier out, not the supplier invoicing SpaceSnap.
+  `SupplierPayableStatus.invoiced` renamed to `scheduled` for the same
+  reason. Migration `20260723090000_payout_cadence_rename` (`ALTER TYPE
+  ... RENAME TO`, `ALTER TABLE ... RENAME COLUMN`, `ALTER TYPE ... RENAME
+  VALUE`) — no data migration needed, `supplier_payables` was empty at the
+  time. `invoicingCadenceForSupplierTier` → `payoutCadenceForSupplierTier`
+  (`lib/booking-payments.ts`); **also flattened every tier to `biweekly`**
+  (previously free→monthly/preferred→biweekly/top→weekly) — cadence no
+  longer differentiates tiers, only the rebate % does. The
+  `monthly`/`weekly` enum values stay defined (pre-existing
+  `SupplierPayable` rows may have snapshotted them before this change) even
+  though no live code path produces them anymore.
+- **Re-verified 2026-07-23** (this documentation-catch-up session, not the
+  original build session): `npm test` **389/389**, `npx tsc --noEmit`
+  clean, `npx eslint .` shows only the same 2 pre-existing errors as before
+  (`app/(user)/passport/page.tsx` setState-in-effect,
+  `prisma/tests/db-constraints.test.ts` explicit-`any`) — neither in a file
+  `58fd40e` touched, confirming they predate it. No live-DB functional
+  re-check of the new tier thresholds/payout cadence against seeded data
+  was performed this session (that would need its own test accounts, same
+  as other sessions' "verified live" passes) — the tier-swap unit math
+  itself is exercised by the existing `lib/supplier-tiers.ts` call sites,
+  not a dedicated new test file.
+
 ---
 
 ## Sprint 6.11: Railway + Cloudflare R2 Deployment Readiness (raised 2026-07-22)
@@ -1417,80 +1483,208 @@ here.
 
 ## Sprint 6.12: Broadcast Notifications, EDM Popups, Supplier Profile Reshuffle, Monetization Catalogue (raised 2026-07-23, planning only)
 
-Five items from the product owner, not yet built — captured here as a
-planning-only sprint, same convention as Sprint 6.10. **Numbered 6.12, not
-6.11 as originally requested** — 6.11 already exists (Railway + Cloudflare
-R2 Deployment Readiness) and is an unrelated deployment-readiness sprint;
-renumbered rather than overwriting/merging into it. Several of these are
-genuinely open-ended ("Content TBD," "Details TBD" in the original ask) —
-left that way below rather than inventing specifics.
+Five items from the product owner, captured here as a planning-only sprint,
+same convention as Sprint 6.10 — all five are now closed, the last three via
+a full build-out session 2026-07-23 (see the write-up below the checklist).
+**Numbered 6.12, not 6.11 as originally requested** — 6.11 already exists
+(Railway + Cloudflare R2 Deployment Readiness) and is an unrelated
+deployment-readiness sprint; renumbered rather than overwriting/merging
+into it.
 
-- [ ] **Admin UI — broadcast a notification to all Members.** Appears in
-  every member's existing notification panel (`components/NotificationsPanel.tsx`);
-  clicking it opens a modal (content TBD). New ground, not a relocation:
-  `Notification` (`prisma/schema.prisma`) is a one-row-per-user model with
-  no broadcast/announcement concept today, and no notification type
-  currently opens a modal on click — every existing row just marks itself
-  read on click (`NotificationsPanel.tsx`, confirmed by reading the handler).
-  Needs a design decision before building: fan out one `Notification` row
-  per Member at send time (simple, matches the existing read/unread model
-  exactly, but a large broadcast is a lot of rows) vs. a new
-  `Announcement`-style model each `Notification` row references (one row of
-  actual content, cheap fan-out, but a new relation and a new "isRead"
-  tracking shape to design). Not decided here — flagged for whoever picks
-  this up.
-- [ ] **Admin UI — broadcast a notification to all Suppliers.** Same
-  mechanic and same open design question as the Member broadcast above,
-  scoped to `isSupplier` instead.
-- [ ] **Supplier and Admin — EDM upload that pops up on sign-in, and again
-  after sign-out once the account has been inactive for at least 6 hours.**
-  Genuinely new concept — grep confirms no `Announcement`/banner/popup
-  mechanism exists anywhere in this codebase today. Needs at least: where
-  the upload lives (new admin + supplier UI), what "inactive for 6 hours"
-  is measured against (last sign-in timestamp? last request? no session
-  activity tracking currently exists to answer this), and whether Supplier-
-  authored and Admin-authored EDMs are the same content slot or two
-  independent ones. Ties into the "Buying of ads" catalogue item below —
-  worth designing both together rather than twice.
-- [ ] **Supplier Profile — move Team Members card to the left column.**
-  Today's layout (`app/(supplier)/supplier-profile/page.tsx`): the left
-  column (`lg:col-span-1`) holds the avatar/profile card +
-  `CompanyAdminAccessCard`; the right column (`lg:col-span-2`) holds
-  `BusinessDetailsCard`, `TeamMembersCard`, then the Accounts
-  Receivable/Receipts cards. `TeamMembersCard` moves to the left column,
-  under the existing profile card.
-- [ ] **Listing stats → Analytics, integrated into the top 2 cards.**
-  Checked before writing this down: no "listing stats" section currently
-  exists anywhere in this codebase (`app/(supplier)/supplier-inventory/page.tsx`
-  has no stats block, confirmed by grep) — so this isn't a relocation of an
-  existing feature, it's new scope to design, framed as feeding into
-  Analytics' existing `StatCard` pair ("Active Bookings"/"Total Listings",
-  `app/(supplier)/supplier/page.tsx`). What "listing stats" should actually
-  contain (views? bookings per listing? something else?) is undecided —
-  flagged, not guessed.
-- [ ] **Supplier Profile — move Business Details down; add a purchasable
-  listing-boost catalogue above it, placeholder cards.** Business Details
-  (`BusinessDetailsCard`) moves below a new catalogue section in the right
-  column. Catalogue items, per the product owner, all placeholder/TBD
-  content at this stage:
-  - **Lab Digest** — a purchasable report on who's new on SpaceSnap
-    (buyer organizations), buying trends, etc. Content/format TBD.
-  - **Ads** — buying a popup ad slot, surfaced via the same EDM popup
-    mechanism from the item above (not a separate delivery path).
-  - **Newsletter space** — purchasable placement in a newsletter. Content
-    TBD; no newsletter concept exists anywhere in this codebase today.
-  - **Bumps** — pushes the supplier's listing to page 1 of marketplace
-    search results. Depends on marketplace listings actually having pages:
-    confirmed by inspection that `GET /api/listings` has no `take`/`skip`
-    today (`app/api/listings/route.ts`) — the marketplace is unpaginated,
-    same gap every other feed in this codebase had before the Recent
-    Activity/Credit Movement pagination work above. **Marketplace listings
-    need real pagination (10 at a time) as a prerequisite for this item**,
-    not an unrelated nice-to-have — "page 1" isn't a meaningful concept
-    until pagination exists.
-  - **Pin** — pins the listing to the very top of marketplace results,
-    above bumped listings. Mechanics TBD (relative ordering vs. bumps,
-    duration, whether multiple suppliers can pin simultaneously).
+- [x] **Admin UI — broadcast a notification to all Members — closed
+  2026-07-23.** The two originally-separate Member/Supplier broadcast items
+  merged into one feature: a single composer with two independent audience
+  checkboxes (Members / Suppliers, at least one required), not two separate
+  send actions — this shape was chosen mid-build after the user flagged
+  that a fixed per-broadcast-type audience was too rigid, see the build-out
+  write-up below.
+- [x] **Admin UI — broadcast a notification to all Suppliers — closed
+  2026-07-23**, same feature/commit as the Members item above (one
+  composer, not two).
+- [x] **Supplier and Admin — EDM upload that pops up on sign-in — closed
+  2026-07-23.** Two independent slots as scoped: Admin's can target
+  Members, Suppliers, or both; Supplier's always targets Members only (a
+  supplier's ad to buyers). "Inactive for 6 hours" resolved to real
+  request-level activity tracking (`User.lastActivityAt`, stamped in
+  `auth.ts`'s `jwt` callback on every request) rather than a bare
+  sign-in/out timestamp — see the build-out write-up for the full trigger
+  logic and its stated simplifications.
+- [x] **Supplier Profile — move Team Members card to the left column —
+  closed 2026-07-23.** `TeamMembersCard` moved from the right column (was
+  between `BusinessDetailsCard` and the Listing Stats card) to the left
+  column, directly under the avatar/profile card and above
+  `CompanyAdminAccessCard`. Left column changed from a bare `lg:col-span-1`
+  to `flex flex-col gap-6` to hold the extra card (the three left-column
+  `Card`s each dropped their individual `mt-6`/`className="mt-6"` in favor
+  of the parent's `gap-6`, same pattern as the earlier Passport-page
+  `BuyerOrganizationCard` relocation).
+- [x] **Listing stats → Analytics — closed 2026-07-23, done differently
+  than originally scoped, corrected same day after a first pass under-
+  scoped it.** This item's own text left "what listing stats should
+  contain" undecided; what actually got built wasn't an integration into
+  the *existing* two `StatCard`s but a straight relocation: the Listing
+  Stats card (Total Listings, Total Completed Bookings, Average Rating —
+  itself only added days earlier, Sprint 4.75's rating-display fix) was
+  deleted from Supplier Profile entirely, its figures moved to Analytics.
+  **`58fd40e`'s first pass (documented, then corrected, in this same
+  session) dropped the old "Active Bookings" card entirely** and landed a
+  4-column row (Active Listing/Completed Listing/Total Listing/Average
+  Rating) that quietly lost booking-count visibility. Caught immediately
+  by the product owner: Analytics needs **6** cards, not 4 — both booking
+  counts and listing counts, not one substituted for the other. Final row
+  (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`, two rows of three):
+  **Active Bookings** (restored — `active`/`confirmed` status count, the
+  same definition the pre-`58fd40e` code used), **Completed Bookings**,
+  **Total Bookings** (new), **Active Listings** (`listing.isAvailable`
+  count), **Total Listings**, **Average Rating** (the relocated
+  weighted-average-across-listings calc, moved verbatim throughout).
+  Verified live 2026-07-23 against `ben@acmecoworking.sg`'s seeded data on
+  the running dev server: 1 Active / 1 Completed / 3 Total Bookings, 2
+  Active / 2 Total Listings — matches the Recent Bookings table's 3 rows
+  exactly (1 active, 1 pending, 1 completed). `npx tsc --noEmit` clean.
+- [x] **Supplier Profile — move Business Details down; add a purchasable
+  listing-boost catalogue above it — closed 2026-07-23.** Built as
+  `ListingBoostCatalogueCard`, placed above `BusinessDetailsCard`.
+  **Corrected mid-build**: originally scoped as five inert placeholder
+  cards; the user then asked specifically about Bumps/Pin and, once
+  described in concrete terms, upgraded both to real features for this
+  pass (Lab Digest/Ads/Newsletter stayed placeholder, confirmed explicitly,
+  not by default). See the build-out write-up below for the full
+  design/implementation of all five cards, including the discovery that
+  **pagination was never actually the right prerequisite for Bumps** — the
+  real blocker was that `GET /api/listings` had no date-based ordering at
+  all (`{ id: "asc" }`), not that it lacked pagination; the Map view (which
+  plots every matching listing at once) would have broken under real
+  pagination anyway.
+
+---
+
+## Sprint 6.12 Build-Out (2026-07-23)
+
+Full implementation session closing the three items above that were still
+open after the same-day reshuffle work. Eight phases, built and verified in
+order (see CLAUDE1.md's "Sprint 6.12 Build-Out" write-up for the complete
+session narrative, including the planning-conversation back-and-forth that
+shaped the design — this section is the technical summary).
+
+**Schema** (4 migrations, `Prisma Client` regenerated after each):
+`User.lastActivityAt`/`lastEdmSeenAt`; `Announcement`/`AnnouncementRead`;
+`BannerPortal` enum/`Banner`; `AdminEdmCampaign`/`SupplierEdmCampaign`;
+`Listing.boostedAt` (backfilled from `createdAt` via hand-edited migration
+SQL) + `pinnedAt`/`pinnedUntil`; `Company.bumpsAvailable`;
+`CompanyTransactionType.purchased_spend` (existed for users, missing for
+companies until now — `getCompanyPurchasedBalance` updated to sum it
+alongside `purchased_topup`, mirroring `getPurchasedBalance`'s existing
+per-user pattern).
+
+**Broadcast notifications** (`lib/announcements.ts`): one shared
+`Announcement` content row per send, per-user read state via
+`AnnouncementRead` (`@@unique([announcementId, userId])`, row existence =
+read). `targetMembers`/`targetSuppliers` are independent booleans, not an
+enum — a broadcast can target either or both, chosen per send.
+`NotificationsPanel.tsx` merges `useNotifications()` and
+`useAnnouncements()` into one client-side discriminated union, sorted
+`pinned desc, createdAt desc` (announcements never carry `pinned`, so they
+never jump a pinned `booking_credit_pending` row); clicking an announcement
+opens `AnnouncementModal` with the full content and marks it read on open —
+the one row type that opens a modal instead of just marking itself read
+inline. Admin composer + send history at `/admin-broadcasts`
+(`components/AdminBroadcasts.tsx`), new `AdminNavbar` item, added to
+`proxy.ts`'s `ADMIN_ROUTES`/`matcher` (unlike the pre-existing
+`/admin-rewards` gap noted in the prior documentation-catch-up session,
+which stayed out of scope here).
+
+**Announcement banner** (`lib/banners.ts`): separate mechanism from the EDM
+popup — a persistent strip below the navbar, not a modal. Two
+admin-only, independently-configured singletons (`portal @unique`), each
+with an optional `expiresAt`; `getActiveBanner` returns `null` if missing
+or expired, server-side, so the client never special-cases expiry.
+Dismissal is client-side `localStorage`, keyed by `id`+`updatedAt` — a new
+upload changes the key, so the strip naturally reappears. Mounted at
+layout level (`app/(user)/layout.tsx`, `app/(supplier)/layout.tsx`), same
+tier as `PendingBookingCreditModal`.
+
+**EDM sign-in popup** (`lib/edm-campaigns.ts`): two independent slots —
+`AdminEdmCampaign` (singleton by app-layer delete-then-create convention,
+audience is two booleans) and `SupplierEdmCampaign` (one row per company,
+DB-enforced via `companyId @unique`, always Members-only, free/self-serve —
+the still-placeholder "Ads" catalogue card points at this same upload path,
+no purchase gate built). **Trigger, deliberately simplified**: show the
+popup if `lastEdmSeenAt` is `null` or ≥6 hours old, checked once per layout
+mount (no polling) — covers both "fresh sign-in" and "idle session active
+again after 6h" without special-casing sign-out; a tab left open and never
+reloaded won't re-trigger mid-session. **Candidate selection, also
+simplified**: at most one EDM shown — the admin campaign takes priority (if
+it targets the user's role), otherwise the single most-recently-updated
+active `SupplierEdmCampaign` across all companies; true multi-supplier ad
+rotation is out of scope, left for whatever eventually builds the real Ads
+purchase flow. Verified end-to-end via a direct `lib/edm-campaigns.ts` call
+(bypassing the running dev server, since this sandbox has no real R2
+credentials — see below): dismiss correctly suppresses immediate re-fire,
+and a simulated 7-hours-ago `lastEdmSeenAt` correctly re-fires it.
+
+**Marketplace sort-order fix**: `Listing.boostedAt` replaces
+`orderBy: { id: "asc" }` — starts equal to `createdAt`, bumped to `now()`
+by a Bump. Confirmed via `psql` that the migration's backfill preserved
+every existing listing's relative order.
+
+**Bumps** (`lib/company-credits.ts`'s `purchaseBumps`, `lib/listings.ts`'s
+`activateBump`): "ammo" purchased in quantity (`Company.bumpsAvailable`,
+`requireCompanyAdmin` — spending shared funds), spent one at a time on a
+listing (`requireSupplier` — any team member, matching the existing
+listing-edit gate) to reset its `boostedAt`. Placeholder pricing (50
+credits/bump, explicitly flagged, not a real product-owner number) — the
+user's own instruction was "use a random number now." Supplier Inventory
+page shows a "N Bumps left" header stat and a per-listing Bump button.
+
+**Pins** (`lib/listings.ts`'s `purchaseAndApplyPin`): buy-and-apply as one
+combined action (7 or 30 days, 200/600 placeholder credits), nullable
+`pinnedAt`/`pinnedUntil` pair, lazily cleared on every `GET /api/listings`
+read (same no-scheduled-job idiom as `getAvailableCreditBalance`'s
+credit-hold expiry) before the query's `orderBy: [{ pinnedAt: { sort:
+"desc", nulls: "last" } }, { boostedAt: "desc" }]` runs. **UI clarification
+from the user, changed the frontend shape mid-build**: a Pin isn't just a
+sort-order nudge inside the regular grid — `app/(user)/marketplace/page.tsx`
+renders pinned listings in their own labeled "Pinned" section, structurally
+separate from the regular grid below it, so a Bump can never visually
+compete with or appear to unseat a Pin (`MapView`'s markers get the
+equivalent distinct amber/pin-icon styling). Both purchases verified live
+end-to-end against `ben@acmecoworking.sg`'s real seeded company/listings on
+the running dev server (top-up → buy bumps → activate → buy pin →
+confirmed `GET /api/listings` returns the pinned listing first, the bumped
+listing second, everything else at its original position) — test data
+cleaned up via `psql` afterward, dev DB confirmed back to seeded state.
+
+**Supplier Profile catalogue card** (`components/ListingBoostCatalogueCard.tsx`):
+Bumps and Pin wired to the real purchase routes; Lab Digest/Ads/Newsletter
+render as static "Coming soon" placeholders, per the user's explicit
+confirmation this pass stops there.
+
+**What could and couldn't be verified in this sandbox**: no real
+Cloudflare R2 credentials are configured locally (confirmed — `.env` has
+none of the `R2_*` vars, same gap that already existed for the pre-existing
+evidence-upload flow), so the actual file-input → presign → PUT-to-R2 →
+public-URL round trip could not be exercised end-to-end. What *was*
+verified: `lib/storage.ts`'s new pure functions (`buildPublicAssetKey`,
+`getPublicAssetUrl`) via 6 unit tests; the presign routes return a clean
+error when R2 isn't configured (an unhandled 500, same as the existing
+evidence-upload route's own behavior — not a new gap, deliberately left
+consistent rather than gold-plated); and the full targeting/trigger/dismiss
+business logic for banners and EDM by calling `lib/banners.ts`/
+`lib/edm-campaigns.ts` directly with a temporarily-set
+`R2_PUBLIC_BASE_URL`, bypassing only the actual R2 network call.
+
+**Tests**: `lib/storage.test.ts` (6, new), `lib/company-credits.test.ts`
+gained 9 (`purchaseBumps` ×2, `activateBump` ×3, `purchaseAndApplyPin` ×4).
+**404/404** (up from 389 at session start). `npx tsc --noEmit` clean,
+`npx eslint .` shows only the same 2 pre-existing errors from before this
+session (`app/(user)/passport/page.tsx`, `prisma/tests/db-constraints.test.ts`
+— confirmed neither file was touched), `next build` clean with every new
+route listed (`/admin-broadcasts`, `/api/announcements`,
+`/api/admin/announcements`, `/api/banners/[portal]`,
+`/api/admin/banners/[portal]`, `/api/admin/edm-campaign`,
+`/api/supplier/edm-campaign`, `/api/supplier/company/bumps/purchase`,
+`/api/supplier/company/pins/purchase`, `/api/supplier/listings/[id]/bump`).
 
 ---
 

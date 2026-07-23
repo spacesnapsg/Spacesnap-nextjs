@@ -1,7 +1,7 @@
 "use client";
 
 import { signOut } from "next-auth/react";
-import { Home, Users, Gift, Banknote, UserCheck, Award, LogOut } from "lucide-react";
+import { Home, Users, Gift, Banknote, UserCheck, Award, Megaphone, LogOut } from "lucide-react";
 import Navbar from "./Navbar";
 import NavGroup, { NavItem } from "./NavGroup";
 import LogoBox from "./LogoBox";
@@ -36,6 +36,7 @@ export default function AdminNavbar() {
         <NavItem icon={<Banknote size={16} />} label="Financials" href="/admin-financials" gradient="from-admin-red-start to-admin-orange-end" />
         <NavItem icon={<UserCheck size={16} />} label="Approvals" href="/admin-approvals" gradient="from-admin-red-start to-admin-orange-end" />
         <NavItem icon={<Award size={16} />} label="Certificates" href="/admin/certificates" gradient="from-admin-red-start to-admin-orange-end" />
+        <NavItem icon={<Megaphone size={16} />} label="Broadcasts" href="/admin-broadcasts" gradient="from-admin-red-start to-admin-orange-end" />
       </NavGroup>
     </Navbar>
   );

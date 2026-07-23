@@ -18,6 +18,7 @@ const SUPPLIER_ROUTES = [
 const ADMIN_ROUTES = [
   "/admin",
   "/admin-approvals",
+  "/admin-broadcasts",
   "/admin-companies",
   "/admin-financials",
   "/admin-users",
@@ -74,6 +75,7 @@ export const config = {
     "/supplier-tutorials/:path*",
     "/admin/:path*",
     "/admin-approvals/:path*",
+    "/admin-broadcasts/:path*",
     "/admin-companies/:path*",
     "/admin-financials/:path*",
     "/admin-users/:path*",

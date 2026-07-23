@@ -8,10 +8,18 @@ import {
   AlertTriangle,
   Wallet,
   Info,
+  Megaphone,
   type LucideIcon,
 } from "lucide-react";
 import Card from "./Card";
-import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead } from "@/lib/hooks/useNotifications";
+import AnnouncementModal from "./AnnouncementModal";
+import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead, type Notification } from "@/lib/hooks/useNotifications";
+import {
+  useAnnouncements,
+  useMarkAnnouncementRead,
+  useMarkAllAnnouncementsRead,
+  type Announcement,
+} from "@/lib/hooks/useAnnouncements";
 
 const TYPE_META: Record<string, { icon: LucideIcon; color: string }> = {
   cert_earned: { icon: CheckCircle2, color: "text-success-green" },
@@ -22,6 +30,18 @@ const TYPE_META: Record<string, { icon: LucideIcon; color: string }> = {
 };
 
 const DEFAULT_TYPE_META = { icon: Info, color: "text-muted-text" };
+const ANNOUNCEMENT_META = { icon: Megaphone, color: "text-user-teal-end" };
+
+// Sprint 6.12 — merges the flat per-user Notification feed with the
+// Announcement broadcast feed into one client-side list. Announcements
+// never carry `pinned` (that concept only exists for Notification today),
+// so they sort purely by recency among themselves and never jump ahead of
+// a pinned booking_credit_pending row — mirrors getNotifications' own
+// `pinned desc, createdAt desc` ordering, just computed here since the two
+// feeds come from separate queries.
+type FeedItem =
+  | { kind: "notification"; id: string; isRead: boolean; pinned: boolean; createdAt: string; data: Notification }
+  | { kind: "announcement"; id: string; isRead: boolean; pinned: false; createdAt: string; data: Announcement };
 
 function formatRelativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -41,13 +61,42 @@ interface NotificationsPanelProps {
 
 export default function NotificationsPanel({ accentGradient }: NotificationsPanelProps) {
   const [open, setOpen] = useState(false);
+  const [openAnnouncement, setOpenAnnouncement] = useState<Announcement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { data: notifications } = useNotifications();
+  const { data: announcements } = useAnnouncements();
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllNotificationsRead();
+  const markAnnouncementRead = useMarkAnnouncementRead();
+  const markAllAnnouncementsRead = useMarkAllAnnouncementsRead();
 
-  const list = notifications ?? [];
-  const unreadCount = list.filter((n) => !n.isRead).length;
+  const feed: FeedItem[] = [
+    ...(notifications ?? []).map(
+      (n): FeedItem => ({ kind: "notification", id: n.id, isRead: n.isRead, pinned: n.pinned, createdAt: n.createdAt, data: n })
+    ),
+    ...(announcements ?? []).map(
+      (a): FeedItem => ({ kind: "announcement", id: a.id, isRead: a.isRead, pinned: false, createdAt: a.createdAt, data: a })
+    ),
+  ].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+
+  const unreadCount = feed.filter((item) => !item.isRead).length;
+
+  function handleItemClick(item: FeedItem) {
+    if (item.kind === "notification") {
+      if (!item.isRead) markRead.mutate(item.id);
+      return;
+    }
+    setOpenAnnouncement(item.data);
+    if (!item.isRead) markAnnouncementRead.mutate(item.id);
+  }
+
+  function handleMarkAllRead() {
+    markAllRead.mutate();
+    markAllAnnouncementsRead.mutate();
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -86,7 +135,7 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
             {unreadCount > 0 && (
               <button
                 type="button"
-                onClick={() => markAllRead.mutate()}
+                onClick={handleMarkAllRead}
                 className={`text-xs font-medium bg-gradient-to-r ${accentGradient} bg-clip-text text-transparent hover:opacity-80 transition-opacity`}
               >
                 Mark all as read
@@ -94,42 +143,42 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
             )}
           </div>
 
-          {list.length === 0 ? (
+          {feed.length === 0 ? (
             <p className="text-sm text-muted-text text-center py-6">You&apos;re all caught up.</p>
           ) : (
             <ul className="flex flex-col gap-1 max-h-96 overflow-y-auto">
-              {list.map((notification) => {
-                const meta = TYPE_META[notification.type ?? ""] ?? DEFAULT_TYPE_META;
+              {feed.map((item) => {
+                const title = item.kind === "notification" ? item.data.title : item.data.title;
+                const message = item.kind === "notification" ? item.data.message : item.data.message;
+                const meta = item.kind === "announcement" ? ANNOUNCEMENT_META : TYPE_META[item.data.type ?? ""] ?? DEFAULT_TYPE_META;
                 const Icon = meta.icon;
                 return (
                   <li
-                    key={notification.id}
-                    onClick={() => !notification.isRead && markRead.mutate(notification.id)}
+                    key={`${item.kind}-${item.id}`}
+                    onClick={() => handleItemClick(item)}
                     className={`flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-background cursor-pointer ${
-                      notification.pinned ? "bg-error-red/5 border border-error-red/20" : notification.isRead ? "" : "bg-background/60"
+                      item.pinned ? "bg-error-red/5 border border-error-red/20" : item.isRead ? "" : "bg-background/60"
                     }`}
                   >
                     <Icon size={16} className={`mt-0.5 shrink-0 ${meta.color}`} />
                     <div className="flex-1 min-w-0">
-                      {notification.title && (
+                      {title && (
                         <p
                           className={`text-sm leading-snug ${
-                            notification.isRead && !notification.pinned ? "text-muted-text font-normal" : "text-body-text font-semibold"
+                            item.isRead && !item.pinned ? "text-muted-text font-normal" : "text-body-text font-semibold"
                           }`}
                         >
-                          {notification.title}
+                          {title}
                         </p>
                       )}
-                      <p
-                        className={`text-sm leading-snug ${notification.isRead && !notification.pinned ? "text-muted-text" : "text-body-text"}`}
-                      >
-                        {notification.message}
+                      <p className={`text-sm leading-snug ${item.isRead && !item.pinned ? "text-muted-text" : "text-body-text"}`}>
+                        {message}
                       </p>
                       <span className="text-xs text-hint-text">
-                        {notification.pinned ? "Action needed" : formatRelativeTime(notification.createdAt)}
+                        {item.pinned ? "Action needed" : formatRelativeTime(item.createdAt)}
                       </span>
                     </div>
-                    {!notification.isRead && !notification.pinned && (
+                    {!item.isRead && !item.pinned && (
                       <span className={`mt-1.5 h-2 w-2 rounded-full bg-gradient-to-r ${accentGradient} shrink-0`} />
                     )}
                   </li>
@@ -139,6 +188,8 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
           )}
         </Card>
       )}
+
+      <AnnouncementModal announcement={openAnnouncement} onClose={() => setOpenAnnouncement(null)} />
     </div>
   );
 }

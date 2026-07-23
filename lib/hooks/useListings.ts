@@ -23,6 +23,9 @@ export interface Listing {
   pricePerUnit: number | null;
   stockQuantity: number | null;
   packSize: string | null;
+  // Sprint 6.12 — computed server-side (serializeListing, lib/listings.ts):
+  // true only while pinnedUntil is set and still in the future.
+  isPinned: boolean;
   requiredCertificateIds?: string[];
   requiredCertificates?: { id: string; name: string; category: string | null }[];
   createdAt: string;

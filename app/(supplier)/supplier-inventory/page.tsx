@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, MapPin, Image as ImageIcon } from "lucide-react";
+import { Plus, MapPin, Image as ImageIcon, Zap } from "lucide-react";
 import Button from "@/components/Button";
 import AddEditListingModal from "@/components/AddEditListingModal";
 import { useSupplierListings, useToggleAvailability } from "@/lib/hooks/useSupplierListings";
+import { useSupplierCompany, useActivateBump } from "@/lib/hooks/useSupplierCompany";
 import type { Listing, ListingType } from "@/lib/hooks/useListings";
 
 const TYPE_BADGE_STYLES: Record<ListingType, string> = {
@@ -27,11 +28,17 @@ function ListingCard({
   onEdit,
   onToggleAvailability,
   isToggling,
+  onBump,
+  isBumping,
+  bumpsAvailable,
 }: {
   listing: Listing;
   onEdit: (listing: Listing) => void;
   onToggleAvailability: (id: string) => void;
   isToggling: boolean;
+  onBump: (id: string) => void;
+  isBumping: boolean;
+  bumpsAvailable: number;
 }) {
   const isConsumable = listing.type === "consumables";
 
@@ -112,6 +119,20 @@ function ListingCard({
             {listing.isAvailable ? "Mark Unavailable" : "Mark Available"}
           </button>
         </div>
+        <button
+          type="button"
+          disabled={isBumping || bumpsAvailable <= 0}
+          onClick={() => onBump(listing.id)}
+          title={bumpsAvailable <= 0 ? "No Bumps available — buy more from the Supplier Profile catalogue." : "Bump to the front of the marketplace"}
+          className={`flex items-center justify-center gap-1.5 h-9 rounded text-sm font-medium border transition-colors ${
+            isBumping || bumpsAvailable <= 0
+              ? "opacity-50 cursor-not-allowed border-border text-muted-text"
+              : "bg-amber/15 text-amber border-amber/30 hover:bg-amber/25"
+          }`}
+        >
+          <Zap size={14} />
+          {isBumping ? "Bumping…" : `Bump (${bumpsAvailable} left)`}
+        </button>
       </div>
     </div>
   );
@@ -120,6 +141,9 @@ function ListingCard({
 export default function SupplierInventoryPage() {
   const { data: listings, isLoading, isError } = useSupplierListings();
   const toggleAvailability = useToggleAvailability();
+  const { data: company } = useSupplierCompany();
+  const activateBump = useActivateBump();
+  const bumpsAvailable = company?.bumpsAvailable ?? 0;
   const [modalOpen, setModalOpen] = useState(false);
   const [editingListing, setEditingListing] = useState<Listing | null>(null);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -154,6 +178,9 @@ export default function SupplierInventoryPage() {
             Inventory Management
           </h1>
           <p className="text-muted-text mt-1">Manage your listings and availability</p>
+          <p className="flex items-center gap-1.5 text-sm text-amber mt-2">
+            <Zap size={16} /> {bumpsAvailable} Bump{bumpsAvailable === 1 ? "" : "s"} left
+          </p>
         </div>
         <Button
           onClick={openAddModal}
@@ -195,6 +222,9 @@ export default function SupplierInventoryPage() {
               onEdit={openEditModal}
               onToggleAvailability={(id) => toggleAvailability.mutate(id)}
               isToggling={toggleAvailability.isPending && toggleAvailability.variables === listing.id}
+              onBump={(id) => activateBump.mutate(id)}
+              isBumping={activateBump.isPending && activateBump.variables === listing.id}
+              bumpsAvailable={bumpsAvailable}
             />
           ))}
         </div>

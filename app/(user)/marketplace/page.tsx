@@ -13,6 +13,7 @@ import {
   Map as MapIcon,
   MapPin,
   Package,
+  Pin as PinIcon,
   Search,
   Wrench,
   X,
@@ -287,6 +288,13 @@ function ListingCard({
       <div className="relative h-48 bg-background flex items-center justify-center">
         <ImageIcon size={32} className="text-muted-text" />
 
+        {listing.isPinned && (
+          <span className="absolute top-3 right-3 flex items-center gap-1 bg-amber/90 text-white rounded-full px-2.5 py-1 text-xs font-medium shadow">
+            <PinIcon size={12} />
+            Pinned
+          </span>
+        )}
+
         {details.isOutOfStockItem ? (
           <span className="absolute top-3 left-3 flex items-center gap-1 bg-error-red/15 text-error-red border border-error-red/30 rounded-full px-2.5 py-1 text-xs font-medium">
             Out of Stock
@@ -369,12 +377,14 @@ function MapView({
             >
               <span
                 className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium shadow-sm transition-colors ${
-                  isActive
-                    ? "bg-user-teal-start text-white border-user-teal-start"
-                    : "bg-card text-body-text border-border/60 group-hover:border-user-teal-start/50"
+                  listing.isPinned
+                    ? "bg-amber text-white border-amber"
+                    : isActive
+                      ? "bg-user-teal-start text-white border-user-teal-start"
+                      : "bg-card text-body-text border-border/60 group-hover:border-user-teal-start/50"
                 }`}
               >
-                <MapPin size={12} />
+                {listing.isPinned ? <PinIcon size={12} /> : <MapPin size={12} />}
                 {listing.type === "consumables"
                   ? `${listing.pricePerUnit} credits/unit`
                   : `${listing.priceDay} credits/day`}
@@ -532,6 +542,15 @@ export default function MarketplacePage() {
     });
   }, [listings, typeFilter, search]);
 
+  // Sprint 6.12 — Pins render as their own structurally separate row, not
+  // just the first cards in the regular grid, per the product owner's own
+  // clarification: a Bump must never visually compete with or appear to
+  // unseat a Pin. The API's own order already puts pinned rows first
+  // (pinnedAt desc, then boostedAt desc), so this split preserves it in
+  // each group rather than re-sorting.
+  const pinnedListings = useMemo(() => filteredListings.filter((l) => l.isPinned), [filteredListings]);
+  const regularListings = useMemo(() => filteredListings.filter((l) => !l.isPinned), [filteredListings]);
+
   if (isLoading) {
     return <p className="text-sm text-muted-text text-center py-16">Loading listings…</p>;
   }
@@ -627,17 +646,38 @@ export default function MarketplacePage() {
         {filteredListings.length === 0 ? (
           <p className="text-sm text-muted-text text-center py-16">No listings match the selected filters.</p>
         ) : viewMode === "grid" ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredListings.map((listing) => (
-              <ListingCard
-                key={listing.id}
-                listing={listing}
-                credentials={credentials}
-                onBookNow={setBookingListing}
-                onRequestPurchase={handleRequestPurchase}
-              />
-            ))}
-          </div>
+          <>
+            {pinnedListings.length > 0 && (
+              <div className="mb-8">
+                <h2 className="flex items-center gap-1.5 text-sm font-semibold text-amber mb-3">
+                  <PinIcon size={16} />
+                  Pinned
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {pinnedListings.map((listing) => (
+                    <ListingCard
+                      key={listing.id}
+                      listing={listing}
+                      credentials={credentials}
+                      onBookNow={setBookingListing}
+                      onRequestPurchase={handleRequestPurchase}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {regularListings.map((listing) => (
+                <ListingCard
+                  key={listing.id}
+                  listing={listing}
+                  credentials={credentials}
+                  onBookNow={setBookingListing}
+                  onRequestPurchase={handleRequestPurchase}
+                />
+              ))}
+            </div>
+          </>
         ) : (
           <MapView
             listings={filteredListings}

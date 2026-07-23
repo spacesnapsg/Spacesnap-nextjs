@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { CalendarCheck, CheckCircle2, Package, Star } from "lucide-react";
+import { CalendarCheck, CalendarDays, CheckCircle2, Layers, Package, Star } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Card from "@/components/Card";
 import Pagination from "@/components/Pagination";
@@ -151,8 +151,10 @@ export default function SupplierAnalyticsPage() {
   const { data: bookings, isLoading: bookingsStatLoading } = useSupplierBookings();
   const { data: listings, isLoading: listingsLoading } = useSupplierListings();
 
-  const activeListingsCount = (listings ?? []).filter((l) => l.isAvailable).length;
+  const activeBookingsCount = (bookings ?? []).filter((b) => b.status === "active" || b.status === "confirmed").length;
   const completedBookingsCount = (bookings ?? []).filter((b) => b.status === "completed").length;
+  const totalBookingsCount = (bookings ?? []).length;
+  const activeListingsCount = (listings ?? []).filter((l) => l.isAvailable).length;
   const totalListingsCount = (listings ?? []).length;
 
   // Relocated from the supplier-profile "Listing Stats" card (2026-07-23) —
@@ -186,21 +188,31 @@ export default function SupplierAnalyticsPage() {
         <p className="text-muted-text mt-1">Track your listings performance</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         <StatCard
-          label="Active Listing"
-          value={listingsLoading ? "…" : String(activeListingsCount)}
-          icon={CheckCircle2}
-        />
-        <StatCard
-          label="Completed Listing"
-          value={bookingsStatLoading ? "…" : String(completedBookingsCount)}
+          label="Active Bookings"
+          value={bookingsStatLoading ? "…" : String(activeBookingsCount)}
           icon={CalendarCheck}
         />
         <StatCard
-          label="Total Listing"
-          value={listingsLoading ? "…" : String(totalListingsCount)}
+          label="Completed Bookings"
+          value={bookingsStatLoading ? "…" : String(completedBookingsCount)}
+          icon={CheckCircle2}
+        />
+        <StatCard
+          label="Total Bookings"
+          value={bookingsStatLoading ? "…" : String(totalBookingsCount)}
+          icon={CalendarDays}
+        />
+        <StatCard
+          label="Active Listings"
+          value={listingsLoading ? "…" : String(activeListingsCount)}
           icon={Package}
+        />
+        <StatCard
+          label="Total Listings"
+          value={listingsLoading ? "…" : String(totalListingsCount)}
+          icon={Layers}
         />
         <StatCard
           label="Average Rating"

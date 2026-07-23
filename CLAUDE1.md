@@ -5118,3 +5118,396 @@ confirmed unrelated).
 
 All test accounts and companies deleted afterward — dev DB confirmed back to
 its exact seeded state.
+
+---
+
+## Documentation Catch-Up: Supplier Profile/Analytics Reshuffle + Tier Criteria Swap + Payout Cadence Rename (2026-07-23)
+
+Not a new feature session — reconciling this file and
+`SPRINT_PLAN_NEXTJS_REWRITE.md` against commit `58fd40e`, which landed real
+code (`git log`/`git status` both confirmed the working tree was already
+clean) without the matching write-up either file normally gets in the same
+session. Caught when asked "what's next," cross-checking the plan's
+checkboxes against actual `git log` rather than trusting the file at face
+value — the previous session ended without closing this loop, which is
+itself the kind of drift this project's own discipline exists to catch.
+
+**What `58fd40e` actually did**, reconstructed from its diff and commit
+message (not re-derived from a live session, so treat the *what* as solid
+and the *why* as only as good as the commit message provides):
+
+- **Supplier Profile**: `TeamMembersCard` relocated from the right column to
+  the left column (under the avatar/profile card); the "Listing Stats" card
+  (Total Listings / Total Completed Bookings / Average Rating) deleted
+  outright, its figures relocated to Analytics' stat row instead of staying
+  on Profile. Both close out two of Sprint 6.12's five planning-only items —
+  see `SPRINT_PLAN_NEXTJS_REWRITE.md`'s Sprint 6.12 section for the
+  checkbox-level detail. The other three Sprint 6.12 items (broadcast
+  notifications ×2, EDM popups, the monetization catalogue placeholders)
+  remain untouched and open.
+- **Supplier Analytics**: `58fd40e`'s stat row went from 2 columns to 4 —
+  Active Listing (new, `isAvailable` count), Completed Listing (relocated
+  from Profile), Total Listing (relocated), Average Rating (relocated) —
+  **dropping the old "Active Bookings" card in the process.** Caught by the
+  product owner immediately after this catch-up write-up first landed:
+  Analytics needs booking counts *and* listing counts side by side, not one
+  swapped for the other. **Corrected same session**: stat row is now 6
+  cards (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`) — Active Bookings
+  (restored, `active`/`confirmed` status count), Completed Bookings, Total
+  Bookings (new), Active Listings, Total Listings, Average Rating. New
+  `activeBookingsCount`/`totalBookingsCount` derived alongside the existing
+  `completedBookingsCount`/`activeListingsCount`/`totalListingsCount` off
+  the same already-fetched `bookings`/`listings` hooks — no new API calls.
+  Icons: `CalendarCheck`/`CheckCircle2`/`CalendarDays` for the three booking
+  cards, `Package`/`Layers` for the two listing cards, `Star` for rating.
+  Verified live against `ben@acmecoworking.sg`'s seeded session on the
+  running dev server (screenshot taken): 1/1/3 bookings, 2/2 listings,
+  matching the Recent Bookings table's 3 rows exactly. `npx tsc --noEmit`
+  clean. Platform Revenue's fixed 3/6/12-month pills replaced with the real
+  `DateRangePicker`/`useDateRangeFilter` combo already used elsewhere
+  (Recent Activity, Recent Bookings, Credit Movement) — this was the one
+  still-inconsistent date-range control left after the earlier `be9a300`
+  pagination pass, now unified.
+- **Supplier tier criteria** (`lib/supplier-tiers.ts`): rating dropped
+  entirely, replaced by booking volume + cancellation rate, per an updated
+  product-owner infographic (`public/rewards/supplier-reward-tiers-infographic.png`,
+  binary swap in the same commit — old copy would have kept showing stale
+  numbers). Preferred: 50+ completed bookings, under 10% cancellation rate,
+  50,000 credits spend. Top: 100+ bookings, under 3%, 100,000 credits. All
+  three now AND'd (same "every condition, highest tier wins" model as
+  before, just three legs instead of two). Rebate percentages corrected
+  1%/1.2%/1.5% (previously an unconfirmed 1%/1.5%/2% guess — the modal's own
+  code comment now says not to let the constant and the infographic drift
+  apart again). Full detail — including the cancellation-rate progress-bar
+  inversion and the `GET /api/supplier/company` response-shape change — is
+  in the sprint plan's new "Supplier Tier Criteria Swap..." subsection under
+  Sprint 6.10, not repeated here.
+- **`InvoicingCadence` → `PayoutCadence` rename** (schema, migration
+  `20260723090000_payout_cadence_rename`, `lib/booking-payments.ts`,
+  `lib/company.ts`, UI copy): direction-of-money-flow correction — this
+  ledger is SpaceSnap paying a supplier, not the supplier invoicing
+  SpaceSnap. `SupplierPayableStatus.invoiced` → `scheduled`, same reasoning.
+  Every tier's cadence flattened to biweekly in the same change (cadence no
+  longer tier-differentiated — only the rebate % is).
+
+**This session's own verification** (the one thing genuinely done live
+today, not reconstructed): `npm test` **389/389**, `npx tsc --noEmit`
+clean, `npx eslint .` — 2 pre-existing errors only
+(`app/(user)/passport/page.tsx` setState-in-effect,
+`prisma/tests/db-constraints.test.ts` explicit-`any`), confirmed neither is
+in a file `58fd40e` touched. No dedicated test file exists for
+`lib/supplier-tiers.ts`'s new three-criteria math (grepped —
+`lib/supplier-tiers.test.ts` doesn't exist); it's exercised only
+indirectly through whatever already calls `getCompanySupplierTier`. Did not
+attempt a live functional re-check (new test accounts hitting the new
+thresholds) — that's a real gap in this catch-up, flagged rather than
+quietly skipped, since every other tier-related session in this file did do
+that live pass.
+
+**Standing takeaway for future sessions**: when a session's last commit
+changes product-facing behavior, close the plan/CLAUDE1.md write-up in the
+*same* commit or the *next* one, not "whenever someone happens to ask what's
+next." This file's whole value is that it's trustworthy without re-deriving
+from `git log` — this entry exists because that trust broke once already.
+
+---
+
+## Sprint 6.12 Build-Out — Broadcasts, Banner, EDM Popup, Bumps & Pins (2026-07-23)
+
+Full implementation of the three items Sprint 6.12 still had open after the
+same-day Supplier Profile reshuffle work (the earlier "Supplier profile/
+analytics reshuffle" catch-up session, this same file). Went through a real
+Plan-Mode design pass first — three Explore agents (notification system +
+navbars, R2 upload patterns + admin CRUD conventions, auth/session
+lifecycle + `proxy.ts`) and a Plan agent, then several rounds of
+`AskUserQuestion` where the user corrected and extended the scope live:
+broadcast audience went from two fixed send-actions to one composer with
+two independent checkboxes; a whole new Banner feature got added mid-
+conversation (not originally in Sprint 6.12's text at all); and Bumps/Pin
+went from "static placeholder cards" to real, fully-wired features after
+the user described their mechanics in concrete terms and pointed out I
+hadn't actually asked about them individually. Recording the design
+back-and-forth here, not just the end state, because several of those
+pivots changed the schema after code was already written for the earlier
+shape — worth knowing if a future session wonders why `Announcement` has
+two boolean columns instead of an enum.
+
+### Design decisions, in the order they were actually settled
+
+1. **Broadcast data model** — the user's first answer to "how should audience
+   work" was "what do you mean data model?", a sign the question was asked
+   too abstractly. Re-asked concretely (one row per recipient vs. one shared
+   row everyone points to) — answer: shared row, but read state tracked per
+   user. That became `Announcement` + `AnnouncementRead`
+   (`@@unique([announcementId, userId])`, row existence = read, no boolean).
+2. Same message, the user added a genuinely new feature: **an announcement
+   banner below the navbar**, admin-uploaded image, independently configured
+   per portal, hidden when unconfigured or expired, admin-settable expiry.
+   Confirmed as a *separate* mechanism from the EDM popup (both dismissable),
+   not a merge of the two.
+3. **EDM popup audience** — confirmed admin's slot can target Members,
+   Suppliers, or both; supplier's slot always targets Members only (their ad
+   to buyers) — this is the mechanism the still-placeholder "Ads" catalogue
+   card will eventually point at, no purchase gate built now.
+4. Full architecture research (3 Explore agents in parallel) surfaced real
+   constraints before any schema was written: `auth.ts`'s `jwt` callback
+   already runs a `prisma.user.findUnique` on *every* authenticated request
+   — the natural place to fold in `lastActivityAt`, rather than adding new
+   Prisma access to `proxy.ts` (which had none) or inventing a NextAuth
+   `events.signIn` hook (none exists anywhere in this codebase).
+   `lib/storage.ts` was built entirely for private, signed evidence access —
+   no public-URL convention existed, and no client-side file-upload UI had
+   ever actually been wired (the two existing "Upload Image" fields in
+   `AddEditListingModal.tsx`/`UploadVideoModal.tsx` are disabled stubs, not
+   working examples).
+5. A Plan agent turned all of the above into a concrete file-by-file plan.
+   Reviewing it surfaced one gap myself: `proxy.ts`'s `ADMIN_ROUTES` is
+   missing `/admin-rewards` (a pre-existing, separate route-protection gap,
+   confirmed by reading the file directly) — flagged in the plan, not fixed
+   (out of scope), while `/admin-broadcasts` *was* added correctly to avoid
+   repeating it.
+6. **Approving the plan took three tries.** First rejection: "for broadcast
+   notifications, admin should be able to choose their audience as well" —
+   the plan had (accidentally) implied two fixed send-actions; fixed to two
+   independent checkboxes on one composer, mirroring the EDM admin
+   campaign's own audience shape. Second rejection: "I realise you didn't
+   ask me about the other purchasable products for suppliers such as
+   reports/bumps/pins?" — asked directly what was wanted (design them now
+   vs. build Bumps/Pins for real vs. leave everything placeholder); answer
+   was to leave it as originally scoped (placeholder-only), so no plan
+   change resulted — but the question itself prompted the user to describe
+   Bumps/Pin in enough concrete detail that they got upgraded to real
+   features in the very next message. Third correction, after Bumps/Pin
+   were already real in the plan: pins should render in a **structurally
+   separate "Pinned" row/section**, not just sort first inside the regular
+   grid — "so the bump doesn't contradict the pin." All three corrections
+   are reflected in the final schema/UI, not just the plan text.
+
+### What got built, phase by phase
+
+**Phase 0 — activity tracking.** `User.lastActivityAt`/`lastEdmSeenAt`
+(both nullable `DateTime?`). `auth.ts`'s `jwt` callback: the first-sign-in
+branch now also does a `prisma.user.update` stamping `lastActivityAt`; the
+existing per-request re-check changed from `findUnique` to `update` (an
+`UPDATE ... RETURNING` instead of a bare `SELECT`), which meant a real
+behavior change to catch — `update` throws `P2025` instead of resolving to
+`null` when the row is gone, so the `if (!current || ...)` guard became a
+`try/catch` around the call. **Hit a real bug immediately after this
+landed**: the long-running dev server still had the pre-regeneration
+Prisma Client in memory, so `data: { lastActivityAt: ... }` was an unknown
+field to it — every sign-in started throwing `error=Configuration`. Not a
+browser-interaction problem (confirmed via a direct `curl` against
+`/api/auth/callback/credentials` before assuming otherwise). Needed a dev
+server restart; my own `kill` command got blocked by the permission
+classifier once, then went through cleanly a session later when I retried
+it after asking the user this same question again — inconsistent, not
+something to rely on, so future sessions should expect to ask rather than
+assume the kill will go through.
+
+**Phase 1 — shared upload flow.** `lib/storage.ts` gained
+`buildPublicAssetKey`/`getPublicAssetUploadUrl`/`getPublicAssetUrl`/
+`publicAssetExists` (new functions only — the private evidence-recording
+functions are untouched). `getPublicAssetUrl` is deliberately *not* a
+signed URL (`${R2_PUBLIC_BASE_URL}/${key}`) — new `.env.example` entry,
+flagged as a real Cloudflare-dashboard infra prerequisite ("Public Access"
+or a bound custom domain), not just a code change. `lib/hooks/useImageUpload.ts`
+(one shared parametrized hook: presign → `PUT` → return the key) and
+`components/ImageUploadField.tsx` (the first real file-input UI this app
+has ever had) are reused by all three upload surfaces below rather than
+copied three times. Verified with 6 new unit tests
+(`lib/storage.test.ts`) covering the pure parts (`buildPublicAssetKey`'s
+key shape/collision-avoidance, `getPublicAssetUrl`'s env-var guard and
+slash-joining) — the actual R2 network calls stay unverified in this
+sandbox, same posture as the pre-existing evidence-upload flow, which was
+never tested against real R2 either.
+
+**Phase 2 — broadcast notifications.** `lib/announcements.ts`:
+`createAnnouncement` (validates at least one audience flag),
+`getAnnouncementsForUser` (OR across `isMember`/`isSupplier` against
+`targetMembers`/`targetSuppliers` — a "Both"-role account sees a broadcast
+matching *either* of its roles), `markAnnouncementRead` (idempotent
+upsert, unlike `markNotificationRead`'s plain boolean flip),
+`markAllAnnouncementsRead`. The trickiest integration: `NotificationsPanel.tsx`
+now calls both `useNotifications()` and `useAnnouncements()` and merges
+them into a client-side `FeedItem` discriminated union, sorted by the same
+`pinned desc, createdAt desc` rule the server already uses for plain
+notifications (announcements hardcode `pinned: false`, so they can never
+jump a pinned `booking_credit_pending` row). Row click dispatches on
+`item.kind`: a notification keeps its existing inline mark-read behavior;
+an announcement opens the new `AnnouncementModal` (full title+message) and
+marks itself read on open — the one row type with different click
+behavior from every other notification type in this app. Admin composer +
+send history at `/admin-broadcasts` (`components/AdminBroadcasts.tsx`,
+`Megaphone` nav icon on `AdminNavbar`), added to `proxy.ts`'s
+`ADMIN_ROUTES`/`matcher`.
+
+**Phase 3 — announcement banner.** `lib/banners.ts`'s `getActiveBanner`
+resolves `null` for both "not configured" and "expired" server-side, so
+`components/AnnouncementBanner.tsx` never special-cases expiry itself.
+That component deliberately has **no `useEffect`** — an early version read
+`localStorage` inside one to set dismissal state, which `eslint`'s
+`react-hooks/set-state-in-effect` rule flagged (a real anti-pattern, not a
+false positive: calling `setState` synchronously in an effect body causes
+a cascading extra render). Rewrote it to read `localStorage` directly
+during render (guarded by `typeof window !== "undefined"` for SSR) and use
+a throwaway `useState` counter only to force a re-render after the dismiss
+button's `localStorage.setItem` — React can't otherwise see a plain
+mutation. Mounted at layout level in both `(user)`/`(supplier)` layouts,
+directly under each navbar, same tier as `PendingBookingCreditModal` — not
+injected into `components/Navbar.tsx` itself, which is a portal-agnostic
+presentational shell with no data fetching today.
+
+**Phase 4 — EDM popup.** `AdminEdmCampaign` (singleton via
+`prisma.$transaction`'s delete-then-create, no natural unique key to
+enforce it at the DB level unlike the supplier slot) and
+`SupplierEdmCampaign` (`companyId @unique`, upsert = "replace the old
+one"). `getActiveEdmForUser`'s trigger condition —
+`lastEdmSeenAt === null || now - lastEdmSeenAt >= 6h` — is checked via a
+`GET /api/edm-campaigns/current` call on layout mount
+(`useCurrentEdmCampaign`, `staleTime: Infinity`, no polling, unlike
+notifications' 60s interval) rather than kept in the session/JWT — nothing
+else needs synchronous frontend access to it, and putting it on the JWT
+would make an immediately-stale claim available client-side for no reason.
+`EdmPopupModal.tsx` renders `campaign.imageUrl` inside a `-m-8` wrapper to
+cancel `Modal.tsx`'s own hardcoded inner `p-8` (not worth adding a
+padding-variant prop to a shared component for one consumer).
+
+**Phase 5 — marketplace sort-order fix.** `Listing.boostedAt
+DateTime @default(now())`. **Correction to the original Sprint 6.12 text**,
+caught while scoping this phase, not assumed: the marketplace was never
+actually ordered by "latest posting date" as the old planning text
+believed — it was `orderBy: { id: "asc" }`, oldest-first by database id.
+Confirmed by reading the route directly. This also meant the originally-
+assumed pagination prerequisite for Bumps was the wrong prerequisite —
+real pagination would have broken `MapView` (which plots every matching
+listing at once) for no benefit; the actual fix needed was just a
+recency-aware sort field. Migration required a hand-added `UPDATE listings
+SET boosted_at = created_at` (via `--create-only` then editing the
+generated SQL) so existing rows kept their relative order instead of all
+collapsing to the migration's run-time.
+
+**Phase 6 — Bumps.** `Company.bumpsAvailable Int @default(0)` — a plain
+counter, not derived from the ledger (a spent Bump leaves no other row to
+re-sum from). `CompanyTransactionType.purchased_spend` didn't exist yet —
+`getCompanyPurchasedBalance` only ever summed `purchased_topup`, since
+nothing had spent a company's purchased balance before; the per-user
+equivalent (`getPurchasedBalance`, `lib/credits.ts`) already summed both
+`purchased_topup` and `purchased_spend`, so this was a real, if narrow,
+parity gap closed while building on top of it, not new scope invented.
+`purchaseBumps` (`lib/company-credits.ts`, `requireCompanyAdmin` — spending
+shared funds is gated stricter than `purchased_topup`'s "any member")
+debits the balance and increments the counter in one `$transaction`.
+`activateBump` (`lib/listings.ts`, `requireSupplier` — any team member,
+matching the existing listing-edit gate exactly) decrements the counter
+and resets `boostedAt`. Pricing (50 credits/bump) is explicitly a
+placeholder per the user's own instruction ("use a random number now"),
+named and commented as such. 5 new unit tests in
+`lib/company-credits.test.ts` (buy debits + increments; insufficient
+balance rejected with no partial debit; activating resets `boostedAt`;
+activating at zero available is rejected; a listing from a different
+company is rejected as not-found, not leaked).
+
+**Phase 7 — Pins.** `Listing.pinnedAt`/`pinnedUntil`, nullable pair.
+`purchaseAndApplyPin` combines purchase and application into one action
+(per the user's own description — buy, then immediately pick which active
+listing it applies to), unlike Bumps' separate buy-then-spend "ammo" flow;
+re-pinning an already-pinned listing extends/restarts the window rather
+than erroring. Lazy expiry (`prisma.listing.updateMany` clearing
+`pinnedAt`/`pinnedUntil` where `pinnedUntil < now`) runs at the top of
+`GET /api/listings`, same no-scheduled-job idiom as
+`getAvailableCreditBalance`'s credit-hold expiry, before the query's
+`orderBy: [{ pinnedAt: { sort: "desc", nulls: "last" } }, { boostedAt: "desc" }]`.
+**The frontend shape changed after the user's plan-mode correction above**:
+`app/(user)/marketplace/page.tsx` splits `filteredListings` into
+`pinnedListings`/`regularListings` and renders the pinned group in its own
+labeled "Pinned" section above the regular grid, not just first-in-grid —
+a Bump can only ever reorder within the regular section, never touch the
+Pinned one. `MapView`'s markers get matching distinct styling (amber, pin
+icon) for pinned listings. `serializeListing` gained a computed `isPinned`
+(`pinnedUntil !== null && pinnedUntil > now`) so the frontend never
+re-derives expiry logic itself. 4 new unit tests (7-day window math within
+a tolerance; re-pinning extends rather than errors; an unavailable listing
+can't be pinned; insufficient balance leaves the listing unpinned).
+
+**Phase 8 — Supplier Profile catalogue card.**
+`components/ListingBoostCatalogueCard.tsx`, placed above
+`BusinessDetailsCard` (right column). Bumps and Pin are real, wired to the
+Phase 6/7 routes via new client-safe display-pricing constants
+(`BUMP_UNIT_COST_CREDITS_DISPLAY`, `PIN_DURATION_COST_CREDITS_DISPLAY`) —
+the actual server-side pricing constants live in `lib/company-credits.ts`/
+`lib/listings.ts`, which import `prisma` and can't be imported into a
+client component, so these are a deliberately duplicated, explicitly-
+commented mirror that must be kept in sync by hand. Lab Digest/Ads/
+Newsletter render as static "Coming soon" cards, confirmed with the user
+as no-further-design-this-pass rather than assumed.
+
+### Live verification
+
+Ran into the same stale-Prisma-Client-in-the-dev-server issue from Phase 0
+again after Phases 2–8 (more migrations, same running process) — rather
+than asking for a restart after every phase, built all 8 phases through
+`tsc`/`eslint`/unit tests first, then asked for one final restart before
+doing comprehensive live verification, explicitly telling the user this
+tradeoff up front.
+
+Once restarted, verified via real HTTP calls against the dev server
+(`curl` with cookie jars for `alice.admin@spacesnap.sg`/
+`ben@acmecoworking.sg`/`ethan@example.com`) and the Browser pane:
+- Sent a real broadcast from `/admin-broadcasts` (UI form, not curl) —
+  appeared correctly in `ethan`'s `GET /api/announcements` with
+  `isRead: false`; clicking it in the live `NotificationsPanel` opened
+  `AnnouncementModal` with the exact content and persisted the read state
+  — but caught a real gotcha in my own test methodology here: the browser
+  tab was still authenticated as `alice.admin`, not the account I intended,
+  so the click's read-record landed under her `user_id`, not `ethan`'s.
+  Confirmed via `psql` on `announcement_reads` that this was exactly what
+  happened (independent per-account read state working correctly, not a
+  bug) rather than assuming either a false pass or a false failure.
+- Temporarily flipped `ben`'s `is_member` to `false` via `psql` (no seeded
+  supplier-only account exists — the exclusive-role feature only applies to
+  signups after 2026-07-23) to properly test audience isolation: a true
+  Supplier-only account correctly got zero Members-targeted announcements,
+  while `ben`'s real "Both" role correctly saw them. Restored immediately
+  after.
+- Manually inserted an `AdminEdmCampaign` and a `member`-portal `Banner`
+  row directly via `psql` (fake `imageKey`s, since no real R2 upload was
+  possible) specifically to exercise the business logic independent of the
+  actual file storage. This surfaced that the *read* path
+  (`getPublicAssetUrl`) throws just as hard as the write/presign path when
+  `R2_PUBLIC_BASE_URL` isn't set — confirmed this is only reachable through
+  my own artificial test setup (a real deployment can't get a row into
+  either table without R2 being configured enough for the upload to have
+  succeeded first) rather than assuming it was a bug to fix. Verified the
+  underlying logic directly by invoking `lib/banners.ts`/`lib/edm-campaigns.ts`
+  with a temporarily-set `R2_PUBLIC_BASE_URL` via a one-off `tsx -e` script
+  against the real dev DB, bypassing only the R2 network call: banner
+  resolved the correct URL; EDM campaign selection correctly picked the
+  admin campaign; dismiss correctly suppressed an immediate re-fire; a
+  simulated 7-hours-ago `lastEdmSeenAt` correctly re-triggered it.
+- End-to-end Bumps/Pins against `ben@acmecoworking.sg`'s real seeded
+  company and listings: topped up 5000 credits, bought 2 Bumps, activated
+  one on Studio Space A (`boostedAt` updated), bought a 7-day Pin on
+  Meeting Room B. `GET /api/listings` came back exactly as designed:
+  Meeting Room B first (pinned), Studio Space A second (bumped), the rest
+  at their original seeded order. Confirmed visually in the Browser pane:
+  the "Pinned" section renders as its own labeled block above the regular
+  grid with an amber "Pinned" badge on the card — matching the structural-
+  separation correction from plan mode, not just a sort-order side effect.
+  Also confirmed the Supplier Inventory page's "0 Bumps left" header stat
+  and the disabled "Bump (0 left)" per-listing buttons render correctly
+  once test bumps were spent/cleaned up, and the Supplier Profile
+  catalogue card shows real pricing ("50 credits each", "200/600 credits")
+  on the Bumps/Pin cards alongside the three "Coming soon" placeholders.
+- All test data (`announcements`, `announcement_reads`,
+  `admin_edm_campaigns`, `banners`, the Bumps/Pin transactions and
+  listing/company state) deleted or reset via `psql` afterward — confirmed
+  the dev DB back to its exact seeded state, same discipline as every
+  other session in this file.
+
+**Final numbers**: `npm test` **404/404** (389 at session start + 6
+`lib/storage.test.ts` + 9 across `purchaseBumps`/`activateBump`/
+`purchaseAndApplyPin`). `npx tsc --noEmit` clean throughout. `npx eslint .`
+— only the same 2 pre-existing errors from before this session
+(`app/(user)/passport/page.tsx`'s setState-in-effect,
+`prisma/tests/db-constraints.test.ts`'s explicit-`any`), confirmed neither
+file was touched this session. `next build` clean, every new route listed.

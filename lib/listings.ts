@@ -1,8 +1,9 @@
-import { ListingType, Prisma, type Listing } from "@/app/generated/prisma/client";
+import { ListingType, Prisma, CompanyTransactionType, type Listing } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import type { ListingRatingAggregate } from "@/lib/ratings";
 import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
+import { getCompanyPurchasedBalance, InsufficientCompanyPurchasedBalanceError } from "@/lib/company-credits";
 
 // API contract uses the same field names as the Prisma model / DB columns
 // (type, priceDay, priceWeek, priceMonth, pricePerUnit, stockQuantity,
@@ -62,6 +63,13 @@ export function serializeListing(
     pricePerUnit: serializeDecimal(listing.pricePerUnit),
     stockQuantity: listing.stockQuantity,
     packSize: listing.packSize,
+    // Sprint 6.12 — computed, not a raw expiry check the client has to
+    // redo itself (mirrors getActiveBanner's own "resolve real-world state
+    // server-side" discipline). Only true when pinnedUntil is both set and
+    // still in the future — an expired-but-not-yet-lazily-cleared row
+    // (a narrow race between the lazy-expiry sweep and this serialize call)
+    // still reports false here, never a stale true.
+    isPinned: listing.pinnedUntil !== null && listing.pinnedUntil > new Date(),
     requiredCertificateIds:
       "requiredCertificates" in listing
         ? listing.requiredCertificates.map((r) => r.certificateId.toString())
@@ -330,4 +338,94 @@ export async function parseRequiredCertificateIds(value: unknown): Promise<bigin
   }
 
   return ids;
+}
+
+export class ListingNotFoundError extends Error {
+  constructor() {
+    super("Listing not found.");
+  }
+}
+
+export class NoBumpsAvailableError extends Error {
+  constructor() {
+    super("No Bumps available — purchase more from the Supplier Profile catalogue.");
+  }
+}
+
+// Spends one Bump "ammo" on a single listing — resets boostedAt to now(),
+// same effect a freshly-posted listing gets, per the product owner's own
+// framing ("moves a listing to the front as if it's newly posted"). Gated
+// to requireSupplier() at the route layer (any team member managing
+// inventory, same gate the existing listing create/edit routes use) — the
+// stricter requireCompanyAdmin gate only applies to the Bump *purchase*
+// (spending shared funds), not activating one already bought.
+export async function activateBump(listingId: bigint, companyId: bigint) {
+  return prisma.$transaction(async (tx) => {
+    const listing = await tx.listing.findUnique({ where: { id: listingId } });
+    if (!listing || listing.companyId !== companyId) {
+      throw new ListingNotFoundError();
+    }
+
+    const company = await tx.company.findUniqueOrThrow({ where: { id: companyId } });
+    if (company.bumpsAvailable <= 0) {
+      throw new NoBumpsAvailableError();
+    }
+
+    await tx.company.update({ where: { id: companyId }, data: { bumpsAvailable: { decrement: 1 } } });
+    return tx.listing.update({ where: { id: listingId }, data: { boostedAt: new Date() } });
+  });
+}
+
+// Sprint 6.12 — placeholder pricing, explicitly NOT a real product-owner
+// number (per the "use a random figure for now" instruction), same posture
+// as BUMP_UNIT_COST_CREDITS in lib/company-credits.ts.
+export const PIN_DURATION_COST_CREDITS: Record<7 | 30, number> = {
+  7: 200,
+  30: 600,
+};
+
+export class ListingNotAvailableError extends Error {
+  constructor() {
+    super("Only available listings can be pinned.");
+  }
+}
+
+// Purchase and application are one combined action (per the product
+// owner's own description — buy, then immediately choose which of the
+// company's own active listings it applies to), unlike Bumps' separate
+// buy-then-spend "ammo" flow. Re-pinning an already-pinned listing simply
+// extends/restarts its window (a new pinnedAt/pinnedUntil), not an error.
+export async function purchaseAndApplyPin(companyId: bigint, listingId: bigint, durationDays: 7 | 30, userId: string) {
+  const cost = new Prisma.Decimal(creditsToSgd(PIN_DURATION_COST_CREDITS[durationDays])).toDecimalPlaces(2);
+
+  return prisma.$transaction(async (tx) => {
+    const listing = await tx.listing.findUnique({ where: { id: listingId } });
+    if (!listing || listing.companyId !== companyId) {
+      throw new ListingNotFoundError();
+    }
+    if (!listing.isAvailable) {
+      throw new ListingNotAvailableError();
+    }
+
+    const balance = await getCompanyPurchasedBalance(companyId, tx);
+    if (balance.lt(cost)) {
+      throw new InsufficientCompanyPurchasedBalanceError();
+    }
+
+    await tx.companyTransaction.create({
+      data: {
+        companyId,
+        userId,
+        type: CompanyTransactionType.purchased_spend,
+        amount: cost.negated(),
+        description: `Pinned "${listing.name}" for ${durationDays} days`,
+      },
+    });
+
+    const now = new Date();
+    return tx.listing.update({
+      where: { id: listingId },
+      data: { pinnedAt: now, pinnedUntil: new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000) },
+    });
+  });
 }

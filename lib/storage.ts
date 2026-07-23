@@ -85,3 +85,52 @@ export async function getEvidenceViewUrl(key: string): Promise<string> {
     expiresIn: VIEW_URL_EXPIRY_SECONDS,
   });
 }
+
+// Sprint 6.12 addition — the everything-above-this-line pattern is built
+// entirely for PRIVATE evidence (short-lived signed GET). Admin/supplier
+// broadcast images (EDM popups, portal banners) need to be publicly
+// viewable indefinitely, which is a genuinely different access shape, not
+// something getEvidenceViewUrl's 15-minute signed URL should be reused for.
+const PUBLIC_ASSET_UPLOAD_URL_EXPIRY_SECONDS = 10 * 60; // same 10-minute PUT window as evidence
+
+// Mirrors buildEvidenceRecordingKey's shape (random unguessable segment so a
+// re-upload can't collide with or overwrite a prior one by predicting the
+// key) but scoped by feature area instead of certificate/user, since public
+// assets aren't owned by a single user.
+export function buildPublicAssetKey(params: { scope: "edm/admin" | "edm/supplier" | "banner"; filename: string; companyId?: bigint }): string {
+  const safeName = params.filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const scopePath = params.companyId ? `${params.scope}/${params.companyId}` : params.scope;
+  return `public-assets/${scopePath}/${unique}-${safeName}`;
+}
+
+export async function getPublicAssetUploadUrl(params: { key: string; contentType: string }): Promise<string> {
+  return getSignedUrl(
+    getClient(),
+    new PutObjectCommand({ Bucket: getBucket(), Key: params.key, ContentType: params.contentType }),
+    { expiresIn: PUBLIC_ASSET_UPLOAD_URL_EXPIRY_SECONDS }
+  );
+}
+
+// NOT a signed URL, unlike everything else in this file — the R2 bucket
+// must have public access enabled (or a bound custom domain) for this to
+// actually resolve; see R2_PUBLIC_BASE_URL's own comment in .env.example.
+// Confirms the object exists first, same discipline as
+// evidenceRecordingExists — a caller-supplied key must not be trusted as a
+// real uploaded asset until R2 confirms it landed.
+export async function publicAssetExists(key: string): Promise<boolean> {
+  try {
+    await getClient().send(new HeadObjectCommand({ Bucket: getBucket(), Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function getPublicAssetUrl(key: string): string {
+  const base = process.env.R2_PUBLIC_BASE_URL;
+  if (!base) {
+    throw new Error("R2_PUBLIC_BASE_URL is not configured (see .env.example).");
+  }
+  return `${base.replace(/\/$/, "")}/${key}`;
+}

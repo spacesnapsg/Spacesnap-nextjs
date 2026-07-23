@@ -527,6 +527,15 @@ enum CompanyTransactionType {
   // Negative amount, same sign convention as the per-user earned_spend
   // Transaction type.
   earned_spend
+  // Sprint 6.12 — a company spending its own purchasedBalance on Bumps or a
+  // Pin (lib/company-credits.ts's purchaseBumps, lib/listings.ts's
+  // purchaseAndApplyPin). Negative amount, mirrors the per-user
+  // TransactionType.purchased_spend convention exactly (see
+  // lib/purchases.ts's `chargeAmount.negated()`). Missing from this enum
+  // until now — getCompanyPurchasedBalance only ever summed purchased_topup,
+  // since nothing previously spent the company's purchased balance; the
+  // per-user equivalent already included purchased_spend in its own sum.
+  purchased_spend
 
   @@map("company_transaction_type")
 }
@@ -922,6 +931,13 @@ model Company {
   registrationNumber   String?  @map("registration_number")
   financeContactEmail  String?  @map("finance_contact_email")
   financeContactPerson String?  @map("finance_contact_person")
+  // Sprint 6.12 — "ammo" a company holds, purchased in quantity
+  // (purchaseBumps, lib/company-credits.ts) and spent one at a time
+  // (activateBump, lib/listings.ts, resets a listing's boostedAt to now()).
+  // A plain counter, not derived from a ledger — unlike credit balances,
+  // there's no independent source of truth to re-derive this from (a spent
+  // Bump doesn't leave its own row anywhere else to re-sum).
+  bumpsAvailable       Int      @default(0) @map("bumps_available")
   // Supplier payment tier (free/preferred/top) is deliberately NOT a column
   // here — it's live-computed from rating + rolling-window spend
   // (lib/supplier-tiers.ts, Sprint 6.10, confirmed with the product owner
@@ -940,6 +956,7 @@ model Company {
   companyTransactions       CompanyTransaction[]
   supplierRewardRedemptions SupplierRewardRedemption[]
   joinRequests              CompanyJoinRequest[]
+  supplierEdmCampaign       SupplierEdmCampaign?
 
   @@map("companies")
 }
@@ -1092,6 +1109,20 @@ model User {
   referralCode               String     @unique @default(dbgenerated("substr(md5(random()::text || clock_timestamp()::text), 1, 8)")) @map("referral_code")
   referredByUserId           String?    @map("referred_by_user_id")
   referralConvertedAt        DateTime?  @map("referral_converted_at")
+  // Sprint 6.12 addition (2026-07-23) — real request-level activity
+  // tracking, stamped in auth.ts's jwt callback on every authenticated
+  // request (both the first-sign-in branch and the existing per-request DB
+  // re-check, which already ran a query here regardless). Not exposed on
+  // the session/JWT — nothing needs synchronous frontend access to it, it's
+  // only ever read back via its own dedicated API call (see
+  // lastEdmSeenAt/the EDM popup trigger below).
+  lastActivityAt             DateTime?  @map("last_activity_at")
+  // Stamped by dismissEdmCampaign (lib/edm-campaigns.ts) whenever the EDM
+  // sign-in popup is shown/dismissed. The popup re-fires once this is null
+  // or at least 6 hours old — see getActiveEdmForUser's own comment for the
+  // deliberately simplified trigger condition (checked once per layout
+  // mount, not polled).
+  lastEdmSeenAt              DateTime?  @map("last_edm_seen_at")
   createdAt                  DateTime   @default(now()) @map("created_at")
   updatedAt                  DateTime   @updatedAt @map("updated_at")
 
@@ -1132,6 +1163,11 @@ model User {
   rewardRedemptions         RewardRedemption[]
   companyTransactions       CompanyTransaction[]
   supplierRewardRedemptions SupplierRewardRedemption[]
+  announcementsCreated      Announcement[]              @relation("AnnouncementCreatedBy")
+  announcementReads         AnnouncementRead[]
+  bannersUpdated            Banner[]                    @relation("BannerUpdatedBy")
+  adminEdmCampaignsCreated  AdminEdmCampaign[]          @relation("AdminEdmCampaignCreatedBy")
+  supplierEdmCampaignsMade  SupplierEdmCampaign[]       @relation("SupplierEdmCampaignCreatedBy")
 
   @@map("users")
 }
@@ -1208,6 +1244,27 @@ model Listing {
   pricePerUnit    Decimal?    @map("price_per_unit") @db.Decimal(10, 2)
   stockQuantity   Int?        @map("stock_quantity")
   packSize        String?     @map("pack_size")
+  // Sprint 6.12 — the marketplace's effective "sort as new" timestamp.
+  // Starts equal to createdAt (backfilled by this field's own migration for
+  // pre-existing rows) and is bumped to now() whenever a Bump is spent on
+  // this listing (activateBump, lib/listings.ts) — replaces the previous
+  // `orderBy: { id: "asc" }` (oldest-first, not date-based at all, confirmed
+  // by reading the route before assuming otherwise). A single field rather
+  // than comparing createdAt/updatedAt/a bump-log table at query time — one
+  // column Prisma can sort by directly, no raw SQL needed.
+  boostedAt       DateTime    @default(now()) @map("boosted_at")
+  // Sprint 6.12 — Pins. Nullable pair, null = not pinned (matching this
+  // schema's existing nullable-expiry convention, e.g. RewardGrant/
+  // SupplierRewardRedemption). pinnedAt orders multiple simultaneously
+  // pinned listings (most-recently-pinned first); pinnedUntil is the
+  // expiry a purchase set (7 or 30 days, purchaseAndApplyPin,
+  // lib/listings.ts). Lazily cleared on every GET /api/listings read (no
+  // scheduled-job infra in this codebase — same idiom as
+  // getAvailableCreditBalance's credit-hold expiry) rather than checked
+  // ad hoc at every call site, so an expired pin can never sort into the
+  // marketplace's Pinned tier by accident.
+  pinnedAt        DateTime?   @map("pinned_at")
+  pinnedUntil     DateTime?   @map("pinned_until")
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
 
@@ -1888,4 +1945,118 @@ model Notification {
   relatedCertificate Certificate? @relation(fields: [relatedCertificateId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
+}
+
+// Sprint 6.12 — admin broadcast, deliberately NOT the Notification model's
+// per-recipient-row shape: one shared content row per send (confirmed with
+// the product owner — cheap fan-out over duplicating title/message per
+// recipient), read-state tracked per user via AnnouncementRead below.
+// targetMembers/targetSuppliers are two independent flags chosen at send
+// time (not a single enum) — a broadcast can target either or both,
+// mirroring AdminEdmCampaign's identical audience shape. App-layer
+// validation (lib/announcements.ts) requires at least one true.
+model Announcement {
+  id              BigInt   @id @default(autoincrement())
+  title           String?
+  message         String
+  targetMembers   Boolean  @default(false) @map("target_members")
+  targetSuppliers Boolean  @default(false) @map("target_suppliers")
+  createdByUserId String   @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  createdBy User               @relation("AnnouncementCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  reads     AnnouncementRead[]
+
+  @@map("announcements")
+}
+
+// Row existence = read, no boolean column — a real idempotent fact (has
+// THIS user read THIS announcement), unlike Notification.isRead's flip on a
+// per-recipient row. @@unique enforces "at most one read record per
+// (announcement, user)" at the DB level, so markAnnouncementRead can be a
+// safe upsert against double-clicks.
+model AnnouncementRead {
+  id             BigInt   @id @default(autoincrement())
+  announcementId BigInt   @map("announcement_id")
+  userId         String   @map("user_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@map("announcement_reads")
+}
+
+// Sprint 6.12 — separate feature from the EDM popup below, not the same
+// mechanism (confirmed with the product owner): a persistent strip below
+// the navbar, not a modal. Two platform-level singletons (Member portal,
+// Supplier portal) — admin-only, no supplier self-serve, unlike the EDM
+// popup's supplier slot. `portal @unique` makes "save" a literal upsert;
+// `expiresAt` nullable = never expires, same convention as
+// RewardGrant/SupplierRewardRedemption. Dismissal is client-side
+// (localStorage, keyed off id+updatedAt) — no per-user DB tracking, lower
+// stakes than the EDM popup's lastEdmSeenAt.
+enum BannerPortal {
+  member
+  supplier
+
+  @@map("banner_portal")
+}
+
+model Banner {
+  id              BigInt       @id @default(autoincrement())
+  portal          BannerPortal @unique
+  imageKey        String       @map("image_key")
+  expiresAt       DateTime?    @map("expires_at")
+  updatedByUserId String       @map("updated_by_user_id")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  updatedBy User @relation("BannerUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Cascade)
+
+  @@map("banners")
+}
+
+// Sprint 6.12 — the EDM sign-in popup. Two independent authorship slots,
+// deliberately two separate models rather than one with a nullable
+// companyId discriminator (their shapes genuinely differ — admin's audience
+// is a multi-select with no natural unique key; supplier's is hardcoded to
+// Members and naturally keyed by companyId). Singleton by app-layer
+// convention (setAdminEdmCampaign does a delete-then-create $transaction,
+// lib/edm-campaigns.ts) — there's no natural unique key to hang a DB
+// constraint on for "the one admin campaign," unlike the supplier slot
+// below.
+model AdminEdmCampaign {
+  id              BigInt   @id @default(autoincrement())
+  imageKey        String   @map("image_key")
+  caption         String?
+  targetMembers   Boolean  @default(true) @map("target_members")
+  targetSuppliers Boolean  @default(false) @map("target_suppliers")
+  createdByUserId String   @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  createdBy User @relation("AdminEdmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@map("admin_edm_campaigns")
+}
+
+// One row per company, DB-enforced via companyId @unique — "uploading a new
+// one replaces the old" is a literal upsert on this key, no app-layer
+// deactivation logic needed. Always targets Members only (confirmed with
+// the product owner — a supplier's ad to buyers), so there is deliberately
+// no audience column here, unlike AdminEdmCampaign above.
+model SupplierEdmCampaign {
+  id              BigInt   @id @default(autoincrement())
+  companyId       BigInt   @unique @map("company_id")
+  imageKey        String   @map("image_key")
+  caption         String?
+  createdByUserId String   @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy User    @relation("SupplierEdmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@map("supplier_edm_campaigns")
 }

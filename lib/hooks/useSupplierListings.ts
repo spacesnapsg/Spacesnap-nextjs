@@ -2,6 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 import type { Listing, ListingType } from "@/lib/hooks/useListings";
 
+// Client-safe mirror of lib/listings.ts's PIN_DURATION_COST_CREDITS — same
+// reasoning as BUMP_UNIT_COST_CREDITS_DISPLAY (lib/hooks/useSupplierCompany.ts).
+export const PIN_DURATION_COST_CREDITS_DISPLAY: Record<7 | 30, number> = { 7: 200, 30: 600 };
+
 export function useSupplierListings() {
   return useQuery({
     queryKey: ["supplier-listings"],

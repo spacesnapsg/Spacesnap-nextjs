@@ -50,6 +50,9 @@ export async function serializeCompanyDetails(company: Company) {
     },
     purchasedCredits: sgdToCredits(Number(purchasedBalance)),
     earnedCredits: sgdToCredits(Number(earnedBalance)),
+    // Sprint 6.12 — "ammo" for the Bumps feature (lib/listings.ts's
+    // activateBump), a plain counter column, not derived from the ledger.
+    bumpsAvailable: company.bumpsAvailable,
   };
 }
 
