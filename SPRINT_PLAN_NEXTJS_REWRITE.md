@@ -1227,6 +1227,45 @@ role's pages are reachable, not "at least that role."
   accounts/companies deleted afterward, dev DB back to its exact seeded
   state.
 
+### Supplier Analytics/Financials Reshuffle + Company Credit Movement (raised 2026-07-23, planning only)
+
+Three items from the product owner, not yet built. Grounded against the
+current pages by direct inspection (not guessed): "Analytics" (nav label,
+`SupplierNavbar.tsx`) routes to `/supplier`
+(`app/(supplier)/supplier/page.tsx`, component `SupplierAnalyticsPage`,
+already has the "Recent Bookings" table); "Financials" routes to
+`/supplier-financials` (`app/(supplier)/supplier-financials/page.tsx`,
+already has the "Platform Revenue" card).
+
+- [ ] **Move the "Platform Revenue" card from Financials to Analytics.**
+  Straight relocation of the existing card (`app/(supplier)/supplier-financials/page.tsx`
+  → `app/(supplier)/supplier/page.tsx`) — no new data, `useSupplierRevenue`
+  already backs it.
+- [ ] **Analytics' "Recent Bookings" table needs pagination + a date-range
+  picker.** Currently `[...(bookings ?? [])].slice(0, 10)` client-side off
+  the full `useSupplierBookings()` result — same unbounded-feed shape the
+  Recent Activity/Credit Movement work above just closed everywhere else in
+  this codebase, just not yet applied to the supplier side. Should reuse the
+  same `lib/hooks/useDateRangeFilter.ts`/`components/DateRangePicker.tsx`/`components/Pagination.tsx`
+  built for that work rather than a bespoke supplier-side copy — needs a
+  paginated `GET /api/supplier/bookings` (currently returns everything
+  unpaginated) or a dedicated paginated endpoint alongside it, mirroring how
+  `GET /api/buyer-organization/activity` was split out rather than bolted
+  onto an existing bulk endpoint.
+- [ ] **Supplier Financials should show Credit Movement — company-admin
+  only.** The underlying ledger already exists and already has a write
+  path — `CompanyTransaction` (`prisma/schema.prisma`) via
+  `lib/company-credits.ts`/`lib/supplier-reward-redemptions.ts` — but
+  **no route or UI anywhere reads it back**, confirmed by grep (only those
+  two lib files reference `CompanyTransaction` at all). This is the
+  supplier-side mirror of the buyer-org Credit Movement feed built above,
+  same treatment (paginated, date-range picker) once a
+  `GET /api/supplier/company/transactions`-shaped route exists, gated on
+  `isCompanyAdmin` (mirrors `requireBuyerOrgAdmin` in `lib/buyer-org-auth.ts`
+  — no equivalent company-admin-only guard currently wraps a financials
+  route, would need adding or reusing whatever already gates
+  `/api/supplier/company/members`).
+
 ---
 
 ## Sprint 6.11: Railway + Cloudflare R2 Deployment Readiness (raised 2026-07-22)
@@ -1344,6 +1383,85 @@ here.
   deployed environment, not localhost
 - [ ] One real booking's Stripe charge + webhook round-trip verified against
   the deployed URL (not `stripe listen` against localhost)
+
+---
+
+## Sprint 6.12: Broadcast Notifications, EDM Popups, Supplier Profile Reshuffle, Monetization Catalogue (raised 2026-07-23, planning only)
+
+Five items from the product owner, not yet built — captured here as a
+planning-only sprint, same convention as Sprint 6.10. **Numbered 6.12, not
+6.11 as originally requested** — 6.11 already exists (Railway + Cloudflare
+R2 Deployment Readiness) and is an unrelated deployment-readiness sprint;
+renumbered rather than overwriting/merging into it. Several of these are
+genuinely open-ended ("Content TBD," "Details TBD" in the original ask) —
+left that way below rather than inventing specifics.
+
+- [ ] **Admin UI — broadcast a notification to all Members.** Appears in
+  every member's existing notification panel (`components/NotificationsPanel.tsx`);
+  clicking it opens a modal (content TBD). New ground, not a relocation:
+  `Notification` (`prisma/schema.prisma`) is a one-row-per-user model with
+  no broadcast/announcement concept today, and no notification type
+  currently opens a modal on click — every existing row just marks itself
+  read on click (`NotificationsPanel.tsx`, confirmed by reading the handler).
+  Needs a design decision before building: fan out one `Notification` row
+  per Member at send time (simple, matches the existing read/unread model
+  exactly, but a large broadcast is a lot of rows) vs. a new
+  `Announcement`-style model each `Notification` row references (one row of
+  actual content, cheap fan-out, but a new relation and a new "isRead"
+  tracking shape to design). Not decided here — flagged for whoever picks
+  this up.
+- [ ] **Admin UI — broadcast a notification to all Suppliers.** Same
+  mechanic and same open design question as the Member broadcast above,
+  scoped to `isSupplier` instead.
+- [ ] **Supplier and Admin — EDM upload that pops up on sign-in, and again
+  after sign-out once the account has been inactive for at least 6 hours.**
+  Genuinely new concept — grep confirms no `Announcement`/banner/popup
+  mechanism exists anywhere in this codebase today. Needs at least: where
+  the upload lives (new admin + supplier UI), what "inactive for 6 hours"
+  is measured against (last sign-in timestamp? last request? no session
+  activity tracking currently exists to answer this), and whether Supplier-
+  authored and Admin-authored EDMs are the same content slot or two
+  independent ones. Ties into the "Buying of ads" catalogue item below —
+  worth designing both together rather than twice.
+- [ ] **Supplier Profile — move Team Members card to the left column.**
+  Today's layout (`app/(supplier)/supplier-profile/page.tsx`): the left
+  column (`lg:col-span-1`) holds the avatar/profile card +
+  `CompanyAdminAccessCard`; the right column (`lg:col-span-2`) holds
+  `BusinessDetailsCard`, `TeamMembersCard`, then the Accounts
+  Receivable/Receipts cards. `TeamMembersCard` moves to the left column,
+  under the existing profile card.
+- [ ] **Listing stats → Analytics, integrated into the top 2 cards.**
+  Checked before writing this down: no "listing stats" section currently
+  exists anywhere in this codebase (`app/(supplier)/supplier-inventory/page.tsx`
+  has no stats block, confirmed by grep) — so this isn't a relocation of an
+  existing feature, it's new scope to design, framed as feeding into
+  Analytics' existing `StatCard` pair ("Active Bookings"/"Total Listings",
+  `app/(supplier)/supplier/page.tsx`). What "listing stats" should actually
+  contain (views? bookings per listing? something else?) is undecided —
+  flagged, not guessed.
+- [ ] **Supplier Profile — move Business Details down; add a purchasable
+  listing-boost catalogue above it, placeholder cards.** Business Details
+  (`BusinessDetailsCard`) moves below a new catalogue section in the right
+  column. Catalogue items, per the product owner, all placeholder/TBD
+  content at this stage:
+  - **Lab Digest** — a purchasable report on who's new on SpaceSnap
+    (buyer organizations), buying trends, etc. Content/format TBD.
+  - **Ads** — buying a popup ad slot, surfaced via the same EDM popup
+    mechanism from the item above (not a separate delivery path).
+  - **Newsletter space** — purchasable placement in a newsletter. Content
+    TBD; no newsletter concept exists anywhere in this codebase today.
+  - **Bumps** — pushes the supplier's listing to page 1 of marketplace
+    search results. Depends on marketplace listings actually having pages:
+    confirmed by inspection that `GET /api/listings` has no `take`/`skip`
+    today (`app/api/listings/route.ts`) — the marketplace is unpaginated,
+    same gap every other feed in this codebase had before the Recent
+    Activity/Credit Movement pagination work above. **Marketplace listings
+    need real pagination (10 at a time) as a prerequisite for this item**,
+    not an unrelated nice-to-have — "page 1" isn't a meaningful concept
+    until pagination exists.
+  - **Pin** — pins the listing to the very top of marketplace results,
+    above bumped listings. Mechanics TBD (relative ordering vs. bumps,
+    duration, whether multiple suppliers can pin simultaneously).
 
 ---
 
