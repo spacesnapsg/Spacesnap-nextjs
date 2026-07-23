@@ -73,6 +73,7 @@ export function useRedeemReward() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      queryClient.invalidateQueries({ queryKey: ["wallet-transactions"] });
       queryClient.invalidateQueries({ queryKey: ["rewards-catalogue"] });
       queryClient.invalidateQueries({ queryKey: ["reward-redemptions"] });
       queryClient.invalidateQueries({ queryKey: ["reward-grants"] });

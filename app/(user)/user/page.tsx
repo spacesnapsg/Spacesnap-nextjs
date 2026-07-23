@@ -34,12 +34,13 @@ import {
 import {
   useActivity,
   ACTIVITY_CATEGORIES,
-  ACTIVITY_DATE_RANGES,
   type ActivityCategory,
-  type ActivityDateRange,
   type ActivityActionType,
   type ActivityEntry,
 } from "@/lib/hooks/useActivity";
+import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
+import Pagination from "@/components/Pagination";
+import DateRangePicker from "@/components/DateRangePicker";
 import { ApiRequestError } from "@/lib/api-client";
 
 const BOOKING_STATUS_STYLES: Record<UserBooking["status"], string> = {
@@ -406,8 +407,19 @@ export default function UserDashboardPage() {
   const [tierModalOpen, setTierModalOpen] = useState(false);
 
   const [activityCategory, setActivityCategory] = useState<ActivityCategory | "all">("all");
-  const [activityRange, setActivityRange] = useState<ActivityDateRange>("30");
-  const { data: activity, isLoading: activityLoading } = useActivity(activityCategory, activityRange);
+  const activityRange = useDateRangeFilter("30");
+  const { data: activityData, isLoading: activityLoading } = useActivity(
+    activityCategory,
+    { from: activityRange.from, to: activityRange.to },
+    activityRange.page
+  );
+  const activity = activityData?.activity;
+
+  function handleActivityCategoryChange(next: ActivityCategory | "all") {
+    setActivityCategory(next);
+    activityRange.resetPage();
+  }
+
   const bookingsById = useMemo(() => new Map((bookings ?? []).map((b) => [b.id, b])), [bookings]);
 
   function handleCancelPending(id: string) {
@@ -616,16 +628,18 @@ export default function UserDashboardPage() {
                 ),
               } as Record<ActivityCategory | "all", string>}
               active={activityCategory}
-              onChange={setActivityCategory}
+              onChange={handleActivityCategoryChange}
             />
           </div>
           <div>
             <p className="text-xs font-medium text-hint-text mb-1.5">Date range</p>
-            <Pills
-              options={Object.keys(ACTIVITY_DATE_RANGES) as ActivityDateRange[]}
-              labels={ACTIVITY_DATE_RANGES}
-              active={activityRange}
-              onChange={setActivityRange}
+            <DateRangePicker
+              preset={activityRange.preset}
+              from={activityRange.from}
+              to={activityRange.to}
+              onPresetChange={activityRange.changePreset}
+              onFromChange={activityRange.changeFrom}
+              onToChange={activityRange.changeTo}
             />
           </div>
         </div>
@@ -634,20 +648,28 @@ export default function UserDashboardPage() {
           <p className="text-sm text-muted-text py-4">Loading…</p>
         ) : !activity || activity.length === 0 ? (
           <p className="text-sm text-muted-text py-4">
-            No activity {activityRange !== "all" ? `in the selected date range` : "yet"}
+            No activity {activityRange.from || activityRange.to ? `in the selected date range` : "yet"}
             {activityCategory !== "all" ? ` for ${ACTIVITY_CATEGORIES[activityCategory].label.toLowerCase()}` : ""}.
           </p>
         ) : (
-          <div className="flex flex-col">
-            {activity.map((entry) => (
-              <ActivityRow
-                key={entry.id}
-                entry={entry}
-                bookingsById={bookingsById}
-                onSelectTrainingSession={setSelectedTrainingSessionId}
-              />
-            ))}
-          </div>
+          <>
+            <div className="flex flex-col">
+              {activity.map((entry) => (
+                <ActivityRow
+                  key={entry.id}
+                  entry={entry}
+                  bookingsById={bookingsById}
+                  onSelectTrainingSession={setSelectedTrainingSessionId}
+                />
+              ))}
+            </div>
+            <Pagination
+              page={activityRange.page}
+              pageSize={activityData?.meta.pageSize ?? 10}
+              total={activityData?.meta.total ?? 0}
+              onPageChange={activityRange.setPage}
+            />
+          </>
         )}
       </Card>
 

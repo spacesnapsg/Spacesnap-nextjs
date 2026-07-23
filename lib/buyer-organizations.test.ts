@@ -6,7 +6,7 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../app/generated/prisma/client";
+import { PrismaClient, ListingType, BookingType, TransactionType } from "../app/generated/prisma/client";
 import {
   searchBuyerOrganizationsByName,
   resolveBuyerOrgMembership,
@@ -17,6 +17,9 @@ import {
   requestBuyerOrgPromotion,
   approveBuyerOrgPromotion,
   promoteBuyerOrgMemberDirectly,
+  getBuyerOrgStats,
+  getBuyerOrgActivity,
+  getBuyerOrgTransactions,
   BuyerOrgJoinRequestAlreadyPendingError,
   NotBuyerOrgAdminError,
   CannotRemoveSelfError,
@@ -371,6 +374,185 @@ describe("promoteBuyerOrgMemberDirectly — admin-driven, no system-admin round 
     } finally {
       await cleanupUsers([admin.id, otherAdmin.id]);
       await cleanupOrgs([org.id]);
+    }
+  });
+});
+
+// Coverage for the org-admin Overview tab (2026-07-23) — getBuyerOrgStats
+// and getBuyerOrgActivity, both aggregating across every member of the org
+// (not just the acting admin) via the `user: { buyerOrganizationId }` join.
+let companyCounter = 0;
+async function createCompany() {
+  companyCounter += 1;
+  return prisma.company.create({ data: { name: `Buyer Org Stats Test Co ${Date.now()}-${companyCounter}` } });
+}
+
+function createSpaceListing(companyId: bigint) {
+  return prisma.listing.create({
+    data: {
+      companyId,
+      type: ListingType.space,
+      name: "Buyer Org Stats Test Listing",
+      priceDay: "10.00",
+      priceWeek: "60.00",
+      priceMonth: "200.00",
+    },
+  });
+}
+
+describe("getBuyerOrgStats (real DB)", () => {
+  test("aggregates member count, total bookings, and upcoming bookings across every member", async () => {
+    const org = await prisma.buyerOrganization.create({ data: { name: `Stats Org ${Date.now()}` } });
+    const company = await createCompany();
+    const admin = await createUser({ buyerOrganizationId: org.id, isBuyerOrgAdmin: true });
+    const member = await createUser({ buyerOrganizationId: org.id });
+    const outsider = await createUser();
+    const listing = await createSpaceListing(company.id);
+    try {
+      const farFuture = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      const pastStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+      // Admin's own upcoming booking, member's own upcoming booking, a
+      // completed (non-upcoming) booking, and an outsider's booking that
+      // must never show up in this org's stats.
+      await prisma.booking.create({
+        data: {
+          userId: admin.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: farFuture,
+          endDate: farFuture,
+          sgdAmount: "10.00",
+          status: "confirmed",
+        },
+      });
+      await prisma.booking.create({
+        data: {
+          userId: member.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date(farFuture.getTime() + 86_400_000),
+          endDate: new Date(farFuture.getTime() + 86_400_000),
+          sgdAmount: "10.00",
+          status: "pending",
+        },
+      });
+      await prisma.booking.create({
+        data: {
+          userId: member.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: pastStart,
+          endDate: pastStart,
+          sgdAmount: "10.00",
+          status: "completed",
+        },
+      });
+      await prisma.booking.create({
+        data: {
+          userId: outsider.id,
+          listingId: listing.id,
+          bookingType: BookingType.daily,
+          startDate: new Date(farFuture.getTime() + 2 * 86_400_000),
+          endDate: new Date(farFuture.getTime() + 2 * 86_400_000),
+          sgdAmount: "10.00",
+          status: "confirmed",
+        },
+      });
+
+      const stats = await getBuyerOrgStats(org.id);
+      assert.equal(stats.memberCount, 2);
+      assert.equal(stats.totalBookings, 3); // admin + member x2, not the outsider
+      assert.equal(stats.upcomingBookings.length, 2); // the two future pending/confirmed bookings
+      assert.ok(stats.upcomingBookings.every((b) => b.userId === admin.id || b.userId === member.id));
+    } finally {
+      // Company deletion cascades to its listings, which cascade to their
+      // bookings (Listing.company/Booking.listing are both onDelete: Cascade)
+      // — no need to delete bookings/listings separately.
+      await cleanupUsers([admin.id, member.id, outsider.id]);
+      await cleanupOrgs([org.id]);
+      await prisma.company.delete({ where: { id: company.id } });
+    }
+  });
+});
+
+describe("getBuyerOrgActivity (real DB)", () => {
+  test("aggregates and paginates activity across every member, excluding other orgs", async () => {
+    const org = await prisma.buyerOrganization.create({ data: { name: `Activity Org ${Date.now()}` } });
+    const otherOrg = await prisma.buyerOrganization.create({ data: { name: `Other Activity Org ${Date.now()}` } });
+    const admin = await createUser({ buyerOrganizationId: org.id, isBuyerOrgAdmin: true });
+    const member = await createUser({ buyerOrganizationId: org.id });
+    const outsider = await createUser({ buyerOrganizationId: otherOrg.id });
+    try {
+      for (let i = 0; i < 5; i++) {
+        await prisma.activityLog.create({
+          data: {
+            userId: admin.id,
+            actionType: "wallet_topup",
+            description: `Admin row ${i}`,
+            createdAt: new Date(Date.now() + i * 1000),
+          },
+        });
+      }
+      await prisma.activityLog.create({
+        data: { userId: member.id, actionType: "wallet_topup", description: "Member row" },
+      });
+      await prisma.activityLog.create({
+        data: { userId: outsider.id, actionType: "wallet_topup", description: "Outsider row" },
+      });
+
+      const page1 = await getBuyerOrgActivity(org.id, { types: null, from: null, to: null, page: 1, pageSize: 3 });
+      assert.equal(page1.total, 6); // 5 admin rows + 1 member row, not the outsider's
+      assert.equal(page1.items.length, 3);
+      assert.ok(page1.items.every((entry) => entry.description !== "Outsider row"));
+
+      const page2 = await getBuyerOrgActivity(org.id, { types: null, from: null, to: null, page: 2, pageSize: 3 });
+      assert.equal(page2.items.length, 3);
+    } finally {
+      await prisma.activityLog.deleteMany({ where: { userId: { in: [admin.id, member.id, outsider.id] } } });
+      await cleanupUsers([admin.id, member.id, outsider.id]);
+      await cleanupOrgs([org.id, otherOrg.id]);
+    }
+  });
+});
+
+describe("getBuyerOrgTransactions (real DB)", () => {
+  test("aggregates and paginates credit movement across every member, excluding other orgs", async () => {
+    const org = await prisma.buyerOrganization.create({ data: { name: `Transactions Org ${Date.now()}` } });
+    const otherOrg = await prisma.buyerOrganization.create({ data: { name: `Other Transactions Org ${Date.now()}` } });
+    const admin = await createUser({ buyerOrganizationId: org.id, isBuyerOrgAdmin: true });
+    const member = await createUser({ buyerOrganizationId: org.id });
+    const outsider = await createUser({ buyerOrganizationId: otherOrg.id });
+    try {
+      for (let i = 0; i < 5; i++) {
+        await prisma.transaction.create({
+          data: {
+            userId: admin.id,
+            type: TransactionType.topup,
+            amount: "10.00",
+            description: `Admin row ${i}`,
+            createdAt: new Date(Date.now() + i * 1000),
+          },
+        });
+      }
+      await prisma.transaction.create({
+        data: { userId: member.id, type: TransactionType.booking, amount: "-5.00", description: "Member row" },
+      });
+      await prisma.transaction.create({
+        data: { userId: outsider.id, type: TransactionType.topup, amount: "10.00", description: "Outsider row" },
+      });
+
+      const page1 = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 1, pageSize: 3 });
+      assert.equal(page1.total, 6); // 5 admin rows + 1 member row, not the outsider's
+      assert.equal(page1.items.length, 3);
+      assert.ok(page1.items.every((t) => t.description !== "Outsider row"));
+
+      const page2 = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 2, pageSize: 3 });
+      assert.equal(page2.items.length, 3);
+    } finally {
+      await prisma.transaction.deleteMany({ where: { userId: { in: [admin.id, member.id, outsider.id] } } });
+      await cleanupUsers([admin.id, member.id, outsider.id]);
+      await cleanupOrgs([org.id, otherOrg.id]);
     }
   });
 });

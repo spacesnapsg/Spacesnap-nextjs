@@ -1021,6 +1021,122 @@ distinct concept from the Sprint 6.10 supplier-tier thread above and from
   yet, since there's no pooled spend to attribute in the first place (see
   the `Transaction.buyerOrganizationId` item above). Revisit once the
   pooled-spend write path is scoped.
+- [x] **Org-admin Overview tab (stats, upcoming bookings, activity, credit
+  movement) — closed 2026-07-23, same day, follow-on session.** Distinct
+  from the Personal/Others toggle immediately above — this surfaces each
+  member's own individual bookings/activity/ledger rows aggregated across
+  the org (the `user: { buyerOrganizationId }` join idiom this section's
+  own "Personal"/"Others" note describes), not the shared purchased-credit
+  pool itself, which still has no spend write-path. New `getBuyerOrgStats`/
+  `serializeBuyerOrgStats` (`lib/buyer-organizations.ts`), admin-only `GET
+  /api/buyer-organization/stats`, `useBuyerOrgStats` hook. `ManageBuyerOrganizationModal`
+  gained a new default "Overview" tab: member/total-booking/upcoming-booking
+  stat tiles, an upcoming-bookings list, a Recent Activity feed (audit trail
+  — who did what, across every member, not just the acting admin), and a
+  Credit Movement feed (recent ledger rows across every member). Verified
+  live as `ethan@example.com` (real seeded org admin, "Test" org, 1 member):
+  Overview tab showed 3 total bookings / 1 upcoming (Meeting Room B,
+  pending) and 4 real Credit Movement rows (top-up + 3 booking debits)
+  pulled straight off his seeded ledger; Recent Activity correctly read "No
+  activity yet." since none of his seeded rows ever wrote an `ActivityLog`
+  entry — not a bug, a reflection of what's actually in the dev DB. Members/
+  Join Requests tabs re-verified unaffected. `npm test` 370/370,
+  `tsc --noEmit`/`eslint` clean, `next build` clean with the new route
+  listed.
+- [x] **Recent Activity: pagination + real date-range picker — closed
+  2026-07-23, same day, follow-on session.** Prompted by a direct product
+  owner question ("is it infinite?") about the two Recent Activity feeds
+  above (user dashboard, org Overview tab) — both had grown into flat,
+  unbounded lists (100/200-cap and a hardcoded take:20, respectively) with
+  only coarse 7/30/90-day/all-time preset buttons, no real date picker, and
+  no way to page back through older history. `lib/activity.ts` rewritten:
+  `parseActivityQuery`/`getUserActivity` now take `page`/`pageSize`
+  (default 10/page, capped at 50) and explicit `from`/`to` ISO dates instead
+  of the old flat `limit`/`days`-since preset — `GET /api/activity` returns
+  `{ activity, meta: { page, pageSize, total } }`. Mirrored on the org side:
+  new `getBuyerOrgActivity`/`serializeBuyerOrgActivityEntry`
+  (`lib/buyer-organizations.ts`) and its own admin-only, paginated `GET
+  /api/buyer-organization/activity` — split out of the bundled
+  `GET /api/buyer-organization/stats` response entirely (`recentActivity`
+  removed from `getBuyerOrgStats`/`serializeBuyerOrgStats`) so paging/date
+  state doesn't force a refetch of the cheap aggregate numbers next to it.
+  New shared `components/Pagination.tsx` (first pagination UI anywhere in
+  this codebase — `GET /api/admin/users` already had server-side
+  page/skip/take but no frontend ever rendered controls for it, see that
+  route's own comment) and `ACTIVITY_DATE_RANGE_PRESETS`/`presetToDateRange`
+  (`lib/hooks/useActivity.ts`) — the old 7/30/90/all pills still exist as a
+  frontend convenience that computes from/to under the hood, now sitting
+  next to two real `<input type="date">` fields for a genuine custom range.
+  Both feeds (`app/(user)/user/page.tsx`, `ManageBuyerOrganizationModal.tsx`)
+  reset to page 1 on any filter change. Credit Movement (the org modal's
+  ledger feed) was deliberately left untouched — the product owner's
+  question was specifically about "activity logs," which in this codebase
+  means the `ActivityLog`/`ActivityActionType` feed, not the `Transaction`
+  ledger; flagged, not silently assumed. New coverage: `lib/activity.test.ts`
+  (parseActivityQuery validation, real-DB pagination/date-range/type
+  filtering, cross-user isolation) and two new describe blocks in
+  `lib/buyer-organizations.test.ts` (`getBuyerOrgStats`/`getBuyerOrgActivity`
+  aggregate correctly across every member and never leak another org's
+  rows) — both registered in `npm test`. **Verified live**: seeded 15 fake
+  `activity_log` rows directly via `psql` (the dev DB had zero real ones —
+  nothing seeds this table, and Ethan's own seeded actions never wrote to
+  it), confirmed both feeds paginate correctly ("Showing 1–10 of 15" → page
+  2 "Showing 11–15 of 15") and the custom from/to inputs filter correctly
+  (14 of 15 rows match a specific day), then deleted all 15 rows — dev DB
+  confirmed back to its exact pre-verification state (0 `activity_log`
+  rows). `npm test` 385/385, `tsc --noEmit`/`eslint` clean, `next build`
+  clean with both `/api/activity` and `/api/buyer-organization/activity`
+  listed.
+- [x] **Extended to every other audit-trail feed (Credit Movement, wallet
+  Recent Transactions) — closed 2026-07-23, same day, immediate follow-up.**
+  The product owner's explicit instruction after the item above: "anything
+  that calls upon for audit trails" gets the same pagination + date picker,
+  not just the two `ActivityLog` feeds — closing the "deliberately left
+  untouched" scoping note this item's own bullet made a few paragraphs up.
+  Two more feeds identified by grep (only two other places in the whole
+  codebase render a `Transaction` list): the org modal's own Credit
+  Movement section, and the Financials page's Recent Transactions card.
+  Both got the identical treatment. New shared
+  `lib/hooks/useDateRangeFilter.ts` (preset/from/to/page state + the four
+  change handlers, each resetting page to 1) and `components/DateRangePicker.tsx`
+  (preset pills + two `<input type="date">` fields) — extracted once a
+  third near-identical copy of that block was about to exist; the two
+  already-built feeds (dashboard Recent Activity, org modal Recent
+  Activity) were refactored onto these shared pieces too, not just the two
+  new ones. New `getBuyerOrgTransactions`/`serializeBuyerOrgTransaction`
+  (`lib/buyer-organizations.ts`) + admin-only paginated `GET
+  /api/buyer-organization/transactions` — `recentTransactions` removed from
+  `getBuyerOrgStats`/`serializeBuyerOrgStats` (fourth thing pulled out of
+  that bundled response, after Recent Activity above). New
+  `lib/wallet-transactions.ts` (`getWalletTransactionsPage`,
+  reuses `ActivityQuery`/`parseActivityQuery` from lib/activity.ts, its
+  `types` field just unused) + `GET /api/wallet/transactions`. **Important
+  distinction preserved, not regressed:** `GET /api/wallet`'s own bundled
+  `transactions` field (flat, still take-50) was deliberately left alone —
+  the Financials page's derived stats (This Month's Spend, Avg Monthly
+  Spend, Balance Trend sparkline) read that field, and paging it down to 10
+  would have silently made those stats wrong; the new paginated endpoint is
+  a genuinely separate query, used only by the new Recent Transactions
+  display list. Every existing mutation that invalidates `["wallet"]`
+  (`useTopUp`, `useRedeemReward`, booking cancel/modify, the pending
+  booking-credit refund claim) now also invalidates `["wallet-transactions"]`
+  so the paginated list refreshes after those actions too. New coverage:
+  `lib/wallet-transactions.test.ts` (real-DB pagination/date-range/
+  cross-user isolation, mirrors lib/activity.test.ts) and a
+  `getBuyerOrgTransactions` describe block in `lib/buyer-organizations.test.ts`
+  (aggregates across every member, excludes other orgs) — both registered
+  in `npm test`. **Verified live**: seeded 15 fake `transactions` rows for
+  Ethan via `psql` (real `updated_at` NOT NULL constraint caught on the
+  first attempt — fixed), confirmed the wallet page's Recent Transactions
+  paginated correctly ("Showing 1–10 of 19" → page 2 "Showing 11–19 of 19",
+  the extra 4 being Ethan's real seeded transactions) while This Month's/Avg
+  Monthly Spend stayed at the correct 4200.00 credits throughout (proof the
+  stats split didn't regress), and the org modal's Credit Movement
+  paginated independently of Recent Activity above it in the same tab, then
+  deleted all 15 rows — dev DB confirmed back to its exact prior state.
+  `npm test` 389/389, `tsc --noEmit`/`eslint` clean, `next build` clean with
+  `/api/buyer-organization/transactions` and `/api/wallet/transactions`
+  both listed.
 - [x] **At most one organization — confirmed 2026-07-23,** no multi-org
   membership. `User.buyerOrganizationId` is a single nullable scalar FK,
   not a join table — structurally can't hold more than one.

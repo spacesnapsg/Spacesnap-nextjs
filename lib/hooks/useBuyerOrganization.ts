@@ -22,6 +22,51 @@ export interface BuyerOrgJoinRequest {
   createdAt: string;
 }
 
+export interface BuyerOrgUpcomingBooking {
+  id: string;
+  userName: string;
+  listingName: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+}
+
+export interface BuyerOrgActivityEntry {
+  id: string;
+  userName: string;
+  actionType: string;
+  description: string;
+  listingName: string | null;
+  trainingSessionTitle: string | null;
+  createdAt: string;
+}
+
+export interface BuyerOrgTransaction {
+  id: string;
+  userName: string;
+  type: string;
+  amount: number;
+  description: string;
+  createdAt: string;
+}
+
+export interface BuyerOrgStats {
+  memberCount: number;
+  totalBookings: number;
+  upcomingBookingsCount: number;
+  upcomingBookings: BuyerOrgUpcomingBooking[];
+}
+
+export interface BuyerOrgActivityPageResult {
+  activity: BuyerOrgActivityEntry[];
+  meta: { page: number; pageSize: number; total: number };
+}
+
+export interface BuyerOrgTransactionsPageResult {
+  transactions: BuyerOrgTransaction[];
+  meta: { page: number; pageSize: number; total: number };
+}
+
 export function useBuyerOrganization() {
   return useQuery({
     queryKey: ["buyer-organization"],
@@ -39,6 +84,9 @@ function useInvalidateBuyerOrganization() {
     queryClient.invalidateQueries({ queryKey: ["buyer-organization"] });
     queryClient.invalidateQueries({ queryKey: ["buyer-organization-members"] });
     queryClient.invalidateQueries({ queryKey: ["buyer-organization-join-requests"] });
+    queryClient.invalidateQueries({ queryKey: ["buyer-organization-stats"] });
+    queryClient.invalidateQueries({ queryKey: ["buyer-organization-activity"] });
+    queryClient.invalidateQueries({ queryKey: ["buyer-organization-transactions"] });
     queryClient.invalidateQueries({ queryKey: ["me"] });
   };
 }
@@ -98,6 +146,51 @@ export function useResolveBuyerOrgJoinRequest() {
         body: JSON.stringify({ status }),
       }),
     onSuccess: invalidate,
+  });
+}
+
+export function useBuyerOrgStats(enabled: boolean) {
+  return useQuery({
+    queryKey: ["buyer-organization-stats"],
+    queryFn: () => apiFetch<BuyerOrgStats>("/api/buyer-organization/stats"),
+    enabled,
+  });
+}
+
+export function useBuyerOrgActivity(
+  enabled: boolean,
+  dateRange: { from: string | null; to: string | null },
+  page: number
+) {
+  const params = new URLSearchParams();
+  if (dateRange.from) params.set("from", dateRange.from);
+  if (dateRange.to) params.set("to", dateRange.to);
+  params.set("page", String(page));
+
+  return useQuery({
+    queryKey: ["buyer-organization-activity", dateRange, page],
+    queryFn: () => apiFetch<BuyerOrgActivityPageResult>(`/api/buyer-organization/activity?${params.toString()}`),
+    enabled,
+    placeholderData: (previousData) => previousData,
+  });
+}
+
+export function useBuyerOrgTransactions(
+  enabled: boolean,
+  dateRange: { from: string | null; to: string | null },
+  page: number
+) {
+  const params = new URLSearchParams();
+  if (dateRange.from) params.set("from", dateRange.from);
+  if (dateRange.to) params.set("to", dateRange.to);
+  params.set("page", String(page));
+
+  return useQuery({
+    queryKey: ["buyer-organization-transactions", dateRange, page],
+    queryFn: () =>
+      apiFetch<BuyerOrgTransactionsPageResult>(`/api/buyer-organization/transactions?${params.toString()}`),
+    enabled,
+    placeholderData: (previousData) => previousData,
   });
 }
 

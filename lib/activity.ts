@@ -4,20 +4,24 @@ import { ApiValidationError } from "@/lib/api-errors";
 
 const ACTION_TYPE_VALUES = new Set<string>(Object.values(ActivityActionType));
 
-const DEFAULT_LIMIT = 100;
-const MAX_LIMIT = 200;
+const DEFAULT_PAGE_SIZE = 10;
+const MAX_PAGE_SIZE = 50;
 
 export interface ActivityQuery {
   types: ActivityActionType[] | null;
-  since: Date | null;
-  limit: number;
+  from: Date | null;
+  to: Date | null;
+  page: number;
+  pageSize: number;
 }
 
-// GET-only filters (types/days/limit) — the write side (every `activityLog.create`
-// call across lib/bookings.ts, lib/bulk-orders.ts, etc.) is untouched by this
-// module. `days` maps to the dashboard's "past 7 days / past 30 days / past
-// quarter" pills; omitting it means all-time, same as omitting `types` means
-// every action type.
+// Pagination (page/pageSize, default 10/page) replaced the old flat
+// limit-capped-at-200 feed 2026-07-23 — an unbounded "recent activity" list
+// only ever grows, and the dashboard had no way to page back through
+// history. `from`/`to` (explicit ISO dates) replaced the old `days` preset
+// param at the same time, backing a real date-range picker instead of only
+// 7/30/90-day/all-time buttons — the frontend's preset buttons now just set
+// from/to under the hood instead of being a server-side concept.
 export function parseActivityQuery(searchParams: URLSearchParams): ActivityQuery {
   const errors: Record<string, string[]> = {};
 
@@ -33,25 +37,54 @@ export function parseActivityQuery(searchParams: URLSearchParams): ActivityQuery
     }
   }
 
-  let since: Date | null = null;
-  const rawDays = searchParams.get("days");
-  if (rawDays) {
-    const days = Number(rawDays);
-    if (!Number.isInteger(days) || days <= 0) {
-      errors.days = ["days must be a positive integer."];
+  let from: Date | null = null;
+  const rawFrom = searchParams.get("from");
+  if (rawFrom) {
+    const parsed = new Date(rawFrom);
+    if (Number.isNaN(parsed.getTime())) {
+      errors.from = ["from must be a valid date."];
     } else {
-      since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      from = parsed;
     }
   }
 
-  let limit = DEFAULT_LIMIT;
-  const rawLimit = searchParams.get("limit");
-  if (rawLimit) {
-    const parsed = Number(rawLimit);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      errors.limit = ["limit must be a positive integer."];
+  let to: Date | null = null;
+  const rawTo = searchParams.get("to");
+  if (rawTo) {
+    const parsed = new Date(rawTo);
+    if (Number.isNaN(parsed.getTime())) {
+      errors.to = ["to must be a valid date."];
     } else {
-      limit = Math.min(parsed, MAX_LIMIT);
+      // A bare "to" date (no time component) means "through the end of that
+      // day" — matches how a date-range picker's end date reads to a user.
+      parsed.setHours(23, 59, 59, 999);
+      to = parsed;
+    }
+  }
+
+  if (from && to && from > to) {
+    errors.from = [...(errors.from ?? []), "from must not be after to."];
+  }
+
+  let page = 1;
+  const rawPage = searchParams.get("page");
+  if (rawPage) {
+    const parsed = Number(rawPage);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      errors.page = ["page must be a positive integer."];
+    } else {
+      page = parsed;
+    }
+  }
+
+  let pageSize = DEFAULT_PAGE_SIZE;
+  const rawPageSize = searchParams.get("pageSize");
+  if (rawPageSize) {
+    const parsed = Number(rawPageSize);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      errors.pageSize = ["pageSize must be a positive integer."];
+    } else {
+      pageSize = Math.min(parsed, MAX_PAGE_SIZE);
     }
   }
 
@@ -59,29 +92,51 @@ export function parseActivityQuery(searchParams: URLSearchParams): ActivityQuery
     throw new ApiValidationError(errors);
   }
 
-  return { types, since, limit };
-}
-
-export async function getUserActivity(userId: string, query: ActivityQuery) {
-  return prisma.activityLog.findMany({
-    where: {
-      userId,
-      ...(query.types ? { actionType: { in: query.types } } : {}),
-      ...(query.since ? { createdAt: { gte: query.since } } : {}),
-    },
-    include: {
-      listing: { select: { name: true } },
-      trainingSession: { select: { title: true } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: query.limit,
-  });
+  return { types, from, to, page, pageSize };
 }
 
 type ActivityLogWithRelations = ActivityLog & {
   listing: Pick<Listing, "name"> | null;
   trainingSession: Pick<TrainingSession, "title"> | null;
 };
+
+export interface ActivityPage {
+  items: ActivityLogWithRelations[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export async function getUserActivity(userId: string, query: ActivityQuery): Promise<ActivityPage> {
+  const where = {
+    userId,
+    ...(query.types ? { actionType: { in: query.types } } : {}),
+    ...(query.from || query.to
+      ? {
+          createdAt: {
+            ...(query.from ? { gte: query.from } : {}),
+            ...(query.to ? { lte: query.to } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.activityLog.findMany({
+      where,
+      include: {
+        listing: { select: { name: true } },
+        trainingSession: { select: { title: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }),
+    prisma.activityLog.count({ where }),
+  ]);
+
+  return { items, total, page: query.page, pageSize: query.pageSize };
+}
 
 export function serializeActivityLogEntry(entry: ActivityLogWithRelations) {
   return {

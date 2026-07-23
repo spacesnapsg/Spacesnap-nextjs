@@ -13,7 +13,10 @@ import {
 import Card from "@/components/Card";
 import TopUpCreditsModal from "@/components/TopUpCreditsModal";
 import RewardsCatalogueModal from "@/components/RewardsCatalogueModal";
-import { useWallet, type WalletTransaction } from "@/lib/hooks/useWallet";
+import Pagination from "@/components/Pagination";
+import DateRangePicker from "@/components/DateRangePicker";
+import { useWallet, useWalletTransactions, type WalletTransaction } from "@/lib/hooks/useWallet";
+import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleDateString("en-US", {
@@ -152,6 +155,12 @@ export default function FinancialsPage() {
   const [rewardsOpen, setRewardsOpen] = useState(false);
   const { data: wallet, isLoading, isError } = useWallet();
 
+  const transactionsRange = useDateRangeFilter("all");
+  const { data: transactionsData, isLoading: transactionsLoading } = useWalletTransactions(
+    { from: transactionsRange.from, to: transactionsRange.to },
+    transactionsRange.page
+  );
+
   const stats = useMemo(() => (wallet ? computeStats(wallet.transactions) : null), [wallet]);
   const trend = useMemo(
     () => (wallet ? computeBalanceTrend(wallet.transactions, wallet.balance) : []),
@@ -257,15 +266,38 @@ export default function FinancialsPage() {
       </div>
 
       <Card>
-        <h2 className="text-lg font-semibold text-body-text mb-2">Recent Transactions</h2>
-        {wallet.transactions.length === 0 ? (
-          <p className="text-sm text-muted-text py-4">No transactions yet.</p>
+        <h2 className="text-lg font-semibold text-body-text mb-3">Recent Transactions</h2>
+        <div className="mb-3">
+          <DateRangePicker
+            preset={transactionsRange.preset}
+            from={transactionsRange.from}
+            to={transactionsRange.to}
+            onPresetChange={transactionsRange.changePreset}
+            onFromChange={transactionsRange.changeFrom}
+            onToChange={transactionsRange.changeTo}
+          />
+        </div>
+
+        {transactionsLoading && !transactionsData ? (
+          <p className="text-sm text-muted-text py-4">Loading…</p>
+        ) : !transactionsData || transactionsData.transactions.length === 0 ? (
+          <p className="text-sm text-muted-text py-4">
+            No transactions {transactionsRange.from || transactionsRange.to ? "in the selected date range" : "yet"}.
+          </p>
         ) : (
-          <div className="flex flex-col max-h-80 overflow-y-auto">
-            {wallet.transactions.map((transaction) => (
-              <TransactionRow key={transaction.id} transaction={transaction} />
-            ))}
-          </div>
+          <>
+            <div className="flex flex-col">
+              {transactionsData.transactions.map((transaction) => (
+                <TransactionRow key={transaction.id} transaction={transaction} />
+              ))}
+            </div>
+            <Pagination
+              page={transactionsRange.page}
+              pageSize={transactionsData.meta.pageSize}
+              total={transactionsData.meta.total}
+              onPageChange={transactionsRange.setPage}
+            />
+          </>
         )}
       </Card>
 

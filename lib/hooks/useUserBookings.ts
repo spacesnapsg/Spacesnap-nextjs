@@ -40,6 +40,7 @@ function useBookingMutationInvalidator() {
     queryClient.invalidateQueries({ queryKey: ["user-bookings"] });
     queryClient.invalidateQueries({ queryKey: ["activity"] });
     queryClient.invalidateQueries({ queryKey: ["wallet"] });
+    queryClient.invalidateQueries({ queryKey: ["wallet-transactions"] });
   };
 }
 

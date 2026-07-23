@@ -100,25 +100,50 @@ export const ACTIVITY_CATEGORIES: Record<ActivityCategory, { label: string; type
   certificates: { label: "Certificates", types: ["credential_issued", "signoff_requested", "signoff_reviewed"] },
 };
 
-export type ActivityDateRange = "all" | "7" | "30" | "90";
+// 2026-07-23: replaced the old server-side "days" preset (7/30/90/all) with
+// a real from/to date range so the UI can offer an actual date-range picker,
+// not just fixed buckets. These presets are now purely a frontend
+// convenience — clicking one just computes from/to and sends those, the
+// same as a manually-picked custom range would.
+export type ActivityDateRangePreset = "all" | "7" | "30" | "90" | "custom";
 
-export const ACTIVITY_DATE_RANGES: Record<ActivityDateRange, string> = {
+export const ACTIVITY_DATE_RANGE_PRESETS: Record<ActivityDateRangePreset, string> = {
   all: "All time",
   "7": "Past 7 days",
   "30": "Past 30 days",
   "90": "Past quarter",
+  custom: "Custom",
 };
 
-export function useActivity(category: ActivityCategory | "all", dateRange: ActivityDateRange) {
+export function presetToDateRange(preset: ActivityDateRangePreset): { from: string | null; to: string | null } {
+  if (preset === "all" || preset === "custom") return { from: null, to: null };
+  const days = Number(preset);
+  const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  return { from: from.toISOString().slice(0, 10), to: null };
+}
+
+export interface ActivityDateRange {
+  from: string | null; // "YYYY-MM-DD"
+  to: string | null; // "YYYY-MM-DD"
+}
+
+export interface ActivityPageResult {
+  activity: ActivityEntry[];
+  meta: { page: number; pageSize: number; total: number };
+}
+
+export function useActivity(category: ActivityCategory | "all", dateRange: ActivityDateRange, page: number) {
   const types = category === "all" ? null : ACTIVITY_CATEGORIES[category].types;
   const params = new URLSearchParams();
   if (types) params.set("types", types.join(","));
-  if (dateRange !== "all") params.set("days", dateRange);
+  if (dateRange.from) params.set("from", dateRange.from);
+  if (dateRange.to) params.set("to", dateRange.to);
+  params.set("page", String(page));
   const qs = params.toString();
 
   return useQuery({
-    queryKey: ["activity", category, dateRange],
-    queryFn: () => apiFetch<{ activity: ActivityEntry[] }>(`/api/activity${qs ? `?${qs}` : ""}`),
-    select: (data) => data.activity,
+    queryKey: ["activity", category, dateRange, page],
+    queryFn: () => apiFetch<ActivityPageResult>(`/api/activity?${qs}`),
+    placeholderData: (previousData) => previousData,
   });
 }

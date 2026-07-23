@@ -1,5 +1,8 @@
+import { BookingStatus } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import { sgdToCredits } from "@/lib/credit-units";
+import type { ActivityQuery } from "@/lib/activity";
 
 // Sprint 6.10 "User-Side Buyer Organization" (2026-07-23) — structural mirror
 // of lib/company-membership.ts, scoped to BuyerOrganization instead of
@@ -270,6 +273,159 @@ export async function promoteBuyerOrgMemberDirectly(actingAdminUserId: string, t
     where: { id: targetUserId },
     data: { isBuyerOrgAdmin: true, buyerOrgPromotionRequested: false },
   });
+}
+
+// Org-admin overview — total/upcoming bookings, aggregated across every
+// member of the org (not just the acting admin) via the same
+// `user: { buyerOrganizationId }` join idiom the plan's "Personal/Others"
+// note describes. This is visibility into each member's own individual
+// bookings, NOT the shared purchased-credit pool — that pool has no spend
+// write-path yet (Transaction.buyerOrganizationId is schema-only, see the
+// model's own comment), so there is nothing to report there yet.
+//
+// Recent Activity and Credit Movement are deliberately NOT bundled into
+// this stats call — see getBuyerOrgActivity/getBuyerOrgTransactions below,
+// each its own paginated/date-filterable endpoint (2026-07-23), same
+// reasoning as GET /api/activity for the user dashboard: a flat,
+// ever-growing feed needs paging, and paging state shouldn't force a
+// refetch of the cheap aggregate numbers above it.
+const UPCOMING_BOOKING_STATUSES: BookingStatus[] = [BookingStatus.pending, BookingStatus.confirmed];
+
+export async function getBuyerOrgStats(buyerOrganizationId: bigint) {
+  const memberFilter = { buyerOrganizationId };
+
+  const [memberCount, totalBookings, upcomingBookings] = await Promise.all([
+    prisma.user.count({ where: memberFilter }),
+    prisma.booking.count({ where: { user: memberFilter } }),
+    prisma.booking.findMany({
+      where: {
+        user: memberFilter,
+        status: { in: UPCOMING_BOOKING_STATUSES },
+        startDate: { gte: new Date() },
+      },
+      include: {
+        user: { select: { name: true } },
+        listing: { select: { name: true } },
+      },
+      orderBy: { startDate: "asc" },
+      take: 10,
+    }),
+  ]);
+
+  return { memberCount, totalBookings, upcomingBookings };
+}
+
+export function serializeBuyerOrgStats(stats: Awaited<ReturnType<typeof getBuyerOrgStats>>) {
+  return {
+    memberCount: stats.memberCount,
+    totalBookings: stats.totalBookings,
+    upcomingBookingsCount: stats.upcomingBookings.length,
+    upcomingBookings: stats.upcomingBookings.map((b) => ({
+      id: b.id.toString(),
+      userName: b.user.name,
+      listingName: b.listing.name,
+      startDate: b.startDate.toISOString(),
+      endDate: b.endDate.toISOString(),
+      status: b.status,
+    })),
+  };
+}
+
+// Paginated (10/page default), date-range-filterable credit-movement feed
+// across every member of the org — same ActivityQuery shape as
+// getBuyerOrgActivity below (its `types` field is simply unused here, no
+// separate parser needed). Backs the "Manage Organization" modal's Overview
+// tab Credit Movement section.
+export async function getBuyerOrgTransactions(buyerOrganizationId: bigint, query: ActivityQuery) {
+  const where = {
+    user: { buyerOrganizationId },
+    ...(query.from || query.to
+      ? {
+          createdAt: {
+            ...(query.from ? { gte: query.from } : {}),
+            ...(query.to ? { lte: query.to } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.transaction.findMany({
+      where,
+      include: {
+        user: { select: { name: true } },
+        booking: { include: { listing: { select: { name: true } } } },
+        bulkOrderRequest: { include: { listing: { select: { name: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }),
+    prisma.transaction.count({ where }),
+  ]);
+
+  return { items, total, page: query.page, pageSize: query.pageSize };
+}
+
+export function serializeBuyerOrgTransaction(t: Awaited<ReturnType<typeof getBuyerOrgTransactions>>["items"][number]) {
+  return {
+    id: t.id.toString(),
+    userName: t.user.name,
+    type: t.type,
+    amount: sgdToCredits(Number(t.amount)),
+    description: t.description ?? t.booking?.listing.name ?? t.bulkOrderRequest?.listing.name ?? t.type,
+    createdAt: t.createdAt.toISOString(),
+  };
+}
+
+// Paginated (10/page default), date-range-filterable activity feed across
+// every member of the org — the same ActivityQuery shape/parser as
+// lib/activity.ts's user-scoped feed (parseActivityQuery has no userId
+// baked in, so it's reused as-is), just joined on
+// `user.buyerOrganizationId` instead of a single `userId`. Backs the
+// "Manage Organization" modal's Overview tab Recent Activity section.
+export async function getBuyerOrgActivity(buyerOrganizationId: bigint, query: ActivityQuery) {
+  const where = {
+    user: { buyerOrganizationId },
+    ...(query.types ? { actionType: { in: query.types } } : {}),
+    ...(query.from || query.to
+      ? {
+          createdAt: {
+            ...(query.from ? { gte: query.from } : {}),
+            ...(query.to ? { lte: query.to } : {}),
+          },
+        }
+      : {}),
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.activityLog.findMany({
+      where,
+      include: {
+        user: { select: { name: true } },
+        listing: { select: { name: true } },
+        trainingSession: { select: { title: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }),
+    prisma.activityLog.count({ where }),
+  ]);
+
+  return { items, total, page: query.page, pageSize: query.pageSize };
+}
+
+export function serializeBuyerOrgActivityEntry(entry: Awaited<ReturnType<typeof getBuyerOrgActivity>>["items"][number]) {
+  return {
+    id: entry.id.toString(),
+    userName: entry.user.name,
+    actionType: entry.actionType,
+    description: entry.description,
+    listingName: entry.listing?.name ?? null,
+    trainingSessionTitle: entry.trainingSession?.title ?? null,
+    createdAt: entry.createdAt.toISOString(),
+  };
 }
 
 export function serializePendingBuyerOrgPromotion(

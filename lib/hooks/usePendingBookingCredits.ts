@@ -30,6 +30,7 @@ export function useClaimBookingCreditRefund() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bookings", "pending-resolution"] });
       queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      queryClient.invalidateQueries({ queryKey: ["wallet-transactions"] });
       queryClient.invalidateQueries({ queryKey: ["activity"] });
       queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
