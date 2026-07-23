@@ -9,9 +9,14 @@ import {
   useRejectCertificate,
 } from "@/lib/hooks/useAdminCertificates";
 import { usePendingPromotions, useApprovePromotion, useRejectPromotion } from "@/lib/hooks/usePromotions";
+import {
+  usePendingBuyerOrgPromotions,
+  useApproveBuyerOrgPromotion,
+  useRejectBuyerOrgPromotion,
+} from "@/lib/hooks/useBuyerOrgPromotions";
 import { ApiRequestError } from "@/lib/api-client";
 
-type MainTab = "bookings" | "promotions" | "certificates";
+type MainTab = "bookings" | "promotions" | "orgPromotions" | "certificates";
 
 function ApproveButton({ disabled, onClick }: { disabled?: boolean; onClick: () => void }) {
   return (
@@ -155,14 +160,69 @@ function PromotionsTab() {
   );
 }
 
+function OrgPromotionsTab() {
+  const { data: promotions, isLoading, isError } = usePendingBuyerOrgPromotions();
+  const approvePromotion = useApproveBuyerOrgPromotion();
+  const rejectPromotion = useRejectBuyerOrgPromotion();
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  function handleApprove(id: string) {
+    setActionError(null);
+    approvePromotion.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  function handleReject(id: string) {
+    setActionError(null);
+    rejectPromotion.mutate(id, {
+      onError: (error) => setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong."),
+    });
+  }
+
+  if (isLoading) return <p className="text-sm text-muted-text text-center py-12">Loading…</p>;
+  if (isError) return <p className="text-sm text-error-red text-center py-12">Failed to load.</p>;
+  if (!promotions || promotions.length === 0) return <EmptyState label="organization promotions" />;
+
+  return (
+    <div>
+      {actionError && <p className="text-sm text-error-red mb-4">{actionError}</p>}
+      {promotions.map((p) => (
+        <div key={p.id} className="py-4 border-b border-border/60 last:border-0">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-body-text font-bold">{p.name}</p>
+              <p className="text-xs text-muted-text mt-1">
+                {p.email} · {p.buyerOrganizationName ?? "No organization"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <ApproveButton
+                disabled={approvePromotion.isPending && approvePromotion.variables === p.id}
+                onClick={() => handleApprove(p.id)}
+              />
+              <RejectButton
+                disabled={rejectPromotion.isPending && rejectPromotion.variables === p.id}
+                onClick={() => handleReject(p.id)}
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminApprovals() {
   const [activeTab, setActiveTab] = useState<MainTab>("bookings");
   const { data: pendingCertificates } = usePendingCertificates();
   const { data: pendingPromotions } = usePendingPromotions();
+  const { data: pendingOrgPromotions } = usePendingBuyerOrgPromotions();
 
   const MAIN_TABS: { id: MainTab; label: string; count: number; icon: typeof CalendarCheck }[] = [
     { id: "bookings", label: "Bookings", count: 0, icon: CalendarCheck },
     { id: "promotions", label: "Promotions", count: pendingPromotions?.length ?? 0, icon: Building2 },
+    { id: "orgPromotions", label: "Org Promotions", count: pendingOrgPromotions?.length ?? 0, icon: Building2 },
     { id: "certificates", label: "Certificates", count: pendingCertificates?.length ?? 0, icon: Award },
   ];
 
@@ -215,6 +275,7 @@ export default function AdminApprovals() {
           </GapNote>
         )}
         {activeTab === "promotions" && <PromotionsTab />}
+        {activeTab === "orgPromotions" && <OrgPromotionsTab />}
         {activeTab === "certificates" && <CertificatesTab />}
       </Card>
     </div>

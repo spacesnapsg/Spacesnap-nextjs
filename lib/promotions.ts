@@ -19,6 +19,29 @@ export class PromotionNotPendingError extends Error {
   }
 }
 
+export class CompanyAlreadyHasAdminError extends Error {
+  constructor() {
+    super("Your company already has an admin — ask them to promote you instead.");
+  }
+}
+
+export class NotCompanyAdminError extends Error {
+  constructor() {
+    super("This action requires company admin access.");
+  }
+}
+
+export class TargetNotInCompanyError extends Error {
+  constructor() {
+    super("That user is not a member of your company.");
+  }
+}
+
+async function companyHasAdmin(companyId: bigint): Promise<boolean> {
+  const admin = await prisma.user.findFirst({ where: { companyId, isCompanyAdmin: true } });
+  return admin !== null;
+}
+
 export function serializePendingPromotion(user: User & { company: Company | null }) {
   return {
     id: user.id,
@@ -33,14 +56,40 @@ export function serializePendingPromotion(user: User & { company: Company | null
 // their own company. Mirrors the frontend's "Request Promotion to Company
 // Admin" button (supplier profile) — closes the gap where the
 // `promotionRequested` column existed but nothing wrote to it.
+//
+// 2026-07-23 amendment: this only reaches the system-admin queue when the
+// company has no admin at all yet — nothing else could seat one. Once a
+// company has an admin, that admin promotes members directly
+// (promoteMemberDirectly, below), no system-admin round trip needed.
 export async function requestPromotion(userId: string): Promise<User> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (user.isCompanyAdmin) throw new AlreadyCompanyAdminError();
   if (user.promotionRequested) throw new PromotionAlreadyRequestedError();
+  if (user.companyId && (await companyHasAdmin(user.companyId))) {
+    throw new CompanyAlreadyHasAdminError();
+  }
 
   return prisma.user.update({
     where: { id: userId },
     data: { promotionRequested: true },
+  });
+}
+
+// Admin-initiated: the company's own admin promotes a fellow member
+// directly — no system-admin queue involved. New capability, 2026-07-23,
+// alongside the Buyer Organization membership build (lib/buyer-organizations.ts
+// mirrors this exactly).
+export async function promoteMemberDirectly(actingAdminUserId: string, targetUserId: string): Promise<User> {
+  const actingAdmin = await prisma.user.findUniqueOrThrow({ where: { id: actingAdminUserId } });
+  if (!actingAdmin.isCompanyAdmin || !actingAdmin.companyId) throw new NotCompanyAdminError();
+
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: targetUserId } });
+  if (target.companyId !== actingAdmin.companyId) throw new TargetNotInCompanyError();
+  if (target.isCompanyAdmin) throw new AlreadyCompanyAdminError();
+
+  return prisma.user.update({
+    where: { id: targetUserId },
+    data: { isCompanyAdmin: true, promotionRequested: false },
   });
 }
 

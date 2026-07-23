@@ -928,8 +928,89 @@ model Company {
   supplierPayables          SupplierPayable[]
   companyTransactions       CompanyTransaction[]
   supplierRewardRedemptions SupplierRewardRedemption[]
+  joinRequests              CompanyJoinRequest[]
 
   @@map("companies")
+}
+
+enum JoinRequestStatus {
+  pending
+  approved
+  rejected
+}
+
+// Sprint 6.10 follow-on (2026-07-23) — company-side membership management.
+// A user "joining" a company (found via search-or-create at signup, or later
+// from the supplier profile) is seated immediately if the company has no
+// admin yet (nothing to gate against), or queued here until the company's
+// own admin approves/rejects it (lib/company-membership.ts). No DB-level
+// uniqueness on (companyId, requestedByUserId) scoped to "pending" only —
+// Prisma can't express a partial unique index natively; the app layer
+// already blocks a second pending request for the same pair.
+model CompanyJoinRequest {
+  id                BigInt            @id @default(autoincrement())
+  companyId         BigInt            @map("company_id")
+  requestedByUserId String            @map("requested_by_user_id")
+  status            JoinRequestStatus @default(pending)
+  resolvedByUserId  String?           @map("resolved_by_user_id")
+  resolvedAt        DateTime?         @map("resolved_at")
+  createdAt         DateTime          @default(now()) @map("created_at")
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requestedBy User    @relation("CompanyJoinRequestRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy  User?   @relation("CompanyJoinRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@map("company_join_requests")
+}
+
+// Buyer-side counterpart to Company — a corporate customer account for a
+// group of members who share a purchased-credit pool (Sprint 6.10 "User-Side
+// Buyer Organization" design thread, 2026-07-23). Deliberately a separate
+// model from Company, not a reuse — Company is always a seller (lists
+// spaces/equipment/consumables, has certificates/training/payables); this is
+// always a buyer, with none of that. Only the purchased-credit pool is ever
+// shared between members — earnedBalance, reward tier, and referrals all
+// stay strictly individual (confirmed with the product owner, untouched by
+// this model). The actual pooled-spend write path (a booking/purchase
+// funded from this org rather than the member's own purchasedBalance) is
+// deliberately not built yet — Transaction.buyerOrganizationId below is
+// schema-only groundwork, same "schema now, write path later" convention as
+// the gig tables.
+model BuyerOrganization {
+  id                   BigInt   @id @default(autoincrement())
+  name                 String
+  registrationNumber   String?  @map("registration_number")
+  financeContactEmail  String?  @map("finance_contact_email")
+  financeContactPerson String?  @map("finance_contact_person")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  users        User[]
+  joinRequests BuyerOrganizationJoinRequest[]
+  transactions Transaction[]
+
+  @@map("buyer_organizations")
+}
+
+// Mirrors CompanyJoinRequest exactly, scoped to BuyerOrganization instead —
+// same "no admin yet = seat immediately, admin exists = queue for their
+// approval" state machine (lib/buyer-organizations.ts).
+model BuyerOrganizationJoinRequest {
+  id                  BigInt            @id @default(autoincrement())
+  buyerOrganizationId BigInt            @map("buyer_organization_id")
+  requestedByUserId   String            @map("requested_by_user_id")
+  status              JoinRequestStatus @default(pending)
+  resolvedByUserId    String?           @map("resolved_by_user_id")
+  resolvedAt          DateTime?         @map("resolved_at")
+  createdAt           DateTime          @default(now()) @map("created_at")
+
+  buyerOrganization BuyerOrganization @relation(fields: [buyerOrganizationId], references: [id], onDelete: Cascade)
+  requestedBy       User              @relation("BuyerOrgJoinRequestRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy        User?             @relation("BuyerOrgJoinRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([buyerOrganizationId, status])
+  @@map("buyer_organization_join_requests")
 }
 
 // Role is derived from the three booleans, never a single enum column —
@@ -939,23 +1020,48 @@ model Company {
 // Capabilities are additive (company admin implies supplier), enforced by the
 // `users_company_admin_requires_supplier` CHECK constraint added in migration
 // 20260718192008_users_company_admin_requires_supplier (raw SQL — Prisma
-// can't express cross-column CHECK constraints natively).
+// can't express cross-column CHECK constraints natively). isBuyerOrgAdmin
+// mirrors that same additive pattern (requires buyerOrganizationId), enforced
+// by the sibling `users_buyer_org_admin_requires_org` CHECK constraint added
+// in migration 20260723000000_buyer_organizations.
 model User {
-  id                     String     @id @default(cuid())
-  name                   String
-  email                  String     @unique
-  emailVerified          DateTime?  @map("email_verified")
-  password               String
-  title                  String?
-  avatarUrl              String?    @map("avatar_url")
-  isSupplier             Boolean    @default(false) @map("is_supplier")
-  isCompanyAdmin         Boolean    @default(false) @map("is_company_admin")
-  isSystemAdmin          Boolean    @default(false) @map("is_system_admin")
-  companyId              BigInt?    @map("company_id")
-  promotionRequested     Boolean    @default(false) @map("promotion_requested")
-  stripeCustomerId       String?    @map("stripe_customer_id")
-  stripeConnectAccountId String?    @map("stripe_connect_account_id")
-  status                 UserStatus @default(active)
+  id                         String     @id @default(cuid())
+  name                       String
+  email                      String     @unique
+  emailVerified              DateTime?  @map("email_verified")
+  password                   String
+  title                      String?
+  avatarUrl                  String?    @map("avatar_url")
+  isSupplier                 Boolean    @default(false) @map("is_supplier")
+  // 2026-07-23 — signup's Member/Supplier/Both role choice is now
+  // exclusive/enforced (proxy.ts, RoleGuard.tsx), not just additive: a
+  // "Supplier" role account can no longer reach the user-side routes
+  // (marketplace/passport/wallet/dashboard) at all, only "Member"/"Both"
+  // can. isSupplier alone can't express this (it's identical for
+  // "Supplier" and "Both"), so this is a genuinely separate signal, not
+  // derived from isSupplier. Defaults true so every pre-existing row
+  // (seed.ts, any account created before this field existed) keeps its
+  // current behavior — the exclusivity only applies going forward, driven
+  // by app/api/auth/register/route.ts's own role handling.
+  isMember                   Boolean    @default(true) @map("is_member")
+  isCompanyAdmin             Boolean    @default(false) @map("is_company_admin")
+  isSystemAdmin              Boolean    @default(false) @map("is_system_admin")
+  companyId                  BigInt?    @map("company_id")
+  promotionRequested         Boolean    @default(false) @map("promotion_requested")
+  // Sprint 6.10 follow-on (2026-07-23) — Buyer Organization membership,
+  // mirrors companyId/isCompanyAdmin/promotionRequested exactly but for the
+  // buyer-side BuyerOrganization model instead of the supplier-side Company.
+  // A member's promotion-to-admin only ever reaches SpaceSnap's system admin
+  // when their org currently has no admin at all — once an org has an admin,
+  // that admin promotes/removes members directly (lib/buyer-organizations.ts),
+  // same rule this session applied to the existing Company promotion flow
+  // (lib/promotions.ts).
+  buyerOrganizationId        BigInt?    @map("buyer_organization_id")
+  isBuyerOrgAdmin            Boolean    @default(false) @map("is_buyer_org_admin")
+  buyerOrgPromotionRequested Boolean    @default(false) @map("buyer_org_promotion_requested")
+  stripeCustomerId           String?    @map("stripe_customer_id")
+  stripeConnectAccountId     String?    @map("stripe_connect_account_id")
+  status                     UserStatus @default(active)
   // Sprint 6.5 addition (2026-07-21) — User Reward Tier referral mechanic.
   // referralCode is THIS user's own shareable code, generated in
   // application code at registration (app/api/auth/register/route.ts) —
@@ -972,15 +1078,21 @@ model User {
   // codebase (seed.ts, every lib/*.test.ts fixture) doesn't need to know
   // about this Sprint 6.5 field at all — only app/api/auth/register/route.ts
   // explicitly generates+sets one (its own collision-retry loop).
-  referralCode           String     @unique @default(dbgenerated("substr(md5(random()::text || clock_timestamp()::text), 1, 8)")) @map("referral_code")
-  referredByUserId       String?    @map("referred_by_user_id")
-  referralConvertedAt    DateTime?  @map("referral_converted_at")
-  createdAt              DateTime   @default(now()) @map("created_at")
-  updatedAt              DateTime   @updatedAt @map("updated_at")
+  referralCode               String     @unique @default(dbgenerated("substr(md5(random()::text || clock_timestamp()::text), 1, 8)")) @map("referral_code")
+  referredByUserId           String?    @map("referred_by_user_id")
+  referralConvertedAt        DateTime?  @map("referral_converted_at")
+  createdAt                  DateTime   @default(now()) @map("created_at")
+  updatedAt                  DateTime   @updatedAt @map("updated_at")
 
-  company       Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  referredBy    User?    @relation("UserReferrals", fields: [referredByUserId], references: [id], onDelete: SetNull)
-  referredUsers User[]   @relation("UserReferrals")
+  company           Company?           @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  buyerOrganization BuyerOrganization? @relation(fields: [buyerOrganizationId], references: [id], onDelete: SetNull)
+  referredBy        User?              @relation("UserReferrals", fields: [referredByUserId], references: [id], onDelete: SetNull)
+  referredUsers     User[]             @relation("UserReferrals")
+
+  companyJoinRequestsMade      CompanyJoinRequest[]           @relation("CompanyJoinRequestRequester")
+  companyJoinRequestsResolved  CompanyJoinRequest[]           @relation("CompanyJoinRequestResolver")
+  buyerOrgJoinRequestsMade     BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestRequester")
+  buyerOrgJoinRequestsResolved BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestResolver")
 
   accounts Account[]
   sessions Session[]
@@ -1585,6 +1697,17 @@ model Transaction {
   // authorized it" pattern as rewardGrantId/bookingCreditId above. Nullable:
   // unrelated to every other Transaction type.
   rewardRedemptionId    BigInt?         @map("reward_redemption_id")
+  // Sprint 6.10 follow-on (2026-07-23) — schema-only groundwork for the
+  // Buyer Organization shared purchased-credit pool. Confirmed with the
+  // product owner: when a spend is ever funded from an org's shared pool,
+  // the ledger row must record both who did it (userId, always the acting
+  // member) and whose pool it drew from (this field) — same "trace the
+  // ledger row back to what authorized it" idiom as rewardGrantId/
+  // bookingCreditId/rewardRedemptionId above. No write path sets this yet —
+  // the pooled-spend flow itself (choosing to fund a booking/purchase from
+  // the org rather than personal purchasedBalance) is still undesigned, per
+  // BuyerOrganization's own comment.
+  buyerOrganizationId   BigInt?         @map("buyer_organization_id")
   type                  TransactionType
   amount                Decimal         @db.Decimal(10, 2)
   stripePaymentIntentId String?         @map("stripe_payment_intent_id")
@@ -1592,13 +1715,14 @@ model Transaction {
   createdAt             DateTime        @default(now()) @map("created_at")
   updatedAt             DateTime        @updatedAt @map("updated_at")
 
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  booking          Booking?          @relation(fields: [bookingId], references: [id], onDelete: SetNull)
-  bulkOrderRequest BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: SetNull)
-  purchase         Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
-  rewardGrant      RewardGrant?      @relation(fields: [rewardGrantId], references: [id], onDelete: SetNull)
-  bookingCredit    BookingCredit?    @relation(fields: [bookingCreditId], references: [id], onDelete: SetNull)
-  rewardRedemption RewardRedemption? @relation(fields: [rewardRedemptionId], references: [id], onDelete: SetNull)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking           Booking?           @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  bulkOrderRequest  BulkOrderRequest?  @relation(fields: [bulkOrderRequestId], references: [id], onDelete: SetNull)
+  purchase          Purchase?          @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  rewardGrant       RewardGrant?       @relation(fields: [rewardGrantId], references: [id], onDelete: SetNull)
+  bookingCredit     BookingCredit?     @relation(fields: [bookingCreditId], references: [id], onDelete: SetNull)
+  rewardRedemption  RewardRedemption?  @relation(fields: [rewardRedemptionId], references: [id], onDelete: SetNull)
+  buyerOrganization BuyerOrganization? @relation(fields: [buyerOrganizationId], references: [id], onDelete: SetNull)
 
   @@map("transactions")
 }

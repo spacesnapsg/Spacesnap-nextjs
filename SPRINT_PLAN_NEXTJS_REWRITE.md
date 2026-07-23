@@ -446,18 +446,16 @@ percentage.
   `useWallet`), a "View redeemed rewards" toggle that drops down
   active/unused vouchers or tickets, and a grid-card rewards catalogue below
   (image/icon tile, header, description per card).
-- [ ] **Catalogue rewards are placeholder only, not backed by any real
-  issuance/redemption flow — close this before calling Sprint 6.6 done.**
-  The 7 reward types below are hardcoded UI, not real `RewardGrant` rows:
-  Discount Voucher (renamed from "% off voucher" — matches common platform
-  terminology for a booking-fee-offsetting coupon), VC Pitch Ticket, Legal
-  Consultancy, Exclusive Event Invite, Lucky Draw Ticket, Premium Tier
-  Upgrade, Consumable Redemption. The "View redeemed rewards" active-vouchers
-  dropdown is also placeholder data — there is no `GET` endpoint yet to list
-  a user's own `RewardGrant` rows (only server-side redemption logic exists,
-  `lib/reward-grants.ts`). Wiring both to real data is Sprint 6.7's job
-  (activation) — this item just tracks that the UI shipped ahead of its
-  backend, per the product owner's own instruction, and isn't forgotten.
+- [x] **Catalogue rewards were placeholder only at the time this line was
+  written — closed across Sprint 6.7/6.9/6.10, stale checkbox fixed
+  2026-07-23.** All 7 reward types now back to a real `RewardCatalogueItem`
+  schema (Sprint 6.7), full admin add/edit/delete (Sprint 6.9), and a real
+  per-category redemption/fulfillment flow — `discount`/`consumable`/
+  `tier_upgrade` resolve immediately, `pitch_ticket`/`consultancy` go through
+  an admin concierge queue (Sprint 6.10 fulfillment). The "View redeemed
+  rewards" dropdown reads real `RewardRedemption` rows via
+  `GET /api/rewards/redemptions`, not placeholder data — see the Sprint 6.9
+  "Real redemption/issuance flow" item below for where that closed.
 
 ---
 
@@ -484,11 +482,12 @@ percentage.
   `RewardsCatalogueModal.tsx`'s hardcoded array; verified live an
   admin-deactivated item stops rendering for a real user
   (`ethan@example.com`) without a page reload lag.
-- [ ] **Not done, explicitly deferred**: the "View redeemed rewards"
-  active-vouchers list in `RewardsCatalogueModal.tsx` is still placeholder
-  data (`PLACEHOLDER_ACTIVE_VOUCHERS`) — no `GET` endpoint exists yet for a
-  user's own `RewardGrant` rows. Out of scope for this session (only the
-  catalogue grid was asked for); still an open item.
+- [x] **Closed 2026-07-22, stale checkbox fixed 2026-07-23** — the "View
+  redeemed rewards" active-vouchers list was still placeholder
+  (`PLACEHOLDER_ACTIVE_VOUCHERS`) when this line was written, but is real
+  now: `GET /api/rewards/redemptions` (the caller's own `RewardRedemption`
+  rows) was added as part of Sprint 6.9's "Real redemption/issuance flow"
+  item, and `RewardsCatalogueModal.tsx` reads it directly.
 
 ---
 
@@ -920,7 +919,7 @@ what a future session needs to decide/build before any of this is real.
     direct `psql` query. `npx tsc --noEmit`, `eslint .` clean on every
     touched file, `next build` clean with every new route listed.
 
-### User-Side Buyer Organization — Shared Purchased Credits (raised 2026-07-22, planning only, not yet built)
+### User-Side Buyer Organization — Shared Purchased Credits (raised 2026-07-22, membership built 2026-07-23 — pooled *spend* still not built)
 
 Surfaced while discussing the Sprint 6.5 user reward tier: `User.companyId`
 already exists in the schema and isn't gated to `isSupplier` — so nothing
@@ -983,24 +982,134 @@ distinct concept from the Sprint 6.10 supplier-tier thread above and from
   `User.buyerOrganizationId` here). "Personal" = my own topup/spend rows;
   "Others" = my org-mates' rows (`user.buyerOrganizationId = mine AND userId
   != mine`).
-- [ ] Not yet designed, still open:
-  - The new model's exact name/fields, and `User.buyerOrganizationId`
-    (nullable, separate from the existing supplier-side `companyId` — a
-    user shouldn't need any supplier association just to belong to a buyer
-    org).
-  - `Transaction` needs a new nullable FK (e.g. `buyerOrganizationId`)
-    alongside the existing `userId`, so a shared-pool-funded row records
-    both "who did this" and "whose pool it drew from" — same "trace the
-    ledger row back to what authorized it" idiom as `bookingId`/
-    `rewardGrantId`/`rewardRedemptionId` already on `Transaction`.
-  - How a user joins a buyer organization in the first place (invite code?
-    admin-added? — no flow exists today, same gap noted for the dormant
-    `companyId` case above).
-  - Where the Personal/Others toggle + activity feed lives in the UI —
-    presumably the user Financials/Wallet page, mirroring where the
-    supplier version was scoped, not yet placed.
-  - Whether a user can belong to at most one buyer organization or
-    (unlikely, but not ruled out) more than one.
+- [x] **Model name/fields, `User.buyerOrganizationId` — closed 2026-07-23.**
+  `BuyerOrganization` (`id`, `name`, `registrationNumber`,
+  `financeContactEmail`, `financeContactPerson` — full mirror of `Company`'s
+  business fields, per the product owner's confirmed answer). `User` gained
+  `buyerOrganizationId` (nullable, independent of `companyId`),
+  `isBuyerOrgAdmin`, `buyerOrgPromotionRequested` — same additive-capability
+  shape as `isCompanyAdmin`, enforced by a sibling
+  `users_buyer_org_admin_requires_org` CHECK constraint. Migration
+  `20260723072753_buyer_organizations`.
+- [x] **`Transaction.buyerOrganizationId` FK — closed 2026-07-23, schema
+  only.** Added exactly as scoped (nullable, alongside `userId`) — but the
+  pooled-spend write path itself (a booking/purchase actually funded from
+  the org's pool) is still **not built**, same "schema now, write path
+  later" convention as the gig tables. No UI lets a member choose
+  personal-vs-org funds at checkout yet.
+- [x] **How a user joins — closed 2026-07-23, confirmed by the product
+  owner as part of this session:** search-or-create by name at signup (or
+  later, self-service via `POST /api/buyer-organization/join`) — same "join
+  or create" flow you already assumed. Refined further, same session: if
+  the matched org already has an admin, joining queues a
+  `BuyerOrganizationJoinRequest` instead of seating immediately; an
+  adminless org (including a freshly created one) seats immediately.
+  Promotion to org admin only ever reaches SpaceSnap's system admin when
+  the org has no admin at all — once one exists, that admin promotes/removes
+  members directly. **The identical rule was retrofitted onto the
+  supplier-side `Company` in the same session** (`lib/promotions.ts`
+  gained `promoteMemberDirectly`; the existing self-service
+  `requestPromotion` now refuses once a company has an admin) — Company
+  never had a "join"/"remove member" concept at all before this, only the
+  one existing system-admin promotion queue.
+- [ ] **Personal/Others toggle + activity feed — still not placed.** The
+  membership/admin management UI (join, seat-or-queue, member list,
+  remove, promote) is real and live on both the user Financials page
+  (`BuyerOrganizationCard`/`ManageBuyerOrganizationModal`) and the supplier
+  profile page (`TeamMembersCard`) — but the actual "Personal vs. Others"
+  spend-attribution toggle this bullet originally described has no home
+  yet, since there's no pooled spend to attribute in the first place (see
+  the `Transaction.buyerOrganizationId` item above). Revisit once the
+  pooled-spend write path is scoped.
+- [x] **At most one organization — confirmed 2026-07-23,** no multi-org
+  membership. `User.buyerOrganizationId` is a single nullable scalar FK,
+  not a join table — structurally can't hold more than one.
+
+**Built 2026-07-23 (this session):** `lib/buyer-organizations.ts` +
+`lib/company-membership.ts` (search, join-or-request, member list, remove,
+promote, join-request approve/reject, system-admin promotion queue — the
+Company side is new, the BuyerOrganization side mirrors it exactly);
+`lib/buyer-org-auth.ts` (`requireBuyerOrgMember`/`requireBuyerOrgAdmin`,
+mirrors `lib/supplier-auth.ts`); session/JWT now carry
+`isBuyerOrgAdmin`/`buyerOrganizationId` (`auth.ts`, `types/next-auth.d.ts`).
+14 new API routes (`/api/buyer-organization*`, `/api/buyer-organizations/search`,
+`/api/companies/search`, `/api/supplier/company/members*`,
+`/api/supplier/company/join-requests*`, `/api/admin/buyer-org-promotions*`).
+`app/api/auth/register/route.ts` rewritten to actually resolve
+`role`/`buyerOrganizationName`/`companyName` — this closes the dead-UI
+finding that kicked off this whole thread (see the new "Sprint 7.1" section
+below). New UI: `components/OrgSearchInput.tsx` (search-or-create
+autocomplete, signup + Digital Passport), `components/BuyerOrganizationCard.tsx` +
+`ManageBuyerOrganizationModal.tsx`, `TeamMembersCard` (supplier profile
+page), a new "Org Promotions" tab in `AdminApprovals.tsx`.
+**`BuyerOrganizationCard` relocated the same day** (product owner's own
+call, caught during review): originally placed on the Financials/Wallet
+page per this section's own earlier placement note, moved instead to the
+Digital Passport page — replacing that page's pre-existing "Company"
+field, which turned out to be a second, unrelated dead-UI bug (displayed
+the *supplier* `Company` name via a free-text input that looked editable
+but had no save path anywhere — confirmed by reading the whole edit flow,
+no API call backed it). See the "Role Exclusivity" entry below for the
+rest of what that review surfaced. Tests: `lib/company-membership.test.ts`,
+`lib/promotions.test.ts`, `lib/buyer-organizations.test.ts` — 44 new cases,
+all against the real dev/test Postgres DB. **Verified live**: `npm test`
+365/365, `tsc`/`eslint`/`next build` clean (every new route listed); real
+cookie-jar HTTP walkthrough of every path on both the Company and
+BuyerOrganization sides — create org/company, second signup into the same
+org while adminless (seats immediately), self-promotion request (allowed,
+no admin yet), system-admin approval, a *third* signup into the
+now-administered org (correctly queued `pending` instead of seated), the
+new admin approving the queued request, direct admin-driven promotion, and
+the self-removal guard rejecting an admin trying to remove themselves — all
+matched the designed state machine exactly. All test users/company/org rows
+deleted afterward, dev DB confirmed back to its exact seeded state.
+
+### Role Exclusivity — Member/Supplier/Both (closed 2026-07-23, same day, follow-on review)
+
+Raised while reviewing the Buyer Organization work above: the "User
+Portal"/"Supplier Portal" nav-switch buttons (`UserNavbar.tsx`/
+`SupplierNavbar.tsx`) were unconditional — every account saw both, regardless
+of role, confirmed by reading both components (no session check at all).
+Fixing "Supplier Portal" was simple (gate on `isSupplier`, which already
+existed), but "User Portal" exposed a real architecture question: `proxy.ts`
+had user routes (`/marketplace`, `/passport`, `/wallet`, `/user`) open to
+*every* authenticated account unconditionally — `isSupplier` only ever gated
+the supplier routes, meaning a Supplier account already had full user-route
+access too, by design ("supplier" was additive on top of a base account, not
+a separate account type). Confirmed with the product owner: this should be
+fully exclusive instead — picking a role at signup should mean *only* that
+role's pages are reachable, not "at least that role."
+
+- [x] **`User.isMember` — new field, not derived from `isSupplier`.**
+  Migration `20260723082448_user_is_member`. Necessary because `isSupplier`
+  alone can't distinguish "Supplier only" from "Both" (both set it
+  identically) — a genuinely separate signal was required. Defaults `true`,
+  so every pre-existing row (every seeded account, every account created
+  before this field existed) keeps working exactly as before; the
+  exclusivity only applies to signups going forward. `lib/signup-roles.ts`
+  (new, small, tested): `resolveIsMember(role)` — `false` only for
+  `"supplier"`, `true` for `"member"`/`"both"`/no role selected (the
+  legacy/API-only registration path).
+- [x] **`proxy.ts` gate flipped from unconditional to `isUserRoute &&
+  isMember`** — mirrors how `isSupplierRoute && isSupplier` already worked.
+  `components/RoleGuard.tsx` (the client-side companion) updated identically
+  for consistency, same as every other guard pair in this codebase.
+- [x] **Nav buttons fixed**: `UserNavbar.tsx`'s "Supplier Portal" now only
+  renders when `isSupplier`; `SupplierNavbar.tsx`'s "User Portal" now only
+  renders when `isMember` — both via `useSession()`, matching the pattern
+  every other role-gated UI element in this codebase already uses.
+- [x] **Tests + verification**: `lib/signup-roles.test.ts` (5 cases, pure
+  function, no DB). Full `npm test` **370/370**, `tsc`/`eslint`/`next build`
+  clean. **Live-verified** via real cookie-jar HTTP: registered one account
+  per role (Member/Supplier/Both), confirmed each session's `isSupplier`/
+  `isMember` combination matched exactly, then hit `/marketplace` and
+  `/supplier` directly as each — Member-only got `200`/`307` (blocked),
+  Supplier-only got `307` (blocked)/`200`, Both got `200`/`200` on both. Also
+  confirmed via direct `psql` that pre-existing seeded accounts
+  (`alice.admin@spacesnap.sg`, `ben@acmecoworking.sg`, `ethan@example.com`)
+  all read `is_member = true` — the grandfathering held. All test
+  accounts/companies deleted afterward, dev DB back to its exact seeded
+  state.
 
 ---
 
@@ -1141,6 +1250,40 @@ here.
 - [ ] Full PreUAT checklist passed on new stack
 - [ ] Side-by-side smoke test against old build for any page where behavior differs
 - [ ] Old Laravel/Vite build kept live and untouched as fallback until new stack has run cleanly for a defined period (your call on how long)
+
+---
+
+## Sprint 7.1: Site-Wide UI→Backend Wiring Audit (raised 2026-07-23, not yet started)
+
+Trigger: found while scoping the Buyer Organization feature (Sprint 6.10) that
+`app/signup/page.tsx`'s `company` field (placeholder "Search for company or
+Create new") and its `role` selector (Member/Supplier/Both) are both collected
+in form state but never sent to `POST /api/auth/register` — the endpoint only
+ever accepted `name`/`email`/`password`/`referralCode`, matching the old
+Laravel contract. Dead UI, not a stub with a TODO — the kind of gap this
+file's own discipline (Sprint 4.5's mock-data audit, the Sprint 1
+verifications-tab pullback, the "only delete when superseded" rule) is meant
+to catch, but this one slipped through because it was never mock-wired to
+begin with, just silently dropped.
+
+- [ ] Fix the specific instance found: wire signup's `company` field + `role`
+  selector for real — scope folded into the Buyer Organization build below
+  (Member → `BuyerOrganization` search-or-create, Supplier/Both →
+  `Company` search-or-create, per the "wire both sides" decision).
+- [ ] **Broader audit, not yet started:** grep every page/component for
+  patterns that suggest a control collects input but never reaches an API
+  call — unused `useState` fields never included in a mutation body, buttons
+  with no `onClick`/handler, forms whose `onSubmit` doesn't call `fetch`/a
+  React Query mutation, hardcoded `PLACEHOLDER_*`/`TODO` arrays not already
+  tracked elsewhere in this file. Distinct from the existing Sprint 4.5 mock-
+  data audit (that one covered `lib/mock*.ts` imports specifically) — this is
+  broader, covering any dead control regardless of whether it was ever
+  backed by mock data in the first place.
+- [ ] Every finding gets logged here (or in whichever sprint section it
+  belongs to) with the same "flag, don't silently fix or silently ignore"
+  discipline as the rest of this file — not batch-fixed without review, since
+  some may be intentional (e.g. Sign-out being unwired was already
+  flagged and left as a known gap since Sprint 1, not a bug to blindly close).
 
 ---
 

@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useSearchParams } from "next/navigation";
-import { Award, Building2, Calendar, Camera, Check, CheckCircle2, Lock, Mail, MapPin, PlayCircle, Trophy, User, Users } from "lucide-react";
+import { Award, Calendar, Camera, Check, CheckCircle2, Lock, Mail, MapPin, PlayCircle, Trophy, User, Users } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
 import Modal from "@/components/Modal";
 import CertificateDetailModal from "@/components/CertificateDetailModal";
 import TrainingSessionDetailModal from "@/components/TrainingSessionDetailModal";
+import BuyerOrganizationCard from "@/components/BuyerOrganizationCard";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 import { useCertificateCatalog, type Certificate } from "@/lib/hooks/useCertificates";
 import { useCredentials, isCredentialHeld } from "@/lib/hooks/useCredentials";
@@ -373,18 +374,17 @@ export default function DigitalPassportPage() {
     document.getElementById(`cert-badge-${filterCertId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [filterCertId, catalog]);
 
-  const [profileEdits, setProfileEdits] = useState<{ name: string; title: string; companyName: string; avatarUrl: string | null } | null>(
+  const [profileEdits, setProfileEdits] = useState<{ name: string; title: string; avatarUrl: string | null } | null>(
     null
   );
 
   const profile = profileEdits ?? {
     name: user?.name ?? "",
     title: user?.title ?? "",
-    companyName: user?.companyName ?? "",
     avatarUrl: user?.avatarUrl ?? null,
   };
 
-  function handleProfileChange(field: "name" | "title" | "companyName" | "avatarUrl", value: string) {
+  function handleProfileChange(field: "name" | "title" | "avatarUrl", value: string) {
     setProfileEdits({ ...profile, [field]: value });
   }
 
@@ -471,14 +471,6 @@ export default function DigitalPassportPage() {
                     className="w-full focus:!border-user-teal-start"
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs text-muted-text">Company</label>
-                  <Input
-                    value={profile.companyName}
-                    onChange={(e) => handleProfileChange("companyName", e.target.value)}
-                    className="w-full focus:!border-user-teal-start"
-                  />
-                </div>
               </div>
             ) : (
               <>
@@ -492,12 +484,6 @@ export default function DigitalPassportPage() {
                 <Mail size={16} />
                 {user?.email}
               </span>
-              {profile.companyName && (
-                <span className="flex items-center gap-2.5 text-sm text-muted-text">
-                  <Building2 size={16} />
-                  {profile.companyName}
-                </span>
-              )}
               <span className="flex items-center gap-2.5 text-sm text-muted-text">
                 <Calendar size={16} />
                 Member since{" "}
@@ -520,6 +506,8 @@ export default function DigitalPassportPage() {
               </Button>
             )}
           </Card>
+
+          <BuyerOrganizationCard />
 
           <div className="bg-gradient-to-br from-user-teal-start to-user-teal-end rounded-card p-6 text-white flex flex-col gap-1">
             <div className="flex items-center gap-2">

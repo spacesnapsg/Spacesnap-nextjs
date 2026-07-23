@@ -2,7 +2,7 @@
 
 import { useState, type ChangeEvent } from "react";
 import { useSession } from "next-auth/react";
-import { Mail, Building2, Calendar, CheckCircle2, Camera } from "lucide-react";
+import { Mail, Building2, Calendar, CheckCircle2, Camera, UserMinus, ShieldCheck, Check, X as XIcon } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
@@ -11,6 +11,13 @@ import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
 import { useSupplierBookings } from "@/lib/hooks/useSupplierBookings";
 import { useRequestPromotion } from "@/lib/hooks/usePromotions";
 import { useSupplierCompany, useUpdateSupplierCompany, type BusinessDetailsFields } from "@/lib/hooks/useSupplierCompany";
+import {
+  useCompanyMembers,
+  useRemoveCompanyMember,
+  usePromoteCompanyMember,
+  useCompanyJoinRequests,
+  useResolveCompanyJoinRequest,
+} from "@/lib/hooks/useCompanyMembers";
 import { ApiRequestError } from "@/lib/api-client";
 
 function getInitials(name: string) {
@@ -36,6 +43,7 @@ function InfoRow({ icon: Icon, label, value }: { icon: typeof Mail; label: strin
 function CompanyAdminAccessCard({ promotionRequested }: { promotionRequested: boolean }) {
   const { data: session } = useSession();
   const requestPromotion = useRequestPromotion();
+  const { data: members } = useCompanyMembers();
 
   if (session?.user?.isCompanyAdmin) {
     return (
@@ -49,7 +57,23 @@ function CompanyAdminAccessCard({ promotionRequested }: { promotionRequested: bo
     );
   }
 
+  // 2026-07-23 amendment: promotion only reaches the system-admin queue when
+  // the company has no admin at all yet — once one exists, that admin
+  // promotes members directly from the Team Members card below instead.
+  const existingAdmin = members?.find((m) => m.isCompanyAdmin);
   const alreadyRequested = promotionRequested || requestPromotion.isSuccess;
+
+  if (existingAdmin) {
+    return (
+      <Card className="mt-6">
+        <p className="text-xs text-muted-text mb-3">Company Admin Access</p>
+        <p className="text-sm text-muted-text">
+          Ask your company admin, <span className="text-body-text font-medium">{existingAdmin.name}</span>, to
+          promote you from the Team Members list.
+        </p>
+      </Card>
+    );
+  }
 
   return (
     <Card className="mt-6">
@@ -75,6 +99,133 @@ function CompanyAdminAccessCard({ promotionRequested }: { promotionRequested: bo
         <p className="text-xs text-muted-text mt-3 text-center">
           Awaiting system admin review.
         </p>
+      )}
+    </Card>
+  );
+}
+
+// New, 2026-07-23 — company membership management. Member list to everyone
+// at the company; admin-only Remove/Promote actions and the pending
+// join-request queue (lib/company-membership.ts backs the actual logic —
+// this card didn't exist before, Company had no "join"/"remove" concept at
+// all until this session).
+function TeamMembersCard() {
+  const { data: session } = useSession();
+  const { data: members } = useCompanyMembers();
+  const removeMember = useRemoveCompanyMember();
+  const promoteMember = usePromoteCompanyMember();
+  const { data: requests } = useCompanyJoinRequests();
+  const resolveRequest = useResolveCompanyJoinRequest();
+  const [error, setError] = useState<string | null>(null);
+
+  const isAdmin = Boolean(session?.user?.isCompanyAdmin);
+
+  function handleError(err: unknown) {
+    setError(err instanceof ApiRequestError ? err.message : "Something went wrong.");
+  }
+
+  return (
+    <Card>
+      <h3 className="text-base font-semibold text-body-text mb-4">Team Members</h3>
+
+      {error && <p className="text-sm text-error-red mb-3">{error}</p>}
+
+      <div className="flex flex-col gap-3">
+        {!members || members.length === 0 ? (
+          <p className="text-sm text-muted-text">No members yet.</p>
+        ) : (
+          members.map((member) => (
+            <div key={member.id} className="flex items-center justify-between border border-border/40 rounded p-3">
+              <div>
+                <p className="text-sm font-medium text-body-text">
+                  {member.name}
+                  {member.isCompanyAdmin && (
+                    <span className="ml-2 text-xs text-supplier-purple-end font-semibold">Admin</span>
+                  )}
+                </p>
+                <p className="text-xs text-muted-text">{member.email}</p>
+              </div>
+              {isAdmin && !member.isCompanyAdmin && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    title="Promote to admin"
+                    disabled={promoteMember.isPending}
+                    onClick={() => {
+                      setError(null);
+                      promoteMember.mutate(member.id, { onError: handleError });
+                    }}
+                    className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-supplier-purple-end transition-colors"
+                  >
+                    <ShieldCheck size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Remove member"
+                    disabled={removeMember.isPending}
+                    onClick={() => {
+                      setError(null);
+                      removeMember.mutate(member.id, { onError: handleError });
+                    }}
+                    className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
+                  >
+                    <UserMinus size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      {isAdmin && (
+        <div className="mt-6">
+          <h4 className="text-sm font-semibold text-body-text mb-3">
+            Pending Join Requests
+            {requests && requests.length > 0 && (
+              <span className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-supplier-purple-end text-white text-[10px] font-semibold">
+                {requests.length}
+              </span>
+            )}
+          </h4>
+          {!requests || requests.length === 0 ? (
+            <p className="text-sm text-muted-text">No pending join requests.</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {requests.map((request) => (
+                <div key={request.id} className="flex items-center justify-between border border-border/40 rounded p-3">
+                  <div>
+                    <p className="text-sm font-medium text-body-text">{request.requestedBy.name}</p>
+                    <p className="text-xs text-muted-text">{request.requestedBy.email}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      disabled={resolveRequest.isPending}
+                      onClick={() => {
+                        setError(null);
+                        resolveRequest.mutate({ id: request.id, status: "approved" }, { onError: handleError });
+                      }}
+                      className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end h-8 px-3 text-xs gap-1"
+                    >
+                      <Check size={14} /> Approve
+                    </Button>
+                    <button
+                      type="button"
+                      disabled={resolveRequest.isPending}
+                      onClick={() => {
+                        setError(null);
+                        resolveRequest.mutate({ id: request.id, status: "rejected" }, { onError: handleError });
+                      }}
+                      className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
+                    >
+                      <XIcon size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </Card>
   );
@@ -308,6 +459,7 @@ export default function SupplierProfilePage() {
 
         <div className="lg:col-span-2 flex flex-col gap-6">
           <BusinessDetailsCard />
+          <TeamMembersCard />
 
           <Card>
             <h3 className="text-base font-semibold text-body-text mb-2">Listing Stats</h3>

@@ -28,7 +28,7 @@ export default function RoleGuard({
   const allowed =
     status === "authenticated" &&
     !!user &&
-    (guard === "user" ||
+    ((guard === "user" && user.isMember) ||
       (guard === "supplier" && user.isSupplier) ||
       (guard === "systemAdmin" && user.isSystemAdmin));
 

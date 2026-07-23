@@ -43,8 +43,14 @@ export default auth((req) => {
     return NextResponse.redirect(new URL("/login", req.nextUrl));
   }
 
+  // 2026-07-23: the Member/Supplier/Both signup role is now exclusive, not
+  // additive — a "Supplier"-only account (isMember=false) can no longer
+  // reach user routes at all, matching isSupplier already gating supplier
+  // routes. Every pre-existing row defaults isMember=true (schema default),
+  // so this only actually excludes accounts that explicitly chose
+  // "Supplier" at signup going forward.
   const allowed =
-    isUserRoute ||
+    (isUserRoute && session.user.isMember) ||
     (isSupplierRoute && session.user.isSupplier) ||
     (isAdminRoute && session.user.isSystemAdmin);
 

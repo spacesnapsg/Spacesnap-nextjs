@@ -39,9 +39,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           name: user.name,
           email: user.email,
           isSupplier: user.isSupplier,
+          isMember: user.isMember,
           isCompanyAdmin: user.isCompanyAdmin,
           isSystemAdmin: user.isSystemAdmin,
           companyId: user.companyId ? user.companyId.toString() : null,
+          isBuyerOrgAdmin: user.isBuyerOrgAdmin,
+          buyerOrganizationId: user.buyerOrganizationId ? user.buyerOrganizationId.toString() : null,
         };
       },
     }),
@@ -53,9 +56,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         // only declares it optional for OAuth providers that may omit it.
         token.id = user.id!;
         token.isSupplier = user.isSupplier;
+        token.isMember = user.isMember;
         token.isCompanyAdmin = user.isCompanyAdmin;
         token.isSystemAdmin = user.isSystemAdmin;
         token.companyId = user.companyId;
+        token.isBuyerOrgAdmin = user.isBuyerOrgAdmin;
+        token.buyerOrganizationId = user.buyerOrganizationId;
         return token;
       }
 
@@ -66,7 +72,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       // session handler clears the session cookie instead of returning a body.
       const current = await prisma.user.findUnique({
         where: { id: token.id },
-        select: { status: true, isSupplier: true, isCompanyAdmin: true, isSystemAdmin: true, companyId: true },
+        select: {
+          status: true,
+          isSupplier: true,
+          isMember: true,
+          isCompanyAdmin: true,
+          isSystemAdmin: true,
+          companyId: true,
+          isBuyerOrgAdmin: true,
+          buyerOrganizationId: true,
+        },
       });
 
       if (!current || current.status === "suspended") {
@@ -74,18 +89,24 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       }
 
       token.isSupplier = current.isSupplier;
+      token.isMember = current.isMember;
       token.isCompanyAdmin = current.isCompanyAdmin;
       token.isSystemAdmin = current.isSystemAdmin;
       token.companyId = current.companyId ? current.companyId.toString() : null;
+      token.isBuyerOrgAdmin = current.isBuyerOrgAdmin;
+      token.buyerOrganizationId = current.buyerOrganizationId ? current.buyerOrganizationId.toString() : null;
 
       return token;
     },
     session: async ({ session, token }) => {
       session.user.id = token.id;
       session.user.isSupplier = token.isSupplier;
+      session.user.isMember = token.isMember;
       session.user.isCompanyAdmin = token.isCompanyAdmin;
       session.user.isSystemAdmin = token.isSystemAdmin;
       session.user.companyId = token.companyId;
+      session.user.isBuyerOrgAdmin = token.isBuyerOrgAdmin;
+      session.user.buyerOrganizationId = token.buyerOrganizationId;
       return session;
     },
   },

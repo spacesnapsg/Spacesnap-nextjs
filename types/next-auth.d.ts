@@ -6,18 +6,24 @@ import type { DefaultSession } from "next-auth";
 declare module "next-auth" {
   interface User {
     isSupplier: boolean;
+    isMember: boolean;
     isCompanyAdmin: boolean;
     isSystemAdmin: boolean;
     companyId: string | null;
+    isBuyerOrgAdmin: boolean;
+    buyerOrganizationId: string | null;
   }
 
   interface Session {
     user: {
       id: string;
       isSupplier: boolean;
+      isMember: boolean;
       isCompanyAdmin: boolean;
       isSystemAdmin: boolean;
       companyId: string | null;
+      isBuyerOrgAdmin: boolean;
+      buyerOrganizationId: string | null;
     } & DefaultSession["user"];
   }
 }
@@ -29,8 +35,11 @@ declare module "@auth/core/jwt" {
   interface JWT {
     id: string;
     isSupplier: boolean;
+    isMember: boolean;
     isCompanyAdmin: boolean;
     isSystemAdmin: boolean;
     companyId: string | null;
+    isBuyerOrgAdmin: boolean;
+    buyerOrganizationId: string | null;
   }
 }

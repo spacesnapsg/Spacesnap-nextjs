@@ -14,6 +14,7 @@ import {
   type AdminCertificate,
 } from "@/lib/hooks/useAdminCertificates";
 import { usePendingPromotions } from "@/lib/hooks/usePromotions";
+import { usePendingBuyerOrgPromotions } from "@/lib/hooks/useBuyerOrgPromotions";
 import { useAdminFinancials } from "@/lib/hooks/useAdminFinancials";
 import { usePendingConciergeRedemptions, useResolveRewardRedemption } from "@/lib/hooks/useAdminRewardRedemptions";
 import {
@@ -276,6 +277,7 @@ export default function AdminOverviewPage() {
   const { data: usersData } = useAdminUsers();
   const { data: pendingCertificates } = usePendingCertificates();
   const { data: pendingPromotions } = usePendingPromotions();
+  const { data: pendingOrgPromotions } = usePendingBuyerOrgPromotions();
   const { data: financials } = useAdminFinancials();
   const { data: pendingConcierge } = usePendingConciergeRedemptions();
   const { data: pendingSupplierConcierge } = usePendingSupplierConciergeRedemptions();
@@ -283,6 +285,7 @@ export default function AdminOverviewPage() {
   const totalUsers = usersData?.meta.total;
   const certCount = pendingCertificates?.length ?? 0;
   const promotionCount = pendingPromotions?.length ?? 0;
+  const orgPromotionCount = pendingOrgPromotions?.length ?? 0;
   const conciergeCount = pendingConcierge?.length ?? 0;
   const supplierConciergeCount = pendingSupplierConcierge?.length ?? 0;
 
@@ -333,6 +336,12 @@ export default function AdminOverviewPage() {
             icon={Building2}
             label="Company Admin Promotion Requests"
             count={promotionCount}
+            onReview={() => router.push("/admin-approvals")}
+          />
+          <ApprovalRow
+            icon={Building2}
+            label="Organization Admin Promotion Requests"
+            count={orgPromotionCount}
             onReview={() => router.push("/admin-approvals")}
           />
           <ApprovalRow

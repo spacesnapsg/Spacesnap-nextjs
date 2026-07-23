@@ -9,6 +9,7 @@ import { User, Boxes, Scale, type LucideIcon } from "lucide-react";
 import Card from "@/components/Card";
 import Input from "@/components/Input";
 import Button from "@/components/Button";
+import OrgSearchInput from "@/components/OrgSearchInput";
 import { getRoleHome } from "@/lib/role-home";
 
 type Role = "member" | "supplier" | "both";
@@ -16,13 +17,26 @@ type Role = "member" | "supplier" | "both";
 interface SignupFormData {
   fullName: string;
   email: string;
-  company: string;
+  buyerOrganizationName: string;
+  companyName: string;
   password: string;
   confirmPassword: string;
   role: Role | null;
   agreedToTerms: boolean;
   agreedToPrivacy: boolean;
   referralCode: string;
+}
+
+interface OrganizationResult {
+  status: "joined" | "pending";
+  name: string;
+}
+
+interface RegisterResponse {
+  organizationResults: {
+    buyerOrganization?: OrganizationResult;
+    company?: OrganizationResult;
+  };
 }
 
 interface RoleOption {
@@ -69,6 +83,9 @@ interface RegisterFields {
   email: string;
   password: string;
   referralCode?: string;
+  role?: Role;
+  buyerOrganizationName?: string;
+  companyName?: string;
 }
 
 export default function SignupPage() {
@@ -77,7 +94,8 @@ export default function SignupPage() {
   const [formData, setFormData] = useState<SignupFormData>({
     fullName: "",
     email: "",
-    company: "",
+    buyerOrganizationName: "",
+    companyName: "",
     password: "",
     confirmPassword: "",
     role: null,
@@ -86,6 +104,9 @@ export default function SignupPage() {
     referralCode: "",
   });
   const [error, setError] = useState("");
+  const [organizationResults, setOrganizationResults] = useState<
+    RegisterResponse["organizationResults"] | null
+  >(null);
 
   useEffect(() => {
     if (status === "authenticated" && session?.user) {
@@ -93,24 +114,26 @@ export default function SignupPage() {
     }
   }, [status, session, router]);
 
-  // Register only takes name/email/password, matching the old Laravel
-  // AuthController@register contract — role/company selection above isn't
-  // backed by that endpoint (it wasn't in the old app either).
+  // 2026-07-23: role/buyerOrganizationName/companyName are now real fields
+  // the register endpoint resolves (search-or-create against
+  // BuyerOrganization/Company) — previously collected here and silently
+  // dropped, see SPRINT_PLAN_NEXTJS_REWRITE.md "Sprint 7.1".
   const registerMutation = useMutation({
-    mutationFn: async (fields: RegisterFields) => {
+    mutationFn: async (fields: RegisterFields): Promise<RegisterResponse> => {
       const response = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(fields),
       });
 
+      const data = await response.json().catch(() => null);
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
         throw new Error(data?.message || "Unable to create your account. Please try again.");
       }
+      return data as RegisterResponse;
     },
-    onSuccess: () => {
-      router.push("/login");
+    onSuccess: (data) => {
+      setOrganizationResults(data.organizationResults);
     },
     onError: (err: Error) => {
       setError(err.message);
@@ -142,6 +165,10 @@ export default function SignupPage() {
       setError("Passwords do not match.");
       return;
     }
+    if ((formData.role === "supplier" || formData.role === "both") && !formData.companyName.trim()) {
+      setError("Company name is required for a supplier account.");
+      return;
+    }
 
     setError("");
     registerMutation.mutate({
@@ -149,10 +176,57 @@ export default function SignupPage() {
       email: formData.email,
       password: formData.password,
       referralCode: formData.referralCode.trim() || undefined,
+      role: formData.role ?? undefined,
+      buyerOrganizationName:
+        formData.role === "member" || formData.role === "both"
+          ? formData.buyerOrganizationName.trim() || undefined
+          : undefined,
+      companyName:
+        formData.role === "supplier" || formData.role === "both"
+          ? formData.companyName.trim() || undefined
+          : undefined,
     });
   }
 
   if (status === "authenticated") return null;
+
+  if (organizationResults) {
+    const { buyerOrganization, company } = organizationResults;
+    return (
+      <div className="min-h-screen bg-background text-body-text font-sans flex items-center justify-center px-4 py-12">
+        <Card className="w-full max-w-[480px]">
+          <div className="p-6">
+            <p className="text-center text-3xl font-extrabold text-user-teal-end">SpaceSnap</p>
+            <h1 className="text-center text-3xl font-extrabold text-white mt-4">Account created</h1>
+
+            <div className="mt-6 space-y-3">
+              {buyerOrganization && (
+                <p className="text-sm text-body-text bg-white/5 rounded p-3">
+                  {buyerOrganization.status === "joined"
+                    ? `You're in — ${buyerOrganization.name}.`
+                    : `Your request to join ${buyerOrganization.name} is pending approval from their organization admin.`}
+                </p>
+              )}
+              {company && (
+                <p className="text-sm text-body-text bg-white/5 rounded p-3">
+                  {company.status === "joined"
+                    ? `You're in — ${company.name}.`
+                    : `Your request to join ${company.name} is pending approval from their company admin.`}
+                </p>
+              )}
+              {!buyerOrganization && !company && (
+                <p className="text-sm text-muted-text">Your account is ready.</p>
+              )}
+            </div>
+
+            <Button className="w-full mt-6" onClick={() => router.push("/login")}>
+              Continue to Login
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background text-body-text font-sans flex items-center justify-center px-4 py-12">
@@ -213,13 +287,24 @@ export default function SignupPage() {
               value={formData.email}
               onChange={handleChange}
             />
-            <Input
-              name="company"
-              placeholder="Search for company or Create new"
-              className="w-full"
-              value={formData.company}
-              onChange={handleChange}
-            />
+            {(formData.role === "member" || formData.role === "both") && (
+              <OrgSearchInput
+                value={formData.buyerOrganizationName}
+                onChange={(value) => setFormData((prev) => ({ ...prev, buyerOrganizationName: value }))}
+                searchUrl="/api/buyer-organizations/search"
+                resultsKey="organizations"
+                placeholder="Organization (optional) — search or create new"
+              />
+            )}
+            {(formData.role === "supplier" || formData.role === "both") && (
+              <OrgSearchInput
+                value={formData.companyName}
+                onChange={(value) => setFormData((prev) => ({ ...prev, companyName: value }))}
+                searchUrl="/api/companies/search"
+                resultsKey="companies"
+                placeholder="Company — search or create new"
+              />
+            )}
             <Input
               type="password"
               name="password"

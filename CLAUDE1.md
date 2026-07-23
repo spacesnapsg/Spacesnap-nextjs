@@ -4808,3 +4808,313 @@ rows deleted and both items' `redeemed_count` reset to 0 afterward — dev DB
 confirmed back to its exact seeded state (Acme Coworking's `purchased=0,
 earned=0`, zero supplier reward redemptions, "Pending Supplier Concierge
 Requests" back to 0 in the live UI).
+
+## Buyer Organization Membership + Company Membership Retrofit (2026-07-23)
+
+Closed the Sprint 6.10 "User-Side Buyer Organization" design thread — raised
+2026-07-22, left as planning-only pending several product decisions. This
+session resolved every open question with the product owner, then built the
+full membership lifecycle for both `BuyerOrganization` (new) and `Company`
+(retrofitted) in one pass.
+
+### Trigger: a dead-UI finding, not a feature request
+
+While scoping the join flow, inspecting `app/signup/page.tsx` surfaced that
+the signup form's `company` text input (placeholder "Search for company or
+Create new") and its `role` selector (Member/Supplier/Both) were both
+collected in `formData` but never sent to `POST /api/auth/register` — the
+endpoint only ever accepted `name`/`email`/`password`/`referralCode`,
+matching the old Laravel contract. Confirmed by reading the register route
+directly: no `role`/`company` handling anywhere. This wasn't a "feature not
+built yet" gap — it was UI that looked functional but silently discarded
+input. Logged as its own item, "Sprint 7.1: Site-Wide UI→Backend Wiring
+Audit," in `SPRINT_PLAN_NEXTJS_REWRITE.md`, per the product owner's explicit
+request for a standing audit of this class of gap across the whole app —
+this session only fixed the one instance found, the broader audit is still
+open.
+
+### Design decisions, confirmed with the product owner this session
+
+- **`BuyerOrganization` fields**: full mirror of `Company`'s business fields
+  (name, registration number, finance contact email/person) — not the
+  minimal "just a name" option.
+- **Membership authority — the key design fork**: an org/company with an
+  existing admin is administered entirely by that admin (approve/reject
+  joins, remove members, promote members directly) with **no system-admin
+  involvement at all**. An org/company with **no admin yet** falls back to
+  SpaceSnap's system-admin queue for promotion (the existing
+  `lib/promotions.ts` flow, unchanged in that one case) — because there's no
+  one else with authority to act. This single rule replaced an earlier,
+  more complicated "split" proposal (org admin handles day-to-day, system
+  admin only for promotion) once the product owner clarified promotion
+  itself should also be admin-driven once an admin exists.
+- **Join gating, same rule applied to both sides**: search finds no match →
+  create + seat immediately (no admin exists to gate against). Search finds
+  a match with no admin → seat immediately. Search finds a match **with**
+  an admin → queue a `JoinRequest`, admin must approve.
+- **"Both" signup role**: two separate search-or-create fields (one for
+  `BuyerOrganization`, one for `Company`), not one shared field — confirmed
+  as the recommended option, since they're genuinely different entities.
+- **New company at signup goes live immediately** — no admin-approval gate
+  on company *creation* (only on *joining an administered one*), keeping
+  this session out of the still-unresolved `is_verified` pending-verification
+  question flagged since Sprint 1.
+
+### Schema (migration `20260723072753_buyer_organizations`)
+
+`BuyerOrganization` model; `JoinRequestStatus` enum
+(`pending`/`approved`/`rejected`) shared by two new mirrored models,
+`CompanyJoinRequest` and `BuyerOrganizationJoinRequest` (each:
+`requestedByUserId`, `status`, `resolvedByUserId`/`resolvedAt`). `User`
+gained `buyerOrganizationId`/`isBuyerOrgAdmin`/`buyerOrgPromotionRequested`
+— same additive-capability shape as the existing `isCompanyAdmin`, enforced
+by a new `users_buyer_org_admin_requires_org` CHECK constraint mirroring
+`users_company_admin_requires_supplier` exactly (raw SQL, hand-appended to
+the generated migration — Prisma can't express cross-column CHECK
+constraints natively, same precedent as every other constraint in this
+schema). `Transaction` gained a nullable `buyerOrganizationId` — **schema-only
+groundwork**, per the product owner's confirmed audit-trail requirement
+("who did it, and from which org's pool") — no write path sets it yet, since
+the actual pooled-spend flow (funding a booking from the shared pool at
+checkout) is still undesigned, same "schema now, write path later"
+convention as the gig tables.
+
+### `lib/buyer-organizations.ts` + `lib/company-membership.ts`
+
+Structural mirrors of each other (same convention as
+`lib/reward-catalogue.ts`/`lib/supplier-reward-catalogue.ts` elsewhere in
+this codebase): `search*ByName` (case-insensitive substring), `resolve*Membership`
+(the find-or-create-then-seat-or-queue transaction, used by both the
+register route and the post-signup self-service join route), `get*Members`,
+`remove*Member` (admin-only, guards against removing yourself or a member of
+a different org/company), `getPending*JoinRequests`/`resolve*JoinRequest`
+(admin-only approve/reject), `promote*MemberDirectly` (admin-only, new
+capability — no request/approval cycle). `lib/promotions.ts` amended:
+`requestPromotion` now throws `CompanyAlreadyHasAdminError` once a company
+has an admin (previously unconditional); new `promoteMemberDirectly` for the
+admin-driven path. `lib/buyer-organizations.ts` carries the identical
+`requestBuyerOrgPromotion`/`promoteBuyerOrgMemberDirectly` pair, plus its own
+system-admin queue functions (`getPendingBuyerOrgPromotions`/`approve`/`reject`)
+mirroring the existing company ones.
+
+### Auth/session
+
+`lib/buyer-org-auth.ts` (`requireBuyerOrgMember`/`requireBuyerOrgAdmin`) —
+direct mirror of `lib/supplier-auth.ts`. `auth.ts`'s `authorize`/`jwt`/`session`
+callbacks and `types/next-auth.d.ts` extended to carry `isBuyerOrgAdmin`/
+`buyerOrganizationId`, same shape as the existing `isCompanyAdmin`/`companyId`
+pair — including the same "re-check from DB on every session read" discipline
+that makes a suspend/promotion take effect without waiting out the JWT's
+lifetime.
+
+### Routes (14 new)
+
+Buyer org: `GET /api/buyer-organizations/search` (public, signup
+autocomplete), `GET /api/buyer-organization` (own org + role + pending-request
+status), `POST /api/buyer-organization/join` (authenticated self-service),
+`GET /api/buyer-organization/members` + `DELETE .../[id]` + `POST .../[id]/promote`,
+`GET /api/buyer-organization/join-requests` + `PATCH .../[id]`,
+`POST /api/buyer-organization/promotion-request`, `GET /api/admin/buyer-org-promotions/pending`
++ `PATCH .../[id]/approve` + `PATCH .../[id]/reject`. Company side (new
+capabilities only — `GET /api/supplier/company` already existed):
+`GET /api/companies/search` (public), `GET /api/supplier/company/members` +
+`DELETE .../[id]` + `POST .../[id]/promote`, `GET /api/supplier/company/join-requests`
++ `PATCH .../[id]`. `app/api/auth/register/route.ts` rewritten to accept
+`role`/`buyerOrganizationName`/`companyName` and resolve membership
+synchronously after the account is created (not in the same DB transaction —
+each step owns its own atomicity, same posture as booking-create vs. its own
+debit transaction elsewhere in this codebase), returning a structured
+`organizationResults` the frontend renders directly.
+
+### Frontend
+
+`components/OrgSearchInput.tsx` — debounced search-or-create autocomplete,
+shared by signup and the wallet page's join prompt; a real UX-first bug was
+caught and fixed here during `eslint .` (a `set-state-in-effect` violation
+from clearing search results synchronously in the effect body — moved inside
+the debounce's `setTimeout` callback instead). `app/signup/page.tsx`: role
+selection now conditionally renders one or two `OrgSearchInput` fields, and
+successful registration shows an inline result panel ("You're in — X" /
+"pending approval from their admin") instead of an immediate redirect to
+`/login`. `components/BuyerOrganizationCard.tsx` +
+`ManageBuyerOrganizationModal.tsx` (user Financials page,
+`app/(user)/wallet/page.tsx`) — join-or-create prompt when not in an org,
+member/admin status + a self-service "Request Organization Admin Access"
+button (only shown when the org has no admin — mirrors the supplier side's
+gating) when in one, full members/join-requests management modal for
+admins. `TeamMembersCard` (`app/(supplier)/supplier-profile/page.tsx`) — same
+capability set, inline on the page rather than a modal; the pre-existing
+"Request Promotion to Company Admin" button is now gated to only appear when
+the company has no admin, showing "Ask your admin, X, to promote you"
+otherwise. `components/AdminApprovals.tsx` gained an "Org Promotions" tab
+(mirrors the existing "Promotions" tab exactly) plus a
+`lib/hooks/useBuyerOrgPromotions.ts`; the admin dashboard's Pending Approvals
+card gained an "Organization Admin Promotion Requests" row alongside the
+existing company one.
+
+### Tests
+
+`lib/company-membership.test.ts`, `lib/promotions.test.ts` (new — no
+promotions test file existed before this session despite `lib/promotions.ts`
+being several sessions old), `lib/buyer-organizations.test.ts` — 44 new
+cases against the real dev/test Postgres DB, covering the full state machine
+on both sides: create-vs-join, adminless-immediate vs. administered-pending,
+duplicate-pending-request rejection, admin-only guards (remove/promote),
+self-removal/cross-org guards, join-request approve/reject including
+not-found/already-resolved, and the promotion gate (`CompanyAlreadyHasAdminError`/
+`BuyerOrgAlreadyHasAdminError`) on both `requestPromotion` paths. Registered
+in `package.json`'s `test` script. `npm test`: **365/365** (up from 321).
+`npx tsc --noEmit` clean, `eslint .` clean on every touched file (same 2
+pre-existing errors elsewhere, confirmed via `git stash` unrelated to this
+session), `next build` clean with all 14 new routes listed.
+
+### Live verification — real cookie-jar HTTP, both sides, full state machine
+
+Dev server was restarted (same "prisma generate alone doesn't fix an
+already-running server" gotcha this file has hit before) before testing.
+Real HTTP against the dev server/DB, no shortcuts:
+
+- **Company side**: registered a new supplier (`role: "supplier"`) with a
+  brand-new company name → created, seated immediately, not auto-admin
+  (confirmed via direct `psql`). Requested self-service promotion (allowed —
+  no admin yet) → approved via the system-admin queue
+  (`alice.admin@spacesnap.sg`). Registered a *second* supplier into the same
+  company name → now correctly returned `status: "pending"` (an admin exists
+  now) instead of seating. Logged in as the new admin: fetched the pending
+  join-request queue, approved it (member seated for real), directly
+  promoted that member to admin (no system-admin round trip), and confirmed
+  the self-removal guard correctly rejected the admin trying to remove
+  themselves (`422`, "You can't remove yourself from the company").
+- **Buyer org side**: identical sequence — signup created a new
+  `BuyerOrganization`, a second signup joined it immediately (no admin yet),
+  self-requested promotion, approved via the *new* buyer-org system-admin
+  queue, a third signup into the now-administered org correctly came back
+  `pending`, the new admin approved the queued request, directly promoted a
+  second member, and removed the third member — all matching the identical
+  state machine on the company side.
+- Confirmed the exact `GET /api/buyer-organization` response shape
+  (`organization.isAdmin`/`adminName`/`promotionRequested`) matches what
+  `BuyerOrganizationCard.tsx` actually renders, field for field.
+- Signup UI verified visually via the Browser pane (role selection reveals
+  the correct search-or-create field(s), form submission produces the
+  correct "You're in — Verify Widgets Co." success panel) before switching
+  to cookie-jar HTTP for the deeper multi-account flows — the Browser pane
+  became unreliable for session-switching mid-session (stuck on a stale
+  render after several navigations), so the remaining verification moved to
+  direct HTTP, which is strictly more rigorous anyway (it validates the
+  actual response contracts the hooks consume, not just what's on screen).
+
+All test users (`verify.*@example.com`), the test company ("Verify Widgets
+Co"), and the test organization ("Verify Buyers Org") deleted afterward —
+dev DB confirmed back to its exact seeded state via direct `psql` count
+queries.
+
+**Still open, explicitly not built this session** (per the sprint plan's own
+updated note): the actual pooled-spend write path (a booking/purchase funded
+from the org's shared pool at checkout, using the new
+`Transaction.buyerOrganizationId` FK) and the "Personal vs. Others" spend
+toggle UI that depends on it. Membership is real; shared spending is still
+schema-only groundwork.
+
+## Follow-on Review: Passport Relocation + Role Exclusivity (2026-07-23, same day)
+
+Two questions from the product owner, asked right after the Buyer
+Organization work above landed — both caught real issues, neither was
+answerable by guessing.
+
+### "Why is there a search-for-organization card? The passport page already has a Company field."
+
+Investigated before answering: the Digital Passport page's "Company" field
+(`app/(user)/passport/page.tsx`) is unrelated to what was just built. It
+displays/edits `user.companyName`, which `GET /api/me` derives from
+`user.company?.name` — the **supplier** `Company` relation, not a buyer-side
+concept — and it's a second, independent dead-UI bug: reading the whole
+"Edit Profile" flow top to bottom showed no save path at all
+(`handleToggleEdit` only toggles local `profileEdits` state; nothing calls
+an API). Typing a new company name there never persisted anything, on any
+account, ever. Reported this finding back with the distinction (broken
+supplier-company display vs. new BuyerOrganization membership flow) and
+asked how to reconcile the two surfaces.
+
+**Resolution**: remove the `BuyerOrganizationCard` from the Financials/Wallet
+page entirely and relocate it into the Passport page's profile card, in the
+literal place the broken "Company" field used to be. `profileEdits`/
+`handleProfileChange` lost their `companyName` field/case (the still-broken
+name/title editing was left alone — out of scope, a separate pre-existing
+bug, not touched). The `Building2`-icon read-only company row and its `<Input>`
+were deleted outright. `BuyerOrganizationCard`'s own two `Card` wrappers
+dropped their hardcoded `mb-6` (the Passport page's left column is a
+`flex-col gap-6`, unlike Wallet's individually-margined cards) and its header
+comment updated to explain the move and why.
+
+### "If I'm a User only, or a Supplier only, I shouldn't see the other portal button"
+
+Checked both navbars first: `UserNavbar.tsx`'s "Supplier Portal" link and
+`SupplierNavbar.tsx`'s "User Portal" link were both unconditional — no
+session check at all, confirmed by reading each component. Fixing the
+Supplier Portal side was straightforward (`isSupplier` already existed as
+the exact right signal). The User Portal side surfaced a real architecture
+question: `proxy.ts` had `isUserRoute` allowed for *every* authenticated
+account regardless of `isSupplier` — a Supplier account already had full
+`/marketplace`/`/passport`/`/wallet`/`/user` access by design (additive, not
+exclusive). Hiding the button alone would just remove a shortcut to pages
+the account could still reach by typing the URL — reported this back rather
+than silently picking an interpretation.
+
+**Resolution, confirmed by the product owner**: make it genuinely exclusive.
+"When you pick a role on signup, it should be that role — you can only see
+things that belong to that role."
+
+- New `User.isMember` field (migration `20260723082448_user_is_member`) —
+  a separate signal from `isSupplier`, since `isSupplier` alone is identical
+  for "Supplier" and "Both" and can't distinguish them. Defaults `true`, so
+  every row that predates this field (every seeded account, every account
+  created before today) keeps its current behavior unchanged — the
+  exclusivity only ever applies going forward, driven by which role a new
+  signup actually picks.
+- `lib/signup-roles.ts` (new): `parseSignupRole`/`resolveIsMember` — a small
+  pure pair, `resolveIsMember` returns `false` only for `role === "supplier"`,
+  `true` for `"member"`/`"both"`/no role selected at all (keeps legacy/
+  API-only registration — anything that doesn't send a `role` — working
+  exactly as before). `app/api/auth/register/route.ts` now sets
+  `isMember: resolveIsMember(role)` at creation time.
+- `auth.ts`/`types/next-auth.d.ts`: `isMember` threaded through
+  `authorize`/`jwt`/`session` callbacks, identical pattern to every other
+  role flag already there (including the same "re-check from DB on every
+  session read" discipline, so a role change would take effect without
+  waiting out the JWT's lifetime — though nothing in this codebase currently
+  changes `isMember` post-signup).
+- `proxy.ts`: the `allowed` check changed from `isUserRoute || ...` to
+  `(isUserRoute && session.user.isMember) || ...` — mirrors how
+  `isSupplierRoute && isSupplier` already worked, just applied symmetrically.
+  `components/RoleGuard.tsx` (the client-side companion) updated identically.
+- `UserNavbar.tsx`/`SupplierNavbar.tsx`: both pulled in `useSession()` and
+  wrapped their portal-switch link in the matching boolean check.
+
+**Tests**: `lib/signup-roles.test.ts` — 5 cases, pure functions, no DB
+needed. Registered in `npm test`. **370/370** (up from 365).
+`tsc`/`eslint`/`next build` all clean (same 2 pre-existing errors elsewhere,
+confirmed unrelated).
+
+**Verified live**, real cookie-jar HTTP, one account per role:
+
+- Registered `verify.member.only@example.com` (role: member),
+  `verify.supplier.only@example.com` (role: supplier),
+  `verify.both.roles@example.com` (role: both) — confirmed each response's
+  `isSupplier`/`isMember` pair matched exactly: `(false, true)`,
+  `(true, false)`, `(true, true)`.
+- Hit `/marketplace` and `/supplier` directly (no `-L`, reading the raw
+  status) as each: Member-only → `200` / `307` (blocked); Supplier-only →
+  `307` (blocked) / `200`; Both → `200` / `200`. Exactly the designed matrix.
+- Confirmed via direct `psql` that `alice.admin@spacesnap.sg`,
+  `ben@acmecoworking.sg`, and `ethan@example.com` (all pre-existing seeded
+  accounts) read `is_member = true` — the grandfathering held, nobody who
+  already existed lost access.
+- Visual confirmation via the Browser pane: logged in as the Member-only
+  account, the navbar correctly showed no "Supplier Portal" button, and the
+  Passport page rendered the relocated Organization card (search-or-create
+  prompt) directly below the profile card, with the old broken "Company"
+  field gone.
+
+All test accounts and companies deleted afterward — dev DB confirmed back to
+its exact seeded state.
