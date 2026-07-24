@@ -1744,6 +1744,47 @@ begin with, just silently dropped.
 
 ---
 
+## Sprint 7.12: Content for the Marketing Sub-Pages (raised 2026-07-24, not yet started)
+
+Trigger: the public landing page rebuild (2026-07-24 session) added a
+`MarketingFooter` with Platform/Solutions columns pointing at dedicated
+marketing pages (per-feature and per-audience, following the askuma.ai/
+desk-booking/-style pattern: hero headline + photo, then a detail section
+with an eyebrow badge, heading, body copy, product screenshot) — but every
+one of those routes is currently just `MarketingPageShell`, a "coming soon"
+stub with no real content. This sprint is that content build-out, one page
+at a time so each can be reviewed before moving to the next.
+
+- [ ] `/platform/marketplace` — Marketplace
+- [ ] `/platform/digital-passport` — Digital Passport
+- [ ] `/solutions/startups` — For Startups
+- [ ] `/solutions/space-providers` — For Space Providers
+- [ ] `/solutions/suppliers` — For Suppliers
+
+Blocked / not yet scoped — three more footer slots were left out of the
+2026-07-24 build because the user hadn't decided on them yet:
+- [ ] 2 more `Platform` entries — labeled "Supplier Feature (Undecided)" ×2
+  in the original request, still need names before a route can exist
+- [ ] 1 more `Solutions` entry — "For Larger companies" (undecided), noted
+  as wanting to market the regional-mobility angle specifically
+
+## Sprint 7.13: Transition/Motion Effects on the Marketing Pages (raised 2026-07-24, not yet started)
+
+Trigger: same 2026-07-24 landing page session — the homepage already has a
+few hand-built scroll/hover effects (the CTA button's ring→glow hover
+transition, the layered ellipse "lens flare" glow behind the "hardest
+part..." line). This sprint is about extending intentional transition/
+motion effects more broadly across the marketing pages (page-load reveals,
+scroll-triggered animations, nav/dropdown transitions, etc.) — scope (which
+pages, which specific effects) not yet defined, needs a follow-up
+conversation before implementation starts.
+
+- [ ] Define scope: which pages/sections get transition effects, and what
+  kind (scroll reveal, hover state, page-load fade-in, etc.)
+- [ ] Implement, page by page, once Sprint 7.12's content exists to animate
+
+---
+
 ## Notes
 
 - This plan assumes a full-stack rewrite (frontend + backend + auth), not a frontend-only swap onto the existing Laravel API.
