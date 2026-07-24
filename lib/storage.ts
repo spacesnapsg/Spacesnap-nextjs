@@ -15,29 +15,61 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 // endpoint — evidence recordings are video files, and proxying arbitrary
 // video-sized request bodies through a Route Handler is both slower and
 // more failure-prone than letting the client PUT straight to R2.
-let client: S3Client | null = null;
+//
+// Two separate R2 buckets, each with its own scoped API token — private
+// (evidence recordings) and public (broadcast/EDM assets) were originally
+// one bucket faked into two access shapes via signed-vs-unsigned URLs (see
+// the Sprint 6.12 comment below); the account now has a real bucket-level
+// split, so each side gets its own client/credentials instead of sharing one
+// token that would over-grant access to the other bucket's contents.
+let privateClient: S3Client | null = null;
+let publicClient: S3Client | null = null;
 
-function getClient(): S3Client {
-  if (client) return client;
-  const accountId = process.env.R2_ACCOUNT_ID;
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-  if (!accountId || !accessKeyId || !secretAccessKey) {
-    throw new Error(
-      "R2 storage is not configured — set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY (see .env.example)."
-    );
-  }
-  client = new S3Client({
+function buildClient(accountId: string, accessKeyId: string, secretAccessKey: string): S3Client {
+  return new S3Client({
     region: "auto",
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
     credentials: { accessKeyId, secretAccessKey },
   });
-  return client;
 }
 
-function getBucket(): string {
-  const bucket = process.env.R2_BUCKET_NAME;
-  if (!bucket) throw new Error("R2_BUCKET_NAME is not configured (see .env.example).");
+function getPrivateClient(): S3Client {
+  if (privateClient) return privateClient;
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_PRIVATE_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_PRIVATE_SECRET_ACCESS_KEY;
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error(
+      "R2 private-bucket storage is not configured — set R2_ACCOUNT_ID, R2_PRIVATE_ACCESS_KEY_ID, and R2_PRIVATE_SECRET_ACCESS_KEY (see .env.example)."
+    );
+  }
+  privateClient = buildClient(accountId, accessKeyId, secretAccessKey);
+  return privateClient;
+}
+
+function getPublicClient(): S3Client {
+  if (publicClient) return publicClient;
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_PUBLIC_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_PUBLIC_SECRET_ACCESS_KEY;
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error(
+      "R2 public-bucket storage is not configured — set R2_ACCOUNT_ID, R2_PUBLIC_ACCESS_KEY_ID, and R2_PUBLIC_SECRET_ACCESS_KEY (see .env.example)."
+    );
+  }
+  publicClient = buildClient(accountId, accessKeyId, secretAccessKey);
+  return publicClient;
+}
+
+function getPrivateBucket(): string {
+  const bucket = process.env.R2_PRIVATE_BUCKET_NAME;
+  if (!bucket) throw new Error("R2_PRIVATE_BUCKET_NAME is not configured (see .env.example).");
+  return bucket;
+}
+
+function getPublicBucket(): string {
+  const bucket = process.env.R2_PUBLIC_BUCKET_NAME;
+  if (!bucket) throw new Error("R2_PUBLIC_BUCKET_NAME is not configured (see .env.example).");
   return bucket;
 }
 
@@ -60,8 +92,8 @@ export function buildEvidenceRecordingKey(params: { certificateId: bigint; userI
 // The server never sees the file bytes.
 export async function getEvidenceUploadUrl(params: { key: string; contentType: string }): Promise<string> {
   return getSignedUrl(
-    getClient(),
-    new PutObjectCommand({ Bucket: getBucket(), Key: params.key, ContentType: params.contentType }),
+    getPrivateClient(),
+    new PutObjectCommand({ Bucket: getPrivateBucket(), Key: params.key, ContentType: params.contentType }),
     { expiresIn: UPLOAD_URL_EXPIRY_SECONDS }
   );
 }
@@ -71,7 +103,7 @@ export async function getEvidenceUploadUrl(params: { key: string; contentType: s
 // the presigned PUT must not be able to create a valid request.
 export async function evidenceRecordingExists(key: string): Promise<boolean> {
   try {
-    await getClient().send(new HeadObjectCommand({ Bucket: getBucket(), Key: key }));
+    await getPrivateClient().send(new HeadObjectCommand({ Bucket: getPrivateBucket(), Key: key }));
     return true;
   } catch {
     return false;
@@ -81,7 +113,7 @@ export async function evidenceRecordingExists(key: string): Promise<boolean> {
 // Short-lived, not a public URL — evidence recordings are kept for
 // review/audit purposes, not public display (unlike training_videos.video_url).
 export async function getEvidenceViewUrl(key: string): Promise<string> {
-  return getSignedUrl(getClient(), new GetObjectCommand({ Bucket: getBucket(), Key: key }), {
+  return getSignedUrl(getPrivateClient(), new GetObjectCommand({ Bucket: getPrivateBucket(), Key: key }), {
     expiresIn: VIEW_URL_EXPIRY_SECONDS,
   });
 }
@@ -91,6 +123,9 @@ export async function getEvidenceViewUrl(key: string): Promise<string> {
 // broadcast images (EDM popups, portal banners) need to be publicly
 // viewable indefinitely, which is a genuinely different access shape, not
 // something getEvidenceViewUrl's 15-minute signed URL should be reused for.
+// Now backed by a real separate public bucket/credential pair (see the
+// two-bucket comment above), not just a public-access flag on the private
+// bucket.
 const PUBLIC_ASSET_UPLOAD_URL_EXPIRY_SECONDS = 10 * 60; // same 10-minute PUT window as evidence
 
 // Mirrors buildEvidenceRecordingKey's shape (random unguessable segment so a
@@ -106,8 +141,8 @@ export function buildPublicAssetKey(params: { scope: "edm/admin" | "edm/supplier
 
 export async function getPublicAssetUploadUrl(params: { key: string; contentType: string }): Promise<string> {
   return getSignedUrl(
-    getClient(),
-    new PutObjectCommand({ Bucket: getBucket(), Key: params.key, ContentType: params.contentType }),
+    getPublicClient(),
+    new PutObjectCommand({ Bucket: getPublicBucket(), Key: params.key, ContentType: params.contentType }),
     { expiresIn: PUBLIC_ASSET_UPLOAD_URL_EXPIRY_SECONDS }
   );
 }
@@ -120,7 +155,7 @@ export async function getPublicAssetUploadUrl(params: { key: string; contentType
 // real uploaded asset until R2 confirms it landed.
 export async function publicAssetExists(key: string): Promise<boolean> {
   try {
-    await getClient().send(new HeadObjectCommand({ Bucket: getBucket(), Key: key }));
+    await getPublicClient().send(new HeadObjectCommand({ Bucket: getPublicBucket(), Key: key }));
     return true;
   } catch {
     return false;
