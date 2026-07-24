@@ -67,11 +67,15 @@ export function useWalletTransactions(dateRange: { from: string | null; to: stri
   });
 }
 
+// F4 (2026-07-25): a top-up now carries a Stripe `paymentMethodId` (pm_...
+// collected client-side via Stripe Elements) — the credit is only issued
+// after the card charge succeeds. `amount` is still in "credits"; the route
+// converts it to SGD before charging (see lib/wallet.ts).
 export function useTopUp() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (amount: number) =>
-      apiFetch("/api/wallet/topup", { method: "POST", body: JSON.stringify({ amount }) }),
+    mutationFn: ({ amount, paymentMethodId }: { amount: number; paymentMethodId: string }) =>
+      apiFetch("/api/wallet/topup", { method: "POST", body: JSON.stringify({ amount, paymentMethodId }) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["wallet"] });
       queryClient.invalidateQueries({ queryKey: ["wallet-transactions"] });

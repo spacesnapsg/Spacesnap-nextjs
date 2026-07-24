@@ -232,8 +232,8 @@ export default function FinancialsPage() {
           Payment Methods
         </h2>
         <p className="text-sm text-muted-text">
-          Saved-card management is coming soon. Top-ups are credits-only for now — for bookings, you can
-          already pay by card at checkout.
+          Saved-card management is coming soon. For now, enter your card each time — top-ups and bookings are
+          both charged securely by card at checkout.
         </p>
       </Card>
 

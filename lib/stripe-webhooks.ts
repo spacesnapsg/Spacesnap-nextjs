@@ -39,12 +39,18 @@ export function constructStripeWebhookEvent(payload: string, signature: string):
   }
 }
 
-// PaymentIntents in this codebase are only ever created for a booking's full
-// charge or a reschedule's modification fee (grep-confirmed: the only two
-// `stripe.paymentIntents.create` call sites are createBookingWithDebit and
-// modifyBookingWithFee, both lib/bookings.ts) — so these are the only two
-// Transaction types a `payment_intent.succeeded` event should ever match.
-const PAYMENT_INTENT_TRANSACTION_TYPES = [TransactionType.booking_payment, TransactionType.booking_modification_fee];
+// PaymentIntents in this codebase are created for a booking's full charge, a
+// reschedule's modification fee (both createBookingWithDebit / modifyBookingWithFee,
+// lib/bookings.ts), or a wallet top-up (createTopUp, lib/wallet.ts — F4,
+// 2026-07-25) — so these are the Transaction types a `payment_intent.succeeded`
+// event should ever match. `purchased_topup` is included here so a succeeded
+// top-up reconciles against its own ledger row instead of tripping the
+// "charged with no matching row" alarm below.
+const PAYMENT_INTENT_TRANSACTION_TYPES = [
+  TransactionType.booking_payment,
+  TransactionType.booking_modification_fee,
+  TransactionType.purchased_topup,
+];
 
 async function reconcilePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent): Promise<void> {
   const existing = await prisma.transaction.findFirst({
@@ -65,7 +71,7 @@ async function reconcilePaymentIntentSucceeded(paymentIntent: Stripe.PaymentInte
   // compensating-refund catch block already warns about — the customer may
   // have been charged with no corresponding booking ever recorded.
   console.error(
-    `[stripe-webhook] payment_intent.succeeded for ${paymentIntent.id} (${(paymentIntent.amount / 100).toFixed(2)} ${paymentIntent.currency.toUpperCase()}) has no matching booking_payment/booking_modification_fee Transaction row. The customer may have been charged with no corresponding booking recorded. Manual reconciliation required.`
+    `[stripe-webhook] payment_intent.succeeded for ${paymentIntent.id} (${(paymentIntent.amount / 100).toFixed(2)} ${paymentIntent.currency.toUpperCase()}) has no matching booking_payment/booking_modification_fee/purchased_topup Transaction row. The customer may have been charged with no corresponding booking or top-up recorded. Manual reconciliation required.`
   );
 }
 

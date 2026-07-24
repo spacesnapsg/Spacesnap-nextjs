@@ -36,3 +36,25 @@ export const stripe = new Proxy({} as Stripe, {
 export function toStripeCents(amount: Prisma.Decimal): number {
   return amount.mul(100).toDecimalPlaces(0).toNumber();
 }
+
+// Thrown when a Stripe charge fails outright, or a confirmed PaymentIntent
+// ends in any status other than "succeeded" — treated as a hard failure the
+// caller surfaces (routes map it to HTTP 402), not something to walk the user
+// through. Shared by every charging write path (createBookingWithDebit /
+// modifyBookingWithFee, lib/bookings.ts; createTopUp, lib/wallet.ts). Lived in
+// lib/bookings.ts originally; moved here 2026-07-25 when the wallet top-up path
+// became a second charging call site (re-exported from lib/bookings.ts so
+// existing importers there keep working).
+export class StripeChargeFailedError extends Error {
+  constructor(public readonly cause: unknown) {
+    super("Payment could not be processed.");
+  }
+}
+
+// Thrown when the Stripe refund call itself fails. Mirrors
+// StripeChargeFailedError for the inverse operation (routes map it to HTTP 502).
+export class StripeRefundFailedError extends Error {
+  constructor(public readonly cause: unknown) {
+    super("Refund could not be processed.");
+  }
+}

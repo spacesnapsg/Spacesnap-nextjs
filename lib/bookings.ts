@@ -13,7 +13,12 @@ import {
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
-import { stripe, toStripeCents } from "@/lib/stripe";
+import { stripe, toStripeCents, StripeChargeFailedError, StripeRefundFailedError } from "@/lib/stripe";
+
+// Re-exported for the several booking routes that import these from here
+// (app/api/bookings/**). The definitions moved to lib/stripe.ts 2026-07-25 when
+// lib/wallet.ts's top-up path became a second Stripe charging call site.
+export { StripeChargeFailedError, StripeRefundFailedError };
 import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
 import {
   calculateUserCancellationRefund,
@@ -36,11 +41,7 @@ export { RewardGrantNotRedeemableError };
 // this session's flow is server-side test tokens only (no Stripe Elements
 // client), so a status other than immediate success is treated as a hard
 // failure rather than something the route can walk the user through.
-export class StripeChargeFailedError extends Error {
-  constructor(public readonly cause: unknown) {
-    super("Payment could not be processed.");
-  }
-}
+// (StripeChargeFailedError now lives in lib/stripe.ts, re-exported above.)
 
 // A refundObligated BookingCredit (supplier-decline-issued) must resolve —
 // rebooked or refunded — within this window, or sweepOverdueBookingCredits
@@ -775,13 +776,7 @@ export class BookingNotDeclinableError extends Error {
   }
 }
 
-// Thrown when the Stripe refund call itself fails. Mirrors
-// StripeChargeFailedError's pattern above for the inverse operation.
-export class StripeRefundFailedError extends Error {
-  constructor(public readonly cause: unknown) {
-    super("Refund could not be processed.");
-  }
-}
+// (StripeRefundFailedError now lives in lib/stripe.ts, re-exported above.)
 
 // Supplier-initiated decline. Renamed from declineBookingWithRefund
 // (2026-07-21, product owner) — the old version refunded 100% to Stripe

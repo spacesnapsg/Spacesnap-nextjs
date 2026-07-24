@@ -4,6 +4,12 @@ import { useState } from "react";
 import Modal from "@/components/Modal";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
+import {
+  StripeElementsProvider,
+  CardEntryField,
+  useCreateCardPaymentMethod,
+  stripeConfigured,
+} from "@/components/StripeCardField";
 import { useTopUp } from "@/lib/hooks/useWallet";
 import { ApiRequestError } from "@/lib/api-client";
 
@@ -13,40 +19,59 @@ import { ApiRequestError } from "@/lib/api-client";
 // to under the old 1:1 ratio.
 const PRESET_AMOUNTS = [1000, 2500, 5000, 10000];
 
+// Presentational SGD preview only — the authoritative conversion happens
+// server-side (parseTopUpFields, lib/wallet.ts). 1 credit = S$0.10.
+function creditsToSgdDisplay(credits: number): string {
+  return (credits * 0.1).toFixed(2);
+}
+
 interface TopUpCreditsModalProps {
   open: boolean;
   onClose: () => void;
 }
 
-export default function TopUpCreditsModal({ open, onClose }: TopUpCreditsModalProps) {
+function TopUpCreditsModalContent({ onClose }: { onClose: () => void }) {
   const [selectedAmount, setSelectedAmount] = useState<number | null>(null);
   const [customAmount, setCustomAmount] = useState("");
+  const [cardError, setCardError] = useState<string | null>(null);
+  const [isCollectingCard, setIsCollectingCard] = useState(false);
   const topUp = useTopUp();
+  const createCardPaymentMethod = useCreateCardPaymentMethod();
 
   const amount = customAmount ? Number(customAmount) : selectedAmount;
   const isValidAmount = typeof amount === "number" && Number.isFinite(amount) && amount > 0;
-
-  const handleClose = () => {
-    setSelectedAmount(null);
-    setCustomAmount("");
-    topUp.reset();
-    onClose();
-  };
+  const isSubmitting = isCollectingCard || topUp.isPending;
 
   const errorMessage =
-    topUp.error instanceof ApiRequestError ? topUp.error.message : topUp.error ? "Something went wrong." : null;
+    cardError ??
+    (topUp.error instanceof ApiRequestError ? topUp.error.message : topUp.error ? "Something went wrong." : null);
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!isValidAmount || amount === null) return;
-    topUp.mutate(amount, { onSuccess: handleClose });
+    setCardError(null);
+
+    // Card details go straight from the Stripe iframe to Stripe — this app
+    // only ever sees the resulting pm_... id (same flow as BookingModal).
+    let paymentMethodId: string;
+    setIsCollectingCard(true);
+    try {
+      paymentMethodId = await createCardPaymentMethod();
+    } catch (error) {
+      setCardError(error instanceof Error ? error.message : "Your card could not be processed.");
+      return;
+    } finally {
+      setIsCollectingCard(false);
+    }
+
+    topUp.mutate({ amount, paymentMethodId }, { onSuccess: onClose });
   }
 
   return (
-    <Modal open={open} onClose={handleClose} className="w-full max-w-[480px]">
+    <Modal open onClose={onClose} className="w-full max-w-[480px]">
       <div className="flex flex-col gap-5 pr-4">
         <h3 className="font-semibold text-body-text text-lg leading-snug">Top Up Credits</h3>
         <p className="text-xs text-muted-text -mt-3">
-          Credits-only for now — no real charge is made (payments are planned for Sprint 6).
+          Your card is charged the equivalent amount (1 credit = S$0.10) and the credits are added to your wallet.
         </p>
 
         <div className="flex flex-col gap-3">
@@ -65,6 +90,7 @@ export default function TopUpCreditsModal({ open, onClose }: TopUpCreditsModalPr
               }`}
             >
               <span className="text-body-text font-medium">{credits} Credits</span>
+              <span className="text-muted-text text-sm">S${creditsToSgdDisplay(credits)}</span>
             </button>
           ))}
         </div>
@@ -81,19 +107,38 @@ export default function TopUpCreditsModal({ open, onClose }: TopUpCreditsModalPr
               setSelectedAmount(null);
             }}
           />
+          {isValidAmount && amount !== null && (
+            <p className="text-xs text-muted-text">Your card will be charged S${creditsToSgdDisplay(amount)}.</p>
+          )}
+        </div>
+
+        <div className="border-t border-border/40 pt-4">
+          <CardEntryField />
         </div>
 
         {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
 
         <Button
           type="button"
-          disabled={!isValidAmount || topUp.isPending}
+          disabled={!isValidAmount || isSubmitting || !stripeConfigured}
           onClick={handleSubmit}
-          className={`w-full ${!isValidAmount || topUp.isPending ? "opacity-50 cursor-not-allowed" : ""}`}
+          className={`w-full ${!isValidAmount || isSubmitting || !stripeConfigured ? "opacity-50 cursor-not-allowed" : ""}`}
         >
-          {topUp.isPending ? "Processing…" : "Confirm Top Up"}
+          {isSubmitting ? "Processing…" : "Confirm Top Up"}
         </Button>
       </div>
     </Modal>
+  );
+}
+
+export default function TopUpCreditsModal({ open, onClose }: TopUpCreditsModalProps) {
+  if (!open) return null;
+
+  // Content (state included) mounts fresh per open and unmounts on close —
+  // same pattern as BookingModal, so no manual reset bookkeeping is needed.
+  return (
+    <StripeElementsProvider>
+      <TopUpCreditsModalContent onClose={onClose} />
+    </StripeElementsProvider>
   );
 }
