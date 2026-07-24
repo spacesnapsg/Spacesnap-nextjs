@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Users, Building2, CalendarCheck, DollarSign, Award, Handshake } from "lucide-react";
+import { Users, Building2, CalendarCheck, DollarSign, Award, Handshake, Mail } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Modal from "@/components/Modal";
@@ -21,6 +21,7 @@ import {
   usePendingSupplierConciergeRedemptions,
   useResolveSupplierRewardRedemption,
 } from "@/lib/hooks/useAdminSupplierRewardRedemptions";
+import { usePendingMarketplaceEnquiries, useResolveMarketplaceEnquiry } from "@/lib/hooks/useAdminMarketplaceEnquiries";
 import { ApiRequestError } from "@/lib/api-client";
 
 function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof Users }) {
@@ -269,11 +270,73 @@ function SupplierConciergeReviewModal({ open, onClose }: { open: boolean; onClos
   );
 }
 
+// Membership/consultancy enquiries from components/CustomRequirementsModal.tsx
+// (2026-07-24 pre-UAT audit fix — previously fake-succeeded with no backend
+// at all). Handled entirely out-of-platform; "Mark Fulfilled" is the only
+// action — closing the modal without it just leaves the row pending, same
+// dismiss-does-nothing behavior as every other queue on this page.
+function MarketplaceEnquiryReviewModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data: enquiries } = usePendingMarketplaceEnquiries();
+  const resolve = useResolveMarketplaceEnquiry();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleFulfill(id: string) {
+    setError(null);
+    resolve.mutate(id, {
+      onError: (e) => setError(e instanceof ApiRequestError ? e.message : "Something went wrong."),
+    });
+  }
+
+  const list = enquiries ?? [];
+
+  return (
+    <Modal open={open} onClose={onClose} className="w-full max-w-[560px]">
+      <h2 className="text-xl font-semibold text-body-text mb-1">Pending Enquiries from Marketplace</h2>
+      <p className="text-sm text-muted-text mb-6">
+        Membership inquiries and consultation requests are handled out of the platform — mark each one fulfilled once
+        you&apos;ve followed up.
+      </p>
+
+      {error && <p className="text-sm text-error-red mb-4">{error}</p>}
+
+      {list.length === 0 ? (
+        <p className="text-sm text-muted-text text-center py-8">No pending enquiries.</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {list.map((enquiry) => (
+            <div key={enquiry.id} className="border border-border rounded p-4">
+              <p className="font-medium text-body-text">
+                {enquiry.type === "membership" ? "Membership Inquiry" : "Consultation Request"}
+              </p>
+              <p className="text-xs text-muted-text mt-1">
+                {enquiry.requestedBy.name} ({enquiry.requestedBy.email})
+                {enquiry.requestedBy.companyName && ` · ${enquiry.requestedBy.companyName}`}
+                {enquiry.contactEmail && ` · Contact: ${enquiry.contactEmail}`}
+              </p>
+              <p className="text-sm text-body-text mt-2">{enquiry.details}</p>
+              <div className="flex items-center gap-2 mt-3">
+                <Button
+                  disabled={resolve.isPending && resolve.variables === enquiry.id}
+                  onClick={() => handleFulfill(enquiry.id)}
+                  className="!bg-gradient-to-r !from-admin-red-start !to-admin-orange-end h-9 px-4 text-sm"
+                >
+                  Mark Fulfilled
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 export default function AdminOverviewPage() {
   const router = useRouter();
   const [certModalOpen, setCertModalOpen] = useState(false);
   const [conciergeModalOpen, setConciergeModalOpen] = useState(false);
   const [supplierConciergeModalOpen, setSupplierConciergeModalOpen] = useState(false);
+  const [marketplaceEnquiryModalOpen, setMarketplaceEnquiryModalOpen] = useState(false);
   const { data: usersData } = useAdminUsers();
   const { data: pendingCertificates } = usePendingCertificates();
   const { data: pendingPromotions } = usePendingPromotions();
@@ -281,6 +344,7 @@ export default function AdminOverviewPage() {
   const { data: financials } = useAdminFinancials();
   const { data: pendingConcierge } = usePendingConciergeRedemptions();
   const { data: pendingSupplierConcierge } = usePendingSupplierConciergeRedemptions();
+  const { data: pendingMarketplaceEnquiries } = usePendingMarketplaceEnquiries();
 
   const totalUsers = usersData?.meta.total;
   const certCount = pendingCertificates?.length ?? 0;
@@ -288,6 +352,7 @@ export default function AdminOverviewPage() {
   const orgPromotionCount = pendingOrgPromotions?.length ?? 0;
   const conciergeCount = pendingConcierge?.length ?? 0;
   const supplierConciergeCount = pendingSupplierConcierge?.length ?? 0;
+  const marketplaceEnquiryCount = pendingMarketplaceEnquiries?.length ?? 0;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -362,12 +427,19 @@ export default function AdminOverviewPage() {
             count={supplierConciergeCount}
             onReview={() => setSupplierConciergeModalOpen(true)}
           />
+          <ApprovalRow
+            icon={Mail}
+            label="Pending Enquiries from Marketplace"
+            count={marketplaceEnquiryCount}
+            onReview={() => setMarketplaceEnquiryModalOpen(true)}
+          />
         </div>
       </Card>
 
       <CertificateReviewModal open={certModalOpen} onClose={() => setCertModalOpen(false)} />
       <ConciergeReviewModal open={conciergeModalOpen} onClose={() => setConciergeModalOpen(false)} />
       <SupplierConciergeReviewModal open={supplierConciergeModalOpen} onClose={() => setSupplierConciergeModalOpen(false)} />
+      <MarketplaceEnquiryReviewModal open={marketplaceEnquiryModalOpen} onClose={() => setMarketplaceEnquiryModalOpen(false)} />
     </div>
   );
 }

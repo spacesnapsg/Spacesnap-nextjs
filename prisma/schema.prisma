@@ -1135,6 +1135,8 @@ model User {
   companyJoinRequestsResolved  CompanyJoinRequest[]           @relation("CompanyJoinRequestResolver")
   buyerOrgJoinRequestsMade     BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestRequester")
   buyerOrgJoinRequestsResolved BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestResolver")
+  marketplaceEnquiriesMade     MarketplaceEnquiry[]           @relation("MarketplaceEnquiryRequester")
+  marketplaceEnquiriesResolved MarketplaceEnquiry[]           @relation("MarketplaceEnquiryResolver")
 
   accounts Account[]
   sessions Session[]
@@ -1895,6 +1897,43 @@ model CertificateSignoffRequest {
 
   @@unique([userId, certificateId])
   @@map("certificate_signoff_requests")
+}
+
+enum MarketplaceEnquiryType {
+  membership
+  consultancy
+}
+
+enum MarketplaceEnquiryStatus {
+  pending
+  fulfilled
+}
+
+// Backs components/CustomRequirementsModal.tsx's "Submit Membership Inquiry"
+// / "Request Consultation" forms (previously fake-succeeded with zero
+// backend, flagged in the 2026-07-24 pre-UAT audit). Handled entirely
+// out-of-platform by a system admin once submitted — this row only tracks
+// whether it's still awaiting that, same "pending queue on the Admin
+// Overview page" shape as CertificateSignoffRequest/RewardRedemption's
+// concierge queue above, just with a single fulfilled outcome instead of
+// used/cancelled (there's no "it fell through" state — an admin either
+// hasn't gotten to it yet or has).
+model MarketplaceEnquiry {
+  id                BigInt                   @id @default(autoincrement())
+  type              MarketplaceEnquiryType
+  details           String
+  contactEmail      String?                  @map("contact_email")
+  requestedByUserId String                   @map("requested_by_user_id")
+  status            MarketplaceEnquiryStatus @default(pending)
+  resolvedByUserId  String?                  @map("resolved_by_user_id")
+  resolvedAt        DateTime?                @map("resolved_at")
+  createdAt         DateTime                 @default(now()) @map("created_at")
+
+  requestedBy User  @relation("MarketplaceEnquiryRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy  User? @relation("MarketplaceEnquiryResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@map("marketplace_enquiries")
 }
 
 // Real notification rows — replaces components/NotificationsPanel.tsx's

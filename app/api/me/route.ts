@@ -1,9 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { unauthorizedResponse } from "@/lib/api-errors";
+import { unauthorizedResponse, validationErrorResponse, ApiValidationError } from "@/lib/api-errors";
 import { getUserRewardTier } from "@/lib/reward-tiers";
 import { sgdToCredits } from "@/lib/credit-units";
+import { updateUserProfile } from "@/lib/user-profile";
 
 // GET: the caller's own profile. Sprint 4.5 addition — the JWT session only
 // carries role-gating fields (see types/next-auth.d.ts), not display fields
@@ -58,4 +59,30 @@ export async function GET() {
       tierUpgradeExpiresAt: rewardTier.tierUpgradeExpiresAt ? rewardTier.tierUpgradeExpiresAt.toISOString() : null,
     },
   });
+}
+
+// PATCH: update the caller's own display fields (name/title/avatarUrl) —
+// backs the Digital Passport and Supplier Profile "Edit Profile" cards,
+// both previously fake-saving with no backend at all (2026-07-24 pre-UAT
+// audit finding). See lib/user-profile.ts for the update itself.
+export async function PATCH(request: NextRequest) {
+  const session = await auth();
+  if (!session?.user) return unauthorizedResponse();
+
+  const body = await request.json().catch(() => null);
+  const name = body && typeof body === "object" ? (body as Record<string, unknown>).name : undefined;
+  const title = body && typeof body === "object" ? (body as Record<string, unknown>).title : undefined;
+  const avatarUrl = body && typeof body === "object" ? (body as Record<string, unknown>).avatarUrl : undefined;
+
+  try {
+    const user = await updateUserProfile(session.user.id, {
+      name: typeof name === "string" ? name : "",
+      title: typeof title === "string" ? title : null,
+      avatarUrl: typeof avatarUrl === "string" ? avatarUrl : null,
+    });
+    return NextResponse.json({ name: user.name, title: user.title, avatarUrl: user.avatarUrl });
+  } catch (error) {
+    if (error instanceof ApiValidationError) return validationErrorResponse(error);
+    throw error;
+  }
 }

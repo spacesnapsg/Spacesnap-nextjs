@@ -10,7 +10,7 @@ import Modal from "@/components/Modal";
 import CertificateDetailModal from "@/components/CertificateDetailModal";
 import TrainingSessionDetailModal from "@/components/TrainingSessionDetailModal";
 import BuyerOrganizationCard from "@/components/BuyerOrganizationCard";
-import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
+import { useCurrentUser, useUpdateProfile } from "@/lib/hooks/useCurrentUser";
 import { useCertificateCatalog, type Certificate } from "@/lib/hooks/useCertificates";
 import { useCredentials, isCredentialHeld } from "@/lib/hooks/useCredentials";
 import { useTrainingSessions, type TrainingSession } from "@/lib/hooks/useTrainingSessions";
@@ -400,9 +400,29 @@ export default function DigitalPassportPage() {
     reader.readAsDataURL(file);
   }
 
-  function handleToggleEdit() {
-    if (!editing) setProfileEdits(null);
-    setEditing((e) => !e);
+  const updateProfile = useUpdateProfile();
+
+  function handleStartEditing() {
+    setProfileEdits(null);
+    setEditing(true);
+  }
+
+  function handleCancelEditing() {
+    setProfileEdits(null);
+    updateProfile.reset();
+    setEditing(false);
+  }
+
+  function handleSaveProfile() {
+    updateProfile.mutate(
+      { name: profile.name, title: profile.title, avatarUrl: profile.avatarUrl },
+      {
+        onSuccess: () => {
+          setProfileEdits(null);
+          setEditing(false);
+        },
+      }
+    );
   }
 
   const earnedCertIds = useMemo(() => {
@@ -493,17 +513,29 @@ export default function DigitalPassportPage() {
               </span>
             </div>
 
-            <Button variant="ghost" className="w-full mt-4" onClick={handleToggleEdit}>
+            <Button
+              variant="ghost"
+              className="w-full mt-4"
+              onClick={editing ? handleCancelEditing : handleStartEditing}
+            >
               {editing ? "Cancel Editing" : "Edit Profile"}
             </Button>
 
             {editing && (
-              <Button
-                onClick={handleToggleEdit}
-                className="!bg-gradient-to-r !from-user-teal-start !to-user-teal-end w-full mt-3"
-              >
-                Save
-              </Button>
+              <>
+                {updateProfile.isError && (
+                  <p className="text-xs text-error-red mt-3 text-center">
+                    {updateProfile.error instanceof ApiRequestError ? updateProfile.error.message : "Something went wrong."}
+                  </p>
+                )}
+                <Button
+                  onClick={handleSaveProfile}
+                  disabled={updateProfile.isPending || !profile.name.trim()}
+                  className="!bg-gradient-to-r !from-user-teal-start !to-user-teal-end w-full mt-3"
+                >
+                  {updateProfile.isPending ? "Saving…" : "Save"}
+                </Button>
+              </>
             )}
           </Card>
 

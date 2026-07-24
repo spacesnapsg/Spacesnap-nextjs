@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
 // Sprint 6.5 — User Reward Tier. Structured (tier/rebate/progress), never a
@@ -37,5 +37,16 @@ export function useCurrentUser() {
   return useQuery({
     queryKey: ["me"],
     queryFn: () => apiFetch<CurrentUser>("/api/me"),
+  });
+}
+
+// Backs the Digital Passport and Supplier Profile "Edit Profile" cards —
+// both previously fake-saved local-only edits with no backend at all.
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; title: string | null; avatarUrl: string | null }) =>
+      apiFetch("/api/me", { method: "PATCH", body: JSON.stringify(input) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["me"] }),
   });
 }

@@ -6,7 +6,7 @@ import { Mail, Building2, Calendar, CheckCircle2, Camera, UserMinus, ShieldCheck
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
-import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
+import { useCurrentUser, useUpdateProfile } from "@/lib/hooks/useCurrentUser";
 import { useRequestPromotion } from "@/lib/hooks/usePromotions";
 import { useSupplierCompany, useUpdateSupplierCompany, type BusinessDetailsFields } from "@/lib/hooks/useSupplierCompany";
 import {
@@ -344,13 +344,35 @@ export default function SupplierProfilePage() {
     reader.readAsDataURL(file);
   }
 
-  function handleToggleEdit() {
-    if (!editing) {
-      setNameEdit(null);
-      setTitleEdit(null);
-      setAvatarEdit(null);
-    }
-    setEditing((e) => !e);
+  const updateProfile = useUpdateProfile();
+
+  function handleStartEditing() {
+    setNameEdit(null);
+    setTitleEdit(null);
+    setAvatarEdit(null);
+    setEditing(true);
+  }
+
+  function handleCancelEditing() {
+    setNameEdit(null);
+    setTitleEdit(null);
+    setAvatarEdit(null);
+    updateProfile.reset();
+    setEditing(false);
+  }
+
+  function handleSaveProfile() {
+    updateProfile.mutate(
+      { name, title, avatarUrl },
+      {
+        onSuccess: () => {
+          setNameEdit(null);
+          setTitleEdit(null);
+          setAvatarEdit(null);
+          setEditing(false);
+        },
+      }
+    );
   }
 
   if (userLoading) {
@@ -433,9 +455,30 @@ export default function SupplierProfilePage() {
                 />
               </div>
 
-              <Button variant="ghost" className="w-full mt-6" onClick={handleToggleEdit}>
+              <Button
+                variant="ghost"
+                className="w-full mt-6"
+                onClick={editing ? handleCancelEditing : handleStartEditing}
+              >
                 {editing ? "Cancel Editing" : "Edit Profile"}
               </Button>
+
+              {editing && (
+                <>
+                  {updateProfile.isError && (
+                    <p className="text-xs text-error-red mt-3 text-center">
+                      {updateProfile.error instanceof ApiRequestError ? updateProfile.error.message : "Something went wrong."}
+                    </p>
+                  )}
+                  <Button
+                    onClick={handleSaveProfile}
+                    disabled={updateProfile.isPending || !name.trim()}
+                    className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end w-full mt-3"
+                  >
+                    {updateProfile.isPending ? "Saving…" : "Save"}
+                  </Button>
+                </>
+              )}
             </div>
           </Card>
           <TeamMembersCard />

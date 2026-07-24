@@ -5,6 +5,8 @@ import { CheckCircle2 } from "lucide-react";
 import Modal from "@/components/Modal";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
+import { useSubmitMarketplaceEnquiry } from "@/lib/hooks/useMarketplaceEnquiries";
+import { ApiRequestError } from "@/lib/api-client";
 
 type RequirementType = "membership" | "consultancy";
 
@@ -34,31 +36,34 @@ const COPY: Record<
   },
 };
 
-// No backend endpoint exists for membership inquiries / consultancy requests yet —
-// this collects the request and shows a confirmation locally. TODO: wire up
-// once a MembershipInquiry/ConsultationRequest model + API route lands.
 export default function CustomRequirementsModal({ open, onClose, type }: CustomRequirementsModalProps) {
   const [details, setDetails] = useState("");
   const [contactEmail, setContactEmail] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submitEnquiry = useSubmitMarketplaceEnquiry();
   const copy = COPY[type];
 
   function handleClose() {
     setDetails("");
     setContactEmail("");
-    setSubmitted(false);
+    setError(null);
+    submitEnquiry.reset();
     onClose();
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!details.trim()) return;
-    setSubmitted(true);
+    setError(null);
+    submitEnquiry.mutate(
+      { type, details, contactEmail: contactEmail.trim() || undefined },
+      { onError: (err) => setError(err instanceof ApiRequestError ? err.message : "Something went wrong.") }
+    );
   }
 
   return (
     <Modal open={open} onClose={handleClose} className="w-full max-w-[480px]">
-      {submitted ? (
+      {submitEnquiry.isSuccess ? (
         <div className="flex flex-col items-center text-center gap-3 py-6">
           <CheckCircle2 size={40} className="text-success-green" />
           <h2 className="text-xl font-semibold text-body-text">Request Sent</h2>
@@ -73,6 +78,7 @@ export default function CustomRequirementsModal({ open, onClose, type }: CustomR
         <>
           <h2 className="text-xl font-semibold text-body-text mb-1">{copy.title}</h2>
           <p className="text-sm text-muted-text mb-6">{copy.description}</p>
+          {error && <p className="text-sm text-error-red mb-4">{error}</p>}
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
               <label className="text-xs text-muted-text">Details</label>
@@ -101,10 +107,10 @@ export default function CustomRequirementsModal({ open, onClose, type }: CustomR
               </Button>
               <Button
                 type="submit"
-                disabled={!details.trim()}
+                disabled={!details.trim() || submitEnquiry.isPending}
                 className={`flex-1 ${!details.trim() ? "opacity-50 cursor-not-allowed" : ""}`}
               >
-                {copy.submitLabel}
+                {submitEnquiry.isPending ? "Sending…" : copy.submitLabel}
               </Button>
             </div>
           </form>
