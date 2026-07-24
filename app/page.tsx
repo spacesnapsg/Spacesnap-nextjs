@@ -30,7 +30,7 @@ const BENEFITS = [
 
 export default function Home() {
   return (
-    <div className="flex flex-col min-h-screen bg-background text-body-text">
+    <div className="flex flex-col min-h-screen overflow-x-hidden bg-background text-body-text">
       <MarketingNavbar />
 
       <section className="relative flex flex-col items-center text-center px-6 pt-24 pb-20 max-w-3xl mx-auto">
@@ -140,8 +140,140 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="border-b border-user-teal-start/40 bg-card px-6 py-12 md:py-16 shadow-[0_0_50px_-10px_rgba(26,157,150,0.35)]">
-        <div className="max-w-6xl mx-auto">
+      <section className="relative bg-card px-6 py-12 md:py-16">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -top-1"
+        >
+          <div
+            className="absolute inset-x-0 -top-16 h-32 opacity-30 blur-[80px] mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to right, transparent, #34d399 50%, transparent)",
+            }}
+          />
+          <div
+            className="absolute inset-x-[15%] -top-4 h-8 opacity-20 blur-[20px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #34d399 0%, transparent 70%)",
+            }}
+          />
+          <div
+            className="absolute inset-x-0 h-4 -translate-y-1/2 opacity-80 blur-[45px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #ffffff 0%, #34d399 40%, transparent 80%)",
+            }}
+          />
+          <div
+            className="absolute inset-x-0 h-px opacity-90 mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to right, transparent, #ffffff, transparent)",
+            }}
+          />
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 -bottom-1"
+        >
+          <div
+            className="absolute inset-x-0 -bottom-16 h-32 opacity-30 blur-[80px] mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to right, transparent, #34d399 50%, transparent)",
+            }}
+          />
+          <div
+            className="absolute inset-x-[15%] -bottom-4 h-8 opacity-20 blur-[20px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #34d399 0%, transparent 70%)",
+            }}
+          />
+          <div
+            className="absolute inset-x-0 h-4 translate-y-1/2 opacity-80 blur-[45px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #ffffff 0%, #34d399 40%, transparent 80%)",
+            }}
+          />
+          <div
+            className="absolute inset-x-0 h-px opacity-90 mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to right, transparent, #ffffff, transparent)",
+            }}
+          />
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 -left-1"
+        >
+          <div
+            className="absolute inset-y-0 left-0 -translate-x-16 w-32 opacity-30 blur-[80px] mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to bottom, transparent, #34d399 50%, transparent)",
+            }}
+          />
+          <div
+            className="absolute inset-y-[15%] left-0 -translate-x-4 w-8 opacity-20 blur-[20px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #34d399 0%, transparent 70%)",
+            }}
+          />
+          <div
+            className="absolute inset-y-0 left-0 w-4 -translate-x-1/2 opacity-80 blur-[45px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #ffffff 0%, #34d399 40%, transparent 80%)",
+            }}
+          />
+          <div
+            className="absolute inset-y-0 left-0 w-px opacity-90 mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to bottom, transparent, #ffffff, transparent)",
+            }}
+          />
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 -right-1"
+        >
+          <div
+            className="absolute inset-y-0 right-0 translate-x-16 w-32 opacity-30 blur-[80px] mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to bottom, transparent, #34d399 50%, transparent)",
+            }}
+          />
+          <div
+            className="absolute inset-y-[15%] right-0 translate-x-4 w-8 opacity-20 blur-[20px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #34d399 0%, transparent 70%)",
+            }}
+          />
+          <div
+            className="absolute inset-y-0 right-0 w-4 translate-x-1/2 opacity-80 blur-[45px] mix-blend-lighten"
+            style={{
+              background:
+                "radial-gradient(ellipse at center, #ffffff 0%, #34d399 40%, transparent 80%)",
+            }}
+          />
+          <div
+            className="absolute inset-y-0 right-0 w-px opacity-90 mix-blend-lighten"
+            style={{
+              background:
+                "linear-gradient(to bottom, transparent, #ffffff, transparent)",
+            }}
+          />
+        </div>
+        <div className="relative max-w-6xl mx-auto">
           <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-user-teal-end">
             <span className="inline-block w-1 h-3.5 bg-user-teal-end" />
             Founding Offer
