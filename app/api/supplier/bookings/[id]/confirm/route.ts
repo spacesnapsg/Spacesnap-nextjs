@@ -42,7 +42,7 @@ export async function PATCH(_request: Request, { params }: { params: Promise<{ i
 
   try {
     const updated = await confirmBookingWithAudit(bookingId);
-    return NextResponse.json({ booking: serializeBooking(updated) });
+    return NextResponse.json({ booking: serializeBooking(updated, { forSupplier: true }) });
   } catch (error) {
     if (error instanceof BookingNotConfirmableError) {
       return NextResponse.json({ message: error.message }, { status: 422 });

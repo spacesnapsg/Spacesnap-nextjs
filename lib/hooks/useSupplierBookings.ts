@@ -11,8 +11,10 @@ export interface SupplierBooking {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
-  sgdAmount: number;
-  earnedCreditsApplied: number;
+  // What the supplier earns on this booking (base × (1 - commission%)). The
+  // member-paid marked-up price is deliberately NOT sent to suppliers — see
+  // serializeBooking's `forSupplier` option (lib/bookings.ts).
+  supplierNet: number;
   status: BookingStatus;
   listingName?: string;
   requiredCertificates?: { certificateId: string; certificateName: string }[];

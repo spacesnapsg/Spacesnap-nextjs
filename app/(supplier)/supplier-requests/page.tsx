@@ -159,7 +159,9 @@ function BookingRow({
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
-        <p className="text-supplier-purple-end font-bold whitespace-nowrap">{booking.sgdAmount} credits</p>
+        <p className="text-supplier-purple-end font-bold whitespace-nowrap" title="Your earnings on this booking">
+          You earn {booking.supplierNet} credits
+        </p>
         <StatusBadge status={booking.status} styles={BOOKING_STATUS_STYLES[booking.status]} />
         {booking.status === "pending" && (
           <div className="flex items-center gap-2">

@@ -24,7 +24,7 @@ import {
   payoutCadenceForSupplierTier,
 } from "@/lib/booking-payments";
 import { sgdToCredits } from "@/lib/credit-units";
-import { platformCommissionForBooking } from "@/lib/pricing";
+import { platformCommissionForBooking, supplierGrossForBase } from "@/lib/pricing";
 import { getUserRewardTier, rebatePercentForTier } from "@/lib/reward-tiers";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 import type { ActivityQuery } from "@/lib/activity";
@@ -143,7 +143,26 @@ export async function getSupplierBookingsFeed(companyId: bigint, query: Activity
   return { items, total, page: query.page, pageSize: query.pageSize };
 }
 
-export function serializeBooking(booking: Booking | BookingWithRelations | BookingWithRating) {
+// `forSupplier` (2026-07-25) switches the money fields by audience so neither
+// side sees the other's private figure — the marketplace markup is SpaceSnap's
+// and must not be exposed to suppliers, and the supplier's base must not be
+// exposed to members:
+//   - member view (default): sgdAmount (the marked-up price they paid) +
+//     earnedCreditsApplied (their own reward discount).
+//   - supplier view: supplierNet only — what the supplier earns on this
+//     booking (base × (1 - commission%), = 900 credits on a 1000 base at 10%).
+//     The member-paid price and the member's discount are omitted entirely, so
+//     a supplier can't back out the markup.
+export function serializeBooking(
+  booking: Booking | BookingWithRelations | BookingWithRating,
+  opts?: { forSupplier?: boolean }
+) {
+  const moneyFields = opts?.forSupplier
+    ? { supplierNet: sgdToCredits(Number(supplierGrossForBase(booking.baseAmount, booking.platformCommissionPercent))) }
+    : {
+        sgdAmount: sgdToCredits(Number(booking.sgdAmount)),
+        earnedCreditsApplied: sgdToCredits(Number(booking.earnedCreditsApplied)),
+      };
   return {
     id: booking.id.toString(),
     userId: booking.userId,
@@ -151,8 +170,7 @@ export function serializeBooking(booking: Booking | BookingWithRelations | Booki
     bookingType: booking.bookingType,
     startDate: booking.startDate.toISOString().slice(0, 10),
     endDate: booking.endDate.toISOString().slice(0, 10),
-    sgdAmount: sgdToCredits(Number(booking.sgdAmount)),
-    earnedCreditsApplied: sgdToCredits(Number(booking.earnedCreditsApplied)),
+    ...moneyFields,
     status: booking.status,
     isModified: booking.isModified,
     originalStartDate: booking.originalStartDate ? booking.originalStartDate.toISOString().slice(0, 10) : null,

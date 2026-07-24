@@ -39,7 +39,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   try {
     const updated = await declineBookingPendingResolution(bookingId, reason);
-    return NextResponse.json({ booking: serializeBooking(updated) });
+    return NextResponse.json({ booking: serializeBooking(updated, { forSupplier: true }) });
   } catch (error) {
     if (error instanceof BookingNotDeclinableError) {
       return NextResponse.json({ message: error.message }, { status: 422 });

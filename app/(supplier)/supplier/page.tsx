@@ -250,7 +250,7 @@ export default function SupplierAnalyticsPage() {
                     <th className="pb-3 pr-4 font-medium whitespace-nowrap">User Name</th>
                     <th className="pb-3 pr-4 font-medium whitespace-nowrap">Listing Name</th>
                     <th className="pb-3 pr-4 font-medium whitespace-nowrap">Type</th>
-                    <th className="pb-3 pr-4 font-medium whitespace-nowrap">Credits</th>
+                    <th className="pb-3 pr-4 font-medium whitespace-nowrap">You earn</th>
                     <th className="pb-3 pr-4 font-medium whitespace-nowrap">Status</th>
                     <th className="pb-3 font-medium whitespace-nowrap">Date</th>
                   </tr>
@@ -261,7 +261,7 @@ export default function SupplierAnalyticsPage() {
                       <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.userName}</td>
                       <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.listingName}</td>
                       <td className="py-3 pr-4 text-muted-text capitalize whitespace-nowrap">{booking.bookingType}</td>
-                      <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.sgdAmount} credits</td>
+                      <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.supplierNet} credits</td>
                       <td className="py-3 pr-4 whitespace-nowrap">
                         <span
                           className={`inline-block rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${STATUS_STYLES[booking.status]}`}

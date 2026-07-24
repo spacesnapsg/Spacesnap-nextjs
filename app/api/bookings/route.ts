@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
     orderBy: { createdAt: "desc" },
   });
 
-  return NextResponse.json({ bookings: bookings.map(serializeBooking) });
+  return NextResponse.json({ bookings: bookings.map((b) => serializeBooking(b)) });
 }
 
 // POST: create a booking. Mirrors old BookingController::store's shape

@@ -29,5 +29,5 @@ export async function GET(request: NextRequest) {
     orderBy: { createdAt: "desc" },
   });
 
-  return NextResponse.json({ bookings: bookings.map(serializeBooking) });
+  return NextResponse.json({ bookings: bookings.map((b) => serializeBooking(b, { forSupplier: true })) });
 }

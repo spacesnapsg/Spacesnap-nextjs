@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   const { items, total, page, pageSize } = await getSupplierBookingsFeed(auth.companyId, query);
 
   return NextResponse.json({
-    bookings: items.map(serializeBooking),
+    bookings: items.map((b) => serializeBooking(b, { forSupplier: true })),
     meta: { page, pageSize, total },
   });
 }
