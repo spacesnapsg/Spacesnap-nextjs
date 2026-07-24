@@ -90,6 +90,7 @@ describe("createCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           startDate: new Date("2027-12-01"),
           endDate: new Date("2027-12-01"),
           sgdAmount: "10.00",
+          baseAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -117,6 +118,7 @@ describe("createCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           startDate: new Date("2027-12-02"),
           endDate: new Date("2027-12-02"),
           sgdAmount: "10.00",
+          baseAmount: "10.00",
         },
       });
 
@@ -148,6 +150,7 @@ describe("createCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           startDate: new Date("2027-12-03"),
           endDate: new Date("2027-12-03"),
           sgdAmount: "10.00",
+          baseAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -192,6 +195,7 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           startDate: new Date("2027-12-04"),
           endDate: new Date("2027-12-04"),
           sgdAmount: "10.00",
+          baseAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -247,6 +251,7 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           startDate: new Date("2027-12-06"),
           endDate: new Date("2027-12-06"),
           sgdAmount: "10.00",
+          baseAmount: "10.00",
           status: "confirmed",
         },
       });
@@ -307,6 +312,7 @@ describe("checkOutCheckIn (Sprint 3.5, check_ins new schema item)", () => {
           startDate: new Date("2027-12-05"),
           endDate: new Date("2027-12-05"),
           sgdAmount: "10.00",
+          baseAmount: "10.00",
           status: "confirmed",
         },
       });

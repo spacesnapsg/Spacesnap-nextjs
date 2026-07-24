@@ -4,6 +4,7 @@ import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientPurchasedBalance } from "@/lib/credits";
 import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
 import { sgdToCredits } from "@/lib/credit-units";
+import { createConsumablePayable } from "@/lib/supplier-payables";
 
 export { RewardGrantNotRedeemableError };
 
@@ -181,6 +182,13 @@ export async function createPurchaseWithDebit(params: CreatePurchaseWithDebitPar
         relatedListingId: params.listingId,
       },
     });
+
+    // Record what the supplier is owed for this sale (7% consumables commission
+    // by default) — on the full RSP × qty (`params.cost`), not the
+    // discount-reduced charge. The sale is terminal, so this is the only
+    // payout event for it.
+    const listing = await tx.listing.findUniqueOrThrow({ where: { id: params.listingId }, select: { companyId: true } });
+    await createConsumablePayable(tx, { companyId: listing.companyId, purchaseId: purchase.id, chargedSgd: params.cost });
 
     return purchase;
   });

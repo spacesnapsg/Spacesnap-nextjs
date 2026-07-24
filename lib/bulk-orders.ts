@@ -4,6 +4,7 @@ import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientBalance } from "@/lib/credits";
 import { createHold, releaseHoldForBulkOrder, getAvailableCreditBalance, InsufficientAvailableCreditError } from "@/lib/credit-holds";
 import { sgdToCredits } from "@/lib/credit-units";
+import { createConsumablePayable } from "@/lib/supplier-payables";
 
 export const bulkOrderRequestWithRelationsArgs = {
   include: { listing: true, user: true },
@@ -302,6 +303,11 @@ export async function fulfillBulkOrderWithDebit(bulkOrderRequestId: bigint): Pro
         relatedListingId: updated.listingId,
       },
     });
+
+    // Fulfillment is terminal — record what the supplier is owed for the sale
+    // (7% consumables commission by default) on the full order value.
+    const listing = await tx.listing.findUniqueOrThrow({ where: { id: updated.listingId }, select: { companyId: true } });
+    await createConsumablePayable(tx, { companyId: listing.companyId, bulkOrderRequestId: updated.id, chargedSgd: updated.credits });
 
     return updated;
   });

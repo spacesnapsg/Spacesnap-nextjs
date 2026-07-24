@@ -481,7 +481,19 @@ enum PayoutCadence {
 model SupplierPayable {
   id               BigInt                @id @default(autoincrement())
   companyId        BigInt                @map("company_id")
-  bookingId        BigInt                @unique @map("booking_id")
+  // Exactly ONE of bookingId / purchaseId / bulkOrderRequestId is set — the
+  // sale this payout row is for. Enforced by the
+  // supplier_payables_exactly_one_source CHECK constraint (raw SQL, migration
+  // 20260724160000; Prisma can't express a cross-column CHECK). Was booking-only
+  // (bookingId NOT NULL @unique) until 2026-07-24 (financial audit F2 Part C);
+  // generalized so a consumable sale (Buy Now purchase or fulfilled bulk order)
+  // gets a 7%-commission payout row too, batched and reconciled through the
+  // exact same SupplierPayout flow as bookings. Each id stays @unique (Postgres
+  // allows many NULLs in a unique index) so a given sale maps to at most one
+  // payable. See createConsumablePayable, lib/supplier-payables.ts.
+  bookingId          BigInt? @unique @map("booking_id")
+  purchaseId         BigInt? @unique @map("purchase_id")
+  bulkOrderRequestId BigInt? @unique @map("bulk_order_request_id")
   grossAmount      Decimal               @map("gross_amount") @db.Decimal(10, 2)
   // What SpaceSnap keeps from the booking's nominal value as its platform cut
   // (sgdAmount * Booking.platformCommissionPercent, snapshotted at the same
@@ -518,9 +530,11 @@ model SupplierPayable {
   payoutId         BigInt?               @map("payout_id")
   createdAt        DateTime              @default(now()) @map("created_at")
 
-  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  booking Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  payout  SupplierPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  booking           Booking?          @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  purchase          Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  bulkOrderRequest  BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: Cascade)
+  payout            SupplierPayout?   @relation(fields: [payoutId], references: [id], onDelete: SetNull)
 
   @@map("supplier_payables")
 }
@@ -1755,8 +1769,9 @@ model BulkOrderRequest {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
-  transactions Transaction[]
-  creditHold   CreditHold?
+  transactions    Transaction[]
+  creditHold      CreditHold?
+  supplierPayable SupplierPayable?
 
   @@map("bulk_order_requests")
 }
@@ -1823,7 +1838,8 @@ model Purchase {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
-  transactions Transaction[]
+  transactions    Transaction[]
+  supplierPayable SupplierPayable?
 
   @@map("purchases")
 }

@@ -8,10 +8,11 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, ListingType, BookingType, Prisma, type Listing } from "../app/generated/prisma/client";
+import { PrismaClient, ListingType, BookingType, TransactionType, PayoutCadence, Prisma, type Listing } from "../app/generated/prisma/client";
 import { createBookingWithDebit, confirmBookingWithAudit, declineBookingPendingResolution } from "./bookings";
 import { createCheckIn, checkOutCheckIn } from "./check-ins";
 import { getSupplierPendingPayableBalance } from "./supplier-payables";
+import { createPurchaseWithDebit } from "./purchases";
 
 const TEST_PAYMENT_METHOD_ID = "pm_card_visa";
 
@@ -47,6 +48,19 @@ function createSpaceListing(companyId: bigint, priceDay: string) {
       priceDay,
       priceWeek: "60.00",
       priceMonth: "200.00",
+    },
+  });
+}
+
+function createConsumableListing(companyId: bigint, pricePerUnit: string) {
+  return prisma.listing.create({
+    data: {
+      companyId,
+      type: ListingType.consumables,
+      name: "Payable Test Consumable",
+      pricePerUnit,
+      stockQuantity: 1000,
+      packSize: "10",
     },
   });
 }
@@ -111,6 +125,63 @@ describe("createCompletedBookingPayable — markup/commission split (F2)", () =>
       assert.equal(payable.commissionAmount.add(payable.netAmount).toString(), booking.sgdAmount.toString());
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("createConsumablePayable — consumables 7% payout (F2 Part C)", () => {
+  // A Buy Now sale end to end: member pays RSP 100 (no markup on consumables);
+  // supplier is owed 93, SpaceSnap keeps 7. Proves the wiring in
+  // createPurchaseWithDebit, not just the helper.
+  test("Buy Now RSP 100 @ 7% → supplier 93 / SpaceSnap 7, flows into pending balance", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createConsumableListing(company.id, "100.00");
+      // Fund the buyer's purchasedBalance (Buy Now debits it, no Stripe).
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.purchased_topup, amount: "100.00", description: "test topup" },
+      });
+
+      const purchase = await createPurchaseWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        quantity: 1,
+        cost: new Prisma.Decimal("100.00"),
+        unitPrice: new Prisma.Decimal("100.00"),
+      });
+
+      const payable = await prisma.supplierPayable.findUniqueOrThrow({ where: { purchaseId: purchase.id } });
+      assert.equal(payable.grossAmount.toString(), "93");
+      assert.equal(payable.commissionAmount.toString(), "7");
+      assert.equal(payable.netAmount.toString(), "93");
+      assert.equal(payable.bookingId, null);
+      assert.equal(payable.bulkOrderRequestId, null);
+
+      const balance = await getSupplierPendingPayableBalance(company.id);
+      assert.equal(balance.toString(), "93");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  // The generalized table must still hold exactly one source per row.
+  test("the exactly-one-source CHECK rejects a payable with no source", async () => {
+    const company = await createCompany();
+    try {
+      await assert.rejects(() =>
+        prisma.supplierPayable.create({
+          data: {
+            companyId: company.id,
+            grossAmount: new Prisma.Decimal("1"),
+            commissionAmount: new Prisma.Decimal("0"),
+            netAmount: new Prisma.Decimal("1"),
+            payoutCadence: PayoutCadence.biweekly,
+          },
+        })
+      );
+    } finally {
+      await cleanupCompanyAndUsers(company.id, []);
     }
   });
 });

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { payoutCadenceForSupplierTier } from "@/lib/booking-payments";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 import { sgdToCredits } from "@/lib/credit-units";
-import { supplierGrossForBase } from "@/lib/pricing";
+import { supplierGrossForBase, supplierGrossForConsumable, getEffectiveCompanyPricing } from "@/lib/pricing";
 
 // Live-computed, never stored denormalized — same "SUM over the ledger"
 // principle as getCreditBalance (lib/credits.ts). A company's pending
@@ -50,6 +50,42 @@ export async function createCompletedBookingPayable(tx: Prisma.TransactionClient
     data: {
       companyId: booking.listing.companyId,
       bookingId: booking.id,
+      grossAmount,
+      commissionAmount,
+      penaltyDeduction: new Prisma.Decimal(0),
+      netAmount: grossAmount,
+      payoutCadence: payoutCadenceForSupplierTier(tier),
+    },
+  });
+}
+
+// Written when a consumable sale settles — a completed Buy Now purchase
+// (createPurchaseWithDebit) or a fulfilled bulk order (fulfillBulkOrderWithDebit),
+// both terminal states with no cancellation/reversal afterward (unlike a
+// booking), so there is never a decline-penalty or zero-effect variant here.
+// The member pays the RSP (no markup on consumables); the supplier keeps
+// (100 - consumables commission)% of it, SpaceSnap the rest. Snapshots the
+// effective consumables commission at settlement time, same discipline as the
+// booking path. `chargedSgd` is the full sale amount (RSP × qty) — a
+// reward-discount the buyer redeemed is SpaceSnap-funded and does not reduce
+// the supplier's share, exactly as with bookings (see Booking.baseAmount).
+export async function createConsumablePayable(
+  tx: Prisma.TransactionClient,
+  params: { companyId: bigint; chargedSgd: Prisma.Decimal } & (
+    | { purchaseId: bigint; bulkOrderRequestId?: undefined }
+    | { bulkOrderRequestId: bigint; purchaseId?: undefined }
+  )
+): Promise<void> {
+  const pricing = await getEffectiveCompanyPricing(params.companyId, tx);
+  const grossAmount = supplierGrossForConsumable(params.chargedSgd, pricing.consumablesCommissionPercent);
+  const commissionAmount = params.chargedSgd.sub(grossAmount).toDecimalPlaces(2);
+  const { tier } = await getCompanySupplierTier(params.companyId, tx);
+
+  await tx.supplierPayable.create({
+    data: {
+      companyId: params.companyId,
+      purchaseId: params.purchaseId,
+      bulkOrderRequestId: params.bulkOrderRequestId,
       grossAmount,
       commissionAmount,
       penaltyDeduction: new Prisma.Decimal(0),
