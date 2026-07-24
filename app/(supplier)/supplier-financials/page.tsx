@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { Trophy, Wallet, Gift, Landmark } from "lucide-react";
+import { Trophy, Wallet, Gift, Landmark, ExternalLink } from "lucide-react";
 import Card from "@/components/Card";
 import Pagination from "@/components/Pagination";
 import DateRangePicker from "@/components/DateRangePicker";
@@ -12,7 +12,12 @@ import CompanyTopUpModal from "@/components/CompanyTopUpModal";
 import { useSupplierCompany, type SupplierTier } from "@/lib/hooks/useSupplierCompany";
 import { useCurrentUser } from "@/lib/hooks/useCurrentUser";
 import { useCompanyTransactions } from "@/lib/hooks/useCompanyTransactions";
+import { useSupplierPayouts, type SupplierPayoutEntry } from "@/lib/hooks/useSupplierPayouts";
 import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 const TIER_LABELS: Record<SupplierTier, string> = {
   free: "Free",
@@ -184,6 +189,81 @@ function CreditMovementCard() {
   );
 }
 
+function PayoutRow({ payout }: { payout: SupplierPayoutEntry }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-3">
+      <div>
+        <p className="text-sm text-body-text">Supplier Payout</p>
+        <p className="text-xs text-muted-text mt-0.5">
+          {formatDate(payout.periodStart)} – {formatDate(payout.periodEnd)}
+        </p>
+      </div>
+      <div className="text-right">
+        <p className="text-sm font-medium text-body-text whitespace-nowrap">{payout.totalAmount} Credits</p>
+        {payout.status === "paid" ? (
+          <>
+            <p className="text-xs text-muted-text mt-0.5">Paid {payout.paidAt ? formatDate(payout.paidAt) : ""}</p>
+            {payout.xeroRemittanceUrl && (
+              <a
+                href={payout.xeroRemittanceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-supplier-purple-end hover:underline inline-flex items-center gap-1 mt-0.5"
+              >
+                Remittance Advice <ExternalLink size={11} />
+              </a>
+            )}
+          </>
+        ) : payout.xeroBillUrl ? (
+          <a
+            href={payout.xeroBillUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-supplier-purple-end hover:underline inline-flex items-center gap-1 mt-0.5"
+          >
+            View Bill <ExternalLink size={11} />
+          </a>
+        ) : (
+          <p className="text-xs text-muted-text mt-0.5">Bill pending</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Reads the SupplierPayable ledger's closed batches (SupplierPayout) — see
+// lib/supplier-payouts.ts. No pagination: bounded by nature (one row per
+// payout cadence, ~26/year at biweekly).
+function SupplierPayoutsCard() {
+  const { data: payouts, isLoading } = useSupplierPayouts();
+
+  return (
+    <Card className="mb-8">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold text-body-text flex items-center gap-2">
+          <Landmark size={18} className="text-supplier-purple-end" />
+          Accounts Receivable, Receipts &amp; Invoices
+        </h2>
+        <p className="text-xs text-muted-text mt-0.5">
+          Each closed payout period, its total, and a self-service link to the Bill or Remittance Advice in Xero.
+        </p>
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-text py-4">Loading…</p>
+      ) : !payouts || payouts.length === 0 ? (
+        <p className="text-sm text-muted-text py-4">No payouts yet — the next period closes on your usual cadence.</p>
+      ) : (
+        <div className="divide-y divide-border/40">
+          {payouts.map((payout) => (
+            <PayoutRow key={payout.id} payout={payout} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function SupplierFinancialsPage() {
   const [rewardsOpen, setRewardsOpen] = useState(false);
   const [topUpOpen, setTopUpOpen] = useState(false);
@@ -243,17 +323,12 @@ export default function SupplierFinancialsPage() {
         </div>
       </div>
 
-      {session?.user?.isCompanyAdmin && <CreditMovementCard />}
-
-      <Card>
-        <h3 className="flex items-center gap-2 text-base font-semibold text-body-text mb-2">
-          <Landmark size={18} className="text-supplier-purple-end" />
-          Accounts Receivable, Receipts &amp; Invoices
-        </h3>
-        <p className="text-sm text-muted-text">
-          Coming soon — invoice and receipt management will appear here in a future release.
-        </p>
-      </Card>
+      {session?.user?.isCompanyAdmin && (
+        <>
+          <CreditMovementCard />
+          <SupplierPayoutsCard />
+        </>
+      )}
 
       <SupplierRewardsCatalogueModal
         open={rewardsOpen}

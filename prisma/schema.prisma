@@ -444,9 +444,12 @@ model BookingCredit {
 // penalties exceed pending earnings.
 // Renamed 2026-07-23 from "invoiced" to "scheduled" — this ledger tracks
 // what SpaceSnap owes a supplier (a payout SpaceSnap issues), not something
-// the supplier invoices SpaceSnap for; "invoiced" had it backwards. Not yet
-// set by any real code path (no payout-run job exists yet — see the open
-// Sprint 6 Invoice/Receipt gap), same as before the rename.
+// the supplier invoices SpaceSnap for; "invoiced" had it backwards.
+// scheduled/paid are now set by the SupplierPayout batch flow (2026-07-24,
+// closing the Sprint 6 Invoice/Receipt gap) — createSupplierPayout flips
+// pending -> scheduled when a row is swept into a batch, markSupplierPayoutPaid
+// flips scheduled -> paid when that batch's payout is confirmed
+// (lib/supplier-payouts.ts).
 enum SupplierPayableStatus {
   pending
   scheduled
@@ -484,12 +487,61 @@ model SupplierPayable {
   netAmount        Decimal               @map("net_amount") @db.Decimal(10, 2)
   status           SupplierPayableStatus @default(pending)
   payoutCadence    PayoutCadence         @map("payout_cadence")
+  // Set once this row is swept into a SupplierPayout batch (status flips
+  // pending -> scheduled at the same time, see createSupplierPayout,
+  // lib/supplier-payouts.ts). Null for every row still awaiting its first
+  // payout cycle.
+  payoutId         BigInt?               @map("payout_id")
   createdAt        DateTime              @default(now()) @map("created_at")
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  booking Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  payout  SupplierPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
 
   @@map("supplier_payables")
+}
+
+// A closed payout batch for one company's biweekly (or monthly/weekly,
+// per PayoutCadence) cycle — this is the actual "Invoice/Receipt gap" this
+// file's other comments have been pointing at since Sprint 6. No live Xero
+// API connection exists yet (confirmed 2026-07-24 — no Xero credentials
+// registered), so this is admin-managed: a system admin closes a period for
+// a company (sweeping its pending SupplierPayable rows into one row here,
+// see createSupplierPayout below) once Xero has produced the accounts-
+// payable Bill for that total, then pastes the Xero Bill URL on; once the
+// transfer clears, the admin flips status to paid and pastes the Xero
+// Remittance Advice URL. Real Xero API sync (auto-create the Bill, webhook
+// for payment confirmation) is a clean follow-up once a Xero Developer app
+// exists — this model's shape doesn't need to change for that, only how
+// xeroBillUrl/xeroRemittanceUrl/status get set.
+enum SupplierPayoutStatus {
+  billed
+  paid
+
+  @@map("supplier_payout_status")
+}
+
+model SupplierPayout {
+  id                BigInt               @id @default(autoincrement())
+  companyId         BigInt               @map("company_id")
+  periodStart       DateTime             @map("period_start") @db.Date
+  periodEnd         DateTime             @map("period_end") @db.Date
+  // Snapshot of the summed netAmount across every SupplierPayable swept into
+  // this batch at creation time — deliberately not re-derived live, so a
+  // later booking landing in the same date range never reshuffles a batch
+  // that's already been billed (same "snapshot, don't let it drift"
+  // discipline as SupplierPayable.payoutCadence).
+  totalAmount       Decimal              @map("total_amount") @db.Decimal(10, 2)
+  status            SupplierPayoutStatus @default(billed)
+  xeroBillUrl       String?              @map("xero_bill_url")
+  xeroRemittanceUrl String?              @map("xero_remittance_url")
+  paidAt            DateTime?            @map("paid_at")
+  createdAt         DateTime             @default(now()) @map("created_at")
+
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  payables SupplierPayable[]
+
+  @@map("supplier_payouts")
 }
 
 // A per-COMPANY credit ledger, distinct from the per-USER purchased/earned
@@ -953,6 +1005,7 @@ model Company {
   trainingVideos            TrainingVideo[]
   trainingSessions          TrainingSession[]
   supplierPayables          SupplierPayable[]
+  supplierPayouts           SupplierPayout[]
   companyTransactions       CompanyTransaction[]
   supplierRewardRedemptions SupplierRewardRedemption[]
   joinRequests              CompanyJoinRequest[]
