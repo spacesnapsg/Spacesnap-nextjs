@@ -96,20 +96,10 @@ export default function Home() {
           </h2>
           <p className="mt-6 text-muted-text">
             We&apos;re building SpaceSnap in Singapore — credential-gated
-            access to shared lab and food-tech spaces, so members skip the
-            capex and operators skip the liability risk.
+            access to regulated spaces, so members skip the
+            capex, reduce their opex and operators skip the liability risk plus increase utilization rate of their offerings.
           </p>
-          <p className="mt-4 text-muted-text">
-            We&apos;re early — currently building out our first pilot
-            partnerships. Questions? Reach us at{" "}
-            <a
-              href="mailto:spacesnapsg@gmail.com"
-              className="text-user-teal-end underline"
-            >
-              spacesnapsg@gmail.com
-            </a>
-            .
-          </p>
+          
         </div>
       </section>
 
