@@ -4,6 +4,13 @@
 // only happens at fulfillment (fulfillBulkOrderWithDebit, lib/bulk-orders.ts).
 // Hits the real dev Postgres DB through Prisma (no mocking), same convention
 // as lib/bulk-orders.test.ts.
+//
+// 2026-07-25: the product owner made bulk orders OFF-PLATFORM by default (no
+// credits move, no SpaceSnap cut — supplier settles the RSP directly). The
+// entire credit-hold subsystem only exists for the now-SHELVED on-platform
+// settlement path (see BULK_ORDER_ON_PLATFORM_SETTLEMENT in lib/bulk-orders.ts).
+// This whole file forces that flag on so the shelved machinery stays under test
+// and can be safely reactivated (see the flag override at the top of the body).
 import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -19,6 +26,11 @@ import {
   requestBulkOrderCancellation,
   approveBulkOrderCancellation,
 } from "./bulk-orders";
+
+// Force the shelved on-platform bulk-order settlement path on for this file —
+// the flag is read lazily at call time (bulkOrderOnPlatformSettlementEnabled),
+// so setting it here, before any test runs, is sufficient. See the file header.
+process.env.BULK_ORDER_ON_PLATFORM_SETTLEMENT = "true";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });

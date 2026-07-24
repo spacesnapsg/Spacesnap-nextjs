@@ -70,7 +70,7 @@ export default function RequestPurchaseModal({
           <p className="text-sm text-muted-text">
             {isQuick
               ? `You bought ${effectiveQuantity} unit${effectiveQuantity === 1 ? "" : "s"} of ${listing.name}. ${cost} credits were charged.`
-              : `Your request for ${listing.name} is pending approval. ${cost} credits will be charged once the supplier fulfills it.`}
+              : `Your request for ${listing.name} has been sent to the supplier. They'll follow up to arrange the order directly — no credits are charged on the platform.`}
           </p>
           <Button type="button" className="w-full mt-2" onClick={handleClose}>
             Done
@@ -122,7 +122,11 @@ export default function RequestPurchaseModal({
                   <Plus size={14} />
                 </button>
               </div>
-              <p className="text-body-text font-medium mt-2">{cost} credits</p>
+              <p className="text-muted-text text-xs mt-2">Estimated value</p>
+              <p className="text-body-text font-medium">{cost} credits</p>
+              <p className="text-muted-text text-xs mt-1">
+                Indicative only — the supplier will confirm final pricing with you directly.
+              </p>
             </div>
           )}
 

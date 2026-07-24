@@ -10,10 +10,12 @@ import {
 } from "@/lib/bulk-orders";
 import { InsufficientCreditBalanceError } from "@/lib/credits";
 
-// This is the only bulk-order transition that moves credits — mirrors old
-// SupplierBulkOrderController::update's `fulfilled` branch. See
-// fulfillBulkOrderWithDebit (lib/bulk-orders.ts) for the balance check +
-// debit Transaction.
+// Off-platform (current strategy) fulfillment is a pure status transition —
+// no credits move (the supplier settled the RSP with the buyer directly). Only
+// under the shelved on-platform settlement flag does this move credits (balance
+// check + debit Transaction + 7% payable) — see fulfillBulkOrderWithDebit
+// (lib/bulk-orders.ts). The InsufficientCreditBalanceError branch below is inert
+// while off-platform (it's never thrown) and covers the shelved path.
 export async function PATCH(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSupplier();
   if ("error" in auth) return auth.error;

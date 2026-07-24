@@ -19,8 +19,17 @@
 // about), so every confirmBulkOrder call here passes `{ override: true }`
 // to keep testing the status/ownership rules these tests actually cover,
 // not the credit check.
+//
+// 2026-07-25: bulk orders are now OFF-PLATFORM by default (product owner) —
+// no balance check, no wallet debit, no SpaceSnap commission at fulfillment;
+// the supplier settles the RSP with the buyer directly. This file's default
+// process (flag unset → off) asserts that behavior. The old on-platform
+// credit-settled path (2026-07-20 hold/debit + F2 Part C 7% payable) is
+// SHELVED, not deleted, and is still covered by the "shelved on-platform
+// settlement" describe below, which forces BULK_ORDER_ON_PLATFORM_SETTLEMENT
+// on around its tests and restores it after.
 import "dotenv/config";
-import { test, describe } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, TransactionType } from "../app/generated/prisma/client";
@@ -138,7 +147,7 @@ describe("createBulkOrder", () => {
 });
 
 describe("confirmBulkOrder", () => {
-  test("confirms a pending request, stores the estimated delivery date, and writes no Transaction", async () => {
+  test("off-platform: confirms a pending request, stores the delivery date, and places no hold or Transaction", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -150,12 +159,16 @@ describe("confirmBulkOrder", () => {
         cost: listing.pricePerUnit!.mul(2),
       });
 
-      const updated = await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE, { override: true });
+      // No override needed off-platform — there's no available-credit gate.
+      const updated = await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
       assert.equal(updated.status, "confirmed");
       assert.equal(updated.estimatedDeliveryDate?.toISOString(), SAMPLE_DELIVERY_DATE.toISOString());
 
       const transactions = await prisma.transaction.findMany({ where: { bulkOrderRequestId: bulkOrderRequest.id } });
       assert.equal(transactions.length, 0);
+
+      const holds = await prisma.creditHold.findMany({ where: { bulkOrderRequestId: bulkOrderRequest.id } });
+      assert.equal(holds.length, 0, "off-platform confirm must not reserve credit");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -266,7 +279,109 @@ describe("declineBulkOrder", () => {
   });
 });
 
-describe("fulfillBulkOrderWithDebit", () => {
+// Off-platform (current strategy, flag unset → off): fulfillment is a pure
+// status transition. No balance check, no wallet debit, no SupplierPayable —
+// the supplier settled the RSP with the buyer directly.
+describe("fulfillBulkOrderWithDebit — off-platform (current strategy)", () => {
+  test("fulfills even a zero-credit requester with no debit and no payable", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createConsumablesListing(company.id); // pricePerUnit 18.50
+      const bulkOrderRequest = await createBulkOrder({
+        userId: user.id,
+        listingId: listing.id,
+        quantity: 5,
+        cost: listing.pricePerUnit!.mul(5), // 92.50
+      });
+
+      const updated = await fulfillBulkOrderWithDebit(bulkOrderRequest.id);
+      assert.equal(updated.status, "fulfilled");
+
+      // Balance untouched (stays zero), no debit Transaction written.
+      const balanceAfter = await getCreditBalance(user.id);
+      assert.equal(balanceAfter.toString(), "0");
+      const transactions = await prisma.transaction.findMany({ where: { bulkOrderRequestId: bulkOrderRequest.id } });
+      assert.equal(transactions.length, 0);
+
+      // No SpaceSnap commission payable is recorded off-platform.
+      const payables = await prisma.supplierPayable.findMany({ where: { bulkOrderRequestId: bulkOrderRequest.id } });
+      assert.equal(payables.length, 0, "off-platform fulfillment must not create a SupplierPayable");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("a confirmed request can be fulfilled directly, leaving the buyer's balance untouched", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createConsumablesListing(company.id); // pricePerUnit 18.50
+      const cost = listing.pricePerUnit!.mul(3); // 55.50
+      const bulkOrderRequest = await createBulkOrder({ userId: user.id, listingId: listing.id, quantity: 3, cost });
+      await confirmBulkOrder(bulkOrderRequest.id, SAMPLE_DELIVERY_DATE);
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.topup, amount: "100.00" },
+      });
+
+      const updated = await fulfillBulkOrderWithDebit(bulkOrderRequest.id);
+      assert.equal(updated.status, "fulfilled");
+
+      // The top-up stays fully intact — fulfillment did not debit it.
+      const balanceAfter = await getCreditBalance(user.id);
+      assert.equal(balanceAfter.toString(), "100");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("fulfilling an already-fulfilled request rejects cleanly", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createConsumablesListing(company.id);
+      const bulkOrderRequest = await createBulkOrder({ userId: user.id, listingId: listing.id, quantity: 1, cost: listing.pricePerUnit! });
+
+      await fulfillBulkOrderWithDebit(bulkOrderRequest.id);
+      await assert.rejects(() => fulfillBulkOrderWithDebit(bulkOrderRequest.id), BulkOrderNotFulfillableError);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("fulfilling a cancelled request rejects cleanly", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createConsumablesListing(company.id);
+      const bulkOrderRequest = await createBulkOrder({
+        userId: user.id,
+        listingId: listing.id,
+        quantity: 1,
+        cost: listing.pricePerUnit!,
+      });
+      await declineBulkOrder(bulkOrderRequest.id);
+
+      await assert.rejects(() => fulfillBulkOrderWithDebit(bulkOrderRequest.id), BulkOrderNotFulfillableError);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// SHELVED on-platform settlement (flag forced on): the 2026-07-20 hold/debit +
+// F2 Part C 7% consumables payout path. Kept under test so it can be safely
+// reactivated if the Just-In-Time strategy changes (see the flag override).
+describe("fulfillBulkOrderWithDebit — shelved on-platform settlement (flag on)", () => {
+  const prevFlag = process.env.BULK_ORDER_ON_PLATFORM_SETTLEMENT;
+  before(() => {
+    process.env.BULK_ORDER_ON_PLATFORM_SETTLEMENT = "true";
+  });
+  after(() => {
+    if (prevFlag === undefined) delete process.env.BULK_ORDER_ON_PLATFORM_SETTLEMENT;
+    else process.env.BULK_ORDER_ON_PLATFORM_SETTLEMENT = prevFlag;
+  });
+
   test("rejects with InsufficientCreditBalanceError when the requester has no credits, and writes nothing", async () => {
     const company = await createCompany();
     const user = await createUser();
@@ -311,7 +426,7 @@ describe("fulfillBulkOrderWithDebit", () => {
     }
   });
 
-  test("succeeds when balance exactly matches cost: balance decremented to zero, status fulfilled, one debit Transaction row of type purchase", async () => {
+  test("succeeds when balance exactly matches cost: debits to zero, status fulfilled, one purchase Transaction, one 7% payable", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -333,12 +448,18 @@ describe("fulfillBulkOrderWithDebit", () => {
       assert.equal(transactions[0].type, TransactionType.purchase);
       assert.equal(transactions[0].amount.toString(), "-74");
       assert.equal(transactions[0].userId, user.id);
+
+      // F2 Part C: a 7% consumables payable is recorded (supplier net 93%).
+      const payables = await prisma.supplierPayable.findMany({ where: { bulkOrderRequestId: bulkOrderRequest.id } });
+      assert.equal(payables.length, 1);
+      assert.equal(payables[0].netAmount.toString(), "68.82"); // 74.00 * 0.93
+      assert.equal(payables[0].commissionAmount?.toString(), "5.18"); // 74.00 * 0.07
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
   });
 
-  test("a confirmed request can be fulfilled directly", async () => {
+  test("a confirmed request can be fulfilled directly, balance decremented", async () => {
     const company = await createCompany();
     const user = await createUser();
     try {
@@ -376,25 +497,6 @@ describe("fulfillBulkOrderWithDebit", () => {
 
       const transactions = await prisma.transaction.findMany({ where: { bulkOrderRequestId: bulkOrderRequest.id } });
       assert.equal(transactions.length, 1);
-    } finally {
-      await cleanupCompanyAndUsers(company.id, [user.id]);
-    }
-  });
-
-  test("fulfilling a cancelled request rejects cleanly", async () => {
-    const company = await createCompany();
-    const user = await createUser();
-    try {
-      const listing = await createConsumablesListing(company.id);
-      const bulkOrderRequest = await createBulkOrder({
-        userId: user.id,
-        listingId: listing.id,
-        quantity: 1,
-        cost: listing.pricePerUnit!,
-      });
-      await declineBulkOrder(bulkOrderRequest.id);
-
-      await assert.rejects(() => fulfillBulkOrderWithDebit(bulkOrderRequest.id), BulkOrderNotFulfillableError);
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
