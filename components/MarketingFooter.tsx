@@ -32,7 +32,7 @@ const SOLUTIONS_LINKS = [
 export default function MarketingFooter() {
   return (
     <footer className="mt-auto border-t border-border px-6 py-16">
-      <div className="max-w-6xl mx-auto grid gap-12 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="max-w-7xl mx-auto grid gap-12 sm:grid-cols-2 lg:grid-cols-[1.3fr_1fr_1fr_1fr]">
         <div className="lg:col-span-1">
           <Image
             src="/logos/spacesnap-wordmark-transparent.png"
@@ -108,10 +108,6 @@ export default function MarketingFooter() {
           </div>
         </div>
       </div>
-
-      <p className="max-w-6xl mx-auto mt-12 pt-8 border-t border-border text-xs text-hint-text">
-        Digital Infrastructure for the shared space economy
-      </p>
     </footer>
   );
 }

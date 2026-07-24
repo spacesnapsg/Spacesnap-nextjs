@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Home as HomeIcon, Zap, CheckCircle } from "lucide-react";
 import MarketingNavbar from "@/components/MarketingNavbar";
@@ -88,7 +89,7 @@ export default function Home() {
         </p>
       </section>
 
-      <section className="px-6 py-20 border-t border-border">
+      <section className="px-6 py-20">
         <div className="max-w-2xl mx-auto text-center">
           <h2 className="text-3xl font-medium text-white">
             What is SpaceSnap?
@@ -139,8 +140,8 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="px-6 py-20 border-t border-border">
-        <div className="max-w-6xl mx-auto rounded-card border border-user-teal-start/40 bg-card p-8 md:p-12 shadow-[0_0_50px_-10px_rgba(26,157,150,0.35)]">
+      <section className="border-b border-user-teal-start/40 bg-card px-6 py-12 md:py-16 shadow-[0_0_50px_-10px_rgba(26,157,150,0.35)]">
+        <div className="max-w-6xl mx-auto">
           <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-user-teal-end">
             <span className="inline-block w-1 h-3.5 bg-user-teal-end" />
             Founding Offer
@@ -157,16 +158,28 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="px-6 py-24 border-t border-border text-center">
-        <h2 className="text-3xl font-medium text-white">
-          Skip the friction, get in before the launch.
-        </h2>
-        <p className="mt-4 text-muted-text max-w-md mx-auto">
-          Have a friend? Refer them too — work on a project together.
-        </p>
-        <Link href="/signup" className={`inline-flex mt-8 ${CTA_CLASSES}`}>
-          Claim Founding Access
-        </Link>
+      <section className="px-6 py-24">
+        <div className="max-w-6xl mx-auto grid md:grid-cols-2 gap-10 items-center">
+          <div className="relative h-64 md:h-80 rounded-card overflow-hidden">
+            <Image
+              src="/green-lab.jpg.webp"
+              alt="Shared lab space"
+              fill
+              className="object-cover"
+            />
+          </div>
+          <div className="text-center md:text-left flex flex-col items-center md:items-start">
+            <h2 className="text-3xl font-medium text-white">
+              Skip the friction, get in before the launch.
+            </h2>
+            <p className="mt-4 text-muted-text max-w-md">
+              Have a friend? Refer them too — work on a project together.
+            </p>
+            <Link href="/signup" className={`inline-flex mt-8 ${CTA_CLASSES}`}>
+              Claim Founding Access
+            </Link>
+          </div>
+        </div>
       </section>
 
       <MarketingFooter />
