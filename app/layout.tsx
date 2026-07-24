@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SpaceSnap — Digital Infrastructure for Shared Spaces",
+  title: "SpaceSnap",
   description:
     "Credential-gated, on-demand access to professional spaces and high-value equipment. No capital outlay, no landlord contracts — just the access you need to test what's next.",
 };
