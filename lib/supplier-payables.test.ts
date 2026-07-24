@@ -11,7 +11,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, BookingType, TransactionType, PayoutCadence, Prisma, type Listing } from "../app/generated/prisma/client";
 import { createBookingWithDebit, confirmBookingWithAudit, declineBookingPendingResolution } from "./bookings";
 import { createCheckIn, checkOutCheckIn } from "./check-ins";
-import { getSupplierPendingPayableBalance } from "./supplier-payables";
+import { getSupplierPendingPayableBalance, getPayableReconciliation } from "./supplier-payables";
 import { createPurchaseWithDebit } from "./purchases";
 
 const TEST_PAYMENT_METHOD_ID = "pm_card_visa";
@@ -123,6 +123,41 @@ describe("createCompletedBookingPayable — markup/commission split (F2)", () =>
       assert.equal(payable.netAmount.toString(), "90");
       // Reconciliation identity: member paid (150) = SpaceSnap (60) + supplier (90).
       assert.equal(payable.commissionAmount.add(payable.netAmount).toString(), booking.sgdAmount.toString());
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("getPayableReconciliation — three-way split (F2 Part D)", () => {
+  // Same worked example as getSupplierPendingPayableBalance below (2 completed
+  // $5 bookings + 1 supplier-declined at the 100% penalty tier), asserting the
+  // reconciliation identity: members paid $10 = SpaceSnap $1.50 (2×$0.50
+  // commission + $0.50 penalty) + supplier $8.50.
+  test("2 completed + 1 declined → gross 10 = commission 1.5 + supplier 8.5", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id, "5.00");
+      await completeBooking(user.id, listing, daysFromNow(10));
+      await completeBooking(user.id, listing, daysFromNow(11));
+      const declining = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(1),
+        endDate: daysFromNow(1),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(declining.id);
+
+      const recon = await getPayableReconciliation({ companyId: company.id });
+      assert.equal(recon.supplierNet.toString(), "8.5");
+      assert.equal(recon.commissionKept.toString(), "1.5");
+      assert.equal(recon.grossCollected.toString(), "10");
+      // The identity that makes it auditable.
+      assert.equal(recon.commissionKept.add(recon.supplierNet).toString(), recon.grossCollected.toString());
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

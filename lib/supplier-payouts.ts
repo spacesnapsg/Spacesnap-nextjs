@@ -2,6 +2,7 @@ import { Prisma, SupplierPayoutStatus, type SupplierPayout } from "@/app/generat
 import { prisma } from "@/lib/prisma";
 import { sgdToCredits } from "@/lib/credit-units";
 import { ApiValidationError } from "@/lib/api-errors";
+import { getReconciliationByPayoutIds, serializeReconciliation } from "@/lib/supplier-payables";
 
 export class SupplierPayoutError extends Error {
   constructor(public readonly reason: "not_found" | "not_billed" | "no_pending_payables") {
@@ -54,7 +55,7 @@ export async function listCompaniesWithPendingPayables() {
   const grouped = await prisma.supplierPayable.groupBy({
     by: ["companyId"],
     where: { status: "pending" },
-    _sum: { netAmount: true },
+    _sum: { netAmount: true, commissionAmount: true, penaltyDeduction: true },
     _min: { createdAt: true },
   });
 
@@ -67,12 +68,21 @@ export async function listCompaniesWithPendingPayables() {
   const nameById = new Map(companies.map((c) => [c.id.toString(), c.name]));
 
   return grouped
-    .map((g) => ({
-      companyId: g.companyId.toString(),
-      companyName: nameById.get(g.companyId.toString()) ?? "Unknown company",
-      pendingTotal: sgdToCredits(Number(g._sum.netAmount ?? 0)),
-      oldestPendingSince: g._min.createdAt ? g._min.createdAt.toISOString() : null,
-    }))
+    .map((g) => {
+      // Reconciliation so an admin can verify the split BEFORE closing the
+      // period + creating the Xero Bill (grossCollected = commissionKept +
+      // supplierNet; commissionKept folds in decline penalties).
+      const supplierNet = Number(g._sum.netAmount ?? 0);
+      const commissionKept = Number(g._sum.commissionAmount ?? 0) + Number(g._sum.penaltyDeduction ?? 0);
+      return {
+        companyId: g.companyId.toString(),
+        companyName: nameById.get(g.companyId.toString()) ?? "Unknown company",
+        pendingTotal: sgdToCredits(supplierNet),
+        commissionKept: sgdToCredits(commissionKept),
+        grossCollected: sgdToCredits(commissionKept + supplierNet),
+        oldestPendingSince: g._min.createdAt ? g._min.createdAt.toISOString() : null,
+      };
+    })
     .sort((a, b) => b.pendingTotal - a.pendingTotal);
 }
 
@@ -85,7 +95,17 @@ export async function listPayoutsAwaitingPayment() {
     include: { company: { select: { name: true } } },
     orderBy: { createdAt: "asc" },
   });
-  return payouts.map(serializeAdminSupplierPayout);
+  const reconciliation = await getReconciliationByPayoutIds(payouts.map((p) => p.id));
+  return payouts.map((p) => ({
+    ...serializeAdminSupplierPayout(p),
+    reconciliation: serializeReconciliation(
+      reconciliation.get(p.id.toString()) ?? {
+        grossCollected: new Prisma.Decimal(0),
+        commissionKept: new Prisma.Decimal(0),
+        supplierNet: new Prisma.Decimal(0),
+      }
+    ),
+  }));
 }
 
 export function serializeAdminSupplierPayout(p: SupplierPayout & { company: { name: string } }) {

@@ -94,9 +94,9 @@ function PlatformRevenueCard() {
     <Card className="mb-8">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
-          <h2 className="text-lg font-semibold text-body-text">Platform Revenue</h2>
+          <h2 className="text-lg font-semibold text-body-text">My Earnings</h2>
           <p className="text-xs text-muted-text mt-0.5">
-            Your revenue by listing type, per month.
+            Your net payout by listing type, per month (after SpaceSnap&apos;s commission).
           </p>
         </div>
         <DateRangePicker

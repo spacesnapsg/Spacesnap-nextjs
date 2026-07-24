@@ -28,6 +28,72 @@ export async function getSupplierPendingPayableBalance(
   return result._sum.netAmount ?? new Prisma.Decimal(0);
 }
 
+// The three-way money reconciliation (financial audit F2 Part D) over any set
+// of SupplierPayable rows — the whole point of persisting commissionAmount.
+// All figures derive from stored columns, no re-join to bookings/sales:
+//   supplierNet    = SUM(netAmount)                    (what the supplier is paid)
+//   commissionKept = SUM(commissionAmount + penaltyDeduction)  (SpaceSnap's cut,
+//                    incl. decline penalties, which are also SpaceSnap income)
+//   grossCollected = commissionKept + supplierNet      (what members paid, net
+//                    of refunds — a refunded booking's payable is a zero/penalty
+//                    row, so it contributes only the penalty, not the refund)
+// The identity grossCollected == commissionKept + supplierNet holds by
+// construction, per row and summed, which is exactly what makes it auditable.
+export interface PayableReconciliation {
+  grossCollected: Prisma.Decimal;
+  commissionKept: Prisma.Decimal;
+  supplierNet: Prisma.Decimal;
+}
+
+export async function getPayableReconciliation(
+  where: Prisma.SupplierPayableWhereInput,
+  client: Prisma.TransactionClient | typeof prisma = prisma
+): Promise<PayableReconciliation> {
+  const r = await client.supplierPayable.aggregate({
+    where,
+    _sum: { netAmount: true, commissionAmount: true, penaltyDeduction: true },
+  });
+  const zero = new Prisma.Decimal(0);
+  const supplierNet = r._sum.netAmount ?? zero;
+  const commissionKept = (r._sum.commissionAmount ?? zero).add(r._sum.penaltyDeduction ?? zero);
+  return { grossCollected: commissionKept.add(supplierNet), commissionKept, supplierNet };
+}
+
+// Every dollar that has flowed through the payable ledger, all-time and all
+// statuses — the platform-wide reconciliation headline on the admin panel.
+export async function getPlatformReconciliation(): Promise<PayableReconciliation> {
+  return getPayableReconciliation({});
+}
+
+// Same reconciliation for many payout batches at once (one groupBy, not N),
+// keyed by payoutId string — for the "Awaiting Payment" and supplier-history
+// batch rows.
+export async function getReconciliationByPayoutIds(payoutIds: bigint[]): Promise<Map<string, PayableReconciliation>> {
+  const result = new Map<string, PayableReconciliation>();
+  if (payoutIds.length === 0) return result;
+  const grouped = await prisma.supplierPayable.groupBy({
+    by: ["payoutId"],
+    where: { payoutId: { in: payoutIds } },
+    _sum: { netAmount: true, commissionAmount: true, penaltyDeduction: true },
+  });
+  const zero = new Prisma.Decimal(0);
+  for (const g of grouped) {
+    if (g.payoutId === null) continue;
+    const supplierNet = g._sum.netAmount ?? zero;
+    const commissionKept = (g._sum.commissionAmount ?? zero).add(g._sum.penaltyDeduction ?? zero);
+    result.set(g.payoutId.toString(), { grossCollected: commissionKept.add(supplierNet), commissionKept, supplierNet });
+  }
+  return result;
+}
+
+export function serializeReconciliation(r: PayableReconciliation) {
+  return {
+    grossCollected: sgdToCredits(Number(r.grossCollected)),
+    commissionKept: sgdToCredits(Number(r.commissionKept)),
+    supplierNet: sgdToCredits(Number(r.supplierNet)),
+  };
+}
+
 // Written once a booking's service is actually rendered — check-out flips
 // active -> completed (checkOutCheckIn, lib/check-ins.ts) — never for a
 // cancelled/declined booking, since that money was refunded to the user

@@ -21,11 +21,12 @@ import {
   ListingType,
   BookingType,
   TransactionType,
+  PayoutCadence,
   type Company,
   type Listing,
   type User,
 } from "../app/generated/prisma/client";
-import { getRevenueByCompany, getCompanyRevenueByTypeAndMonth } from "./revenue";
+import { getRevenueByCompany, getCompanyNetPayoutByTypeAndMonth } from "./revenue";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -191,20 +192,40 @@ describe("getRevenueByCompany — split-ledger F1 fix", () => {
   });
 });
 
-describe("getCompanyRevenueByTypeAndMonth — split-ledger F1 fix", () => {
-  test("buckets booking_payment as space and purchased_spend as consumable", async () => {
+describe("getCompanyNetPayoutByTypeAndMonth — net payout by type (F5)", () => {
+  // The supplier's chart shows their NET PAYOUT (SupplierPayable.netAmount),
+  // not the marked-up member price: a booking payable of 90 → space 900
+  // credits, a consumable payable of 46.50 → consumable 465 credits.
+  test("buckets a booking payable as space and a consumable payable as consumable", async () => {
     const { company, user, spaceListing, consumableListing } = await createFixture();
     try {
-      await bookingTransaction(user, spaceListing, TransactionType.booking_payment, "-100.00");
-      await purchaseTransaction(user, consumableListing, TransactionType.purchased_spend, "-50.00");
+      const booking = await bookingTransaction(user, spaceListing, TransactionType.booking_payment, "-100.00");
+      await prisma.supplierPayable.create({
+        data: {
+          companyId: company.id,
+          bookingId: booking.id,
+          grossAmount: "90.00",
+          commissionAmount: "10.00",
+          netAmount: "90.00",
+          payoutCadence: PayoutCadence.biweekly,
+        },
+      });
+      const purchase = await purchaseTransaction(user, consumableListing, TransactionType.purchased_spend, "-50.00");
+      await prisma.supplierPayable.create({
+        data: {
+          companyId: company.id,
+          purchaseId: purchase.id,
+          grossAmount: "46.50",
+          commissionAmount: "3.50",
+          netAmount: "46.50",
+          payoutCadence: PayoutCadence.biweekly,
+        },
+      });
 
-      const rows = await getCompanyRevenueByTypeAndMonth(company.id, { months: 1 });
+      const rows = await getCompanyNetPayoutByTypeAndMonth(company.id, { months: 1 });
       const current = rows[rows.length - 1];
-      // `|| 0` normalizes the harmless negative zero an empty bucket produces
-      // (Decimal(0).negated() → -0), which strict-mode assert.equal would
-      // otherwise treat as distinct from 0.
-      assert.equal(current.space || 0, 1000);
-      assert.equal(current.consumable || 0, 500);
+      assert.equal(current.space || 0, 900);
+      assert.equal(current.consumable || 0, 465);
       assert.equal(current.equipment || 0, 0);
     } finally {
       await cleanup(company, user);

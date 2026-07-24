@@ -159,18 +159,20 @@ export async function getRevenueTransactionFeed(limit = 25): Promise<RevenueTran
   });
 }
 
-export interface CompanyRevenueByTypeMonth {
+export interface CompanyNetPayoutByTypeMonth {
   month: string; // "YYYY-MM"
-  // Numeric "credits" values (this app's cosmetic display unit) — the chart
-  // (recharts) needs numbers, not the formatted strings the text-display
-  // helpers above return. Revenue, not earned credits, so the
-  // earned-balance display constraint doesn't apply here.
+  // Numeric "credits" values — the supplier's NET PAYOUT (what SpaceSnap
+  // actually pays them: 90% of base per booking, 93% of RSP per consumable,
+  // minus any decline penalties), NOT the marked-up member price. Confirmed
+  // with the product owner 2026-07-25 (financial audit F2/F5): the marketplace
+  // markup is SpaceSnap's, so showing gross member spend on the supplier's own
+  // chart overstated their earnings. Sourced from SupplierPayable.netAmount.
   space: number;
   equipment: number;
   consumable: number;
 }
 
-export interface CompanyRevenueByTypeRange {
+export interface CompanyNetPayoutRange {
   // Either months (the original preset toggle) or an explicit from/to date
   // range (2026-07-23, Platform Revenue date picker) — from/to wins when
   // given. months stays the fallback for the initial/no-filter state.
@@ -191,19 +193,19 @@ function startOfMonth(d: Date): Date {
   return start;
 }
 
-// Supplier Financials "Platform Revenue" chart — the caller's own company,
-// split by the LISTING TYPE each revenue transaction is attributable to, per
-// calendar month. Same REVENUE_TRANSACTION_TYPES / negate-to-net-out-refunds
-// semantics as every other aggregate in this module — a declined-then-
-// refunded booking nets to 0 in its bucket, not a negative. Replaces
-// buildPlaceholderRevenueByType in app/(supplier)/supplier-financials/page.tsx
-// (Sprint 6.10). Extended 2026-07-23 to accept an explicit from/to date
-// range (Platform Revenue's date picker) instead of only a fixed month
-// countback — still bucketed monthly, since the chart itself is monthly bars.
-export async function getCompanyRevenueByTypeAndMonth(
+// Supplier Financials "My Earnings" chart — the caller's own company's NET
+// PAYOUT, split by listing type, per calendar month. Sourced from
+// SupplierPayable.netAmount (what SpaceSnap actually pays the supplier: 90% of
+// base per booking, 93% of RSP per consumable), NOT the marked-up member price
+// — the markup is SpaceSnap's, not the supplier's (F2/F5, product owner
+// 2026-07-25). A supplier-decline penalty on a booking is a negative payable,
+// so it nets down the bucket, exactly as it nets the payout. Bucketed by the
+// payable's createdAt (when the sale settled). Accepts a month countback or an
+// explicit from/to range (from/to wins).
+export async function getCompanyNetPayoutByTypeAndMonth(
   companyId: bigint,
-  { months = 12, from, to }: CompanyRevenueByTypeRange = {}
-): Promise<CompanyRevenueByTypeMonth[]> {
+  { months = 12, from, to }: CompanyNetPayoutRange = {}
+): Promise<CompanyNetPayoutByTypeMonth[]> {
   const until = to ? startOfMonth(to) : startOfMonth(new Date());
   let since: Date;
   if (from) {
@@ -221,23 +223,15 @@ export async function getCompanyRevenueByTypeAndMonth(
     since.setMonth(since.getMonth() - (bucketCount - 1));
   }
 
-  const listingTypeSelect = { listing: { select: { companyId: true, type: true } } };
-  const transactions = await prisma.transaction.findMany({
-    where: {
-      type: { in: REVENUE_TRANSACTION_TYPES },
-      createdAt: { gte: since, ...(to ? { lte: to } : {}) },
-      OR: [
-        { booking: { listing: { companyId } } },
-        { bulkOrderRequest: { listing: { companyId } } },
-        { purchase: { listing: { companyId } } },
-      ],
-    },
+  const listingTypeSelect = { listing: { select: { type: true } } };
+  const payables = await prisma.supplierPayable.findMany({
+    where: { companyId, createdAt: { gte: since, ...(to ? { lte: to } : {}) } },
     select: {
-      amount: true,
+      netAmount: true,
       createdAt: true,
       booking: { select: listingTypeSelect },
-      bulkOrderRequest: { select: listingTypeSelect },
       purchase: { select: listingTypeSelect },
+      bulkOrderRequest: { select: listingTypeSelect },
     },
   });
 
@@ -252,24 +246,26 @@ export async function getCompanyRevenueByTypeAndMonth(
     return bucket;
   }
 
-  for (const t of transactions) {
-    const listing = t.booking?.listing ?? t.bulkOrderRequest?.listing ?? t.purchase?.listing ?? null;
+  for (const p of payables) {
+    const listing = p.booking?.listing ?? p.purchase?.listing ?? p.bulkOrderRequest?.listing ?? null;
     if (!listing) continue;
-    const key = `${t.createdAt.getFullYear()}-${String(t.createdAt.getMonth() + 1).padStart(2, "0")}`;
+    const key = `${p.createdAt.getFullYear()}-${String(p.createdAt.getMonth() + 1).padStart(2, "0")}`;
     const bucket = bucketFor(key);
-    bucket[listing.type] = bucket[listing.type].plus(t.amount);
+    // netAmount is already the supplier's signed net (positive = paid,
+    // negative = decline penalty owed back) — no negation needed here.
+    bucket[listing.type] = bucket[listing.type].plus(p.netAmount);
   }
 
-  const result: CompanyRevenueByTypeMonth[] = [];
+  const result: CompanyNetPayoutByTypeMonth[] = [];
   const cursor = new Date(since);
   for (let i = 0; i < bucketCount; i++) {
     const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
     const bucket = buckets.get(key);
     result.push({
       month: key,
-      space: bucket ? sgdToCredits(Number(bucket.space.negated())) : 0,
-      equipment: bucket ? sgdToCredits(Number(bucket.equipment.negated())) : 0,
-      consumable: bucket ? sgdToCredits(Number(bucket.consumables.negated())) : 0,
+      space: bucket ? sgdToCredits(Number(bucket.space)) : 0,
+      equipment: bucket ? sgdToCredits(Number(bucket.equipment)) : 0,
+      consumable: bucket ? sgdToCredits(Number(bucket.consumables)) : 0,
     });
     cursor.setMonth(cursor.getMonth() + 1);
   }

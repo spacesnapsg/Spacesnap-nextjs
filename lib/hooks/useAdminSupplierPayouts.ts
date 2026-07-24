@@ -2,10 +2,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 import type { SupplierPayoutStatus } from "@/lib/hooks/useSupplierPayouts";
 
+// The three-way money split (all figures in credits): what members paid =
+// what SpaceSnap kept + what the supplier is owed.
+export interface Reconciliation {
+  grossCollected: number;
+  commissionKept: number;
+  supplierNet: number;
+}
+
 export interface PendingPayableCompany {
   companyId: string;
   companyName: string;
   pendingTotal: number;
+  commissionKept: number;
+  grossCollected: number;
   oldestPendingSince: string | null;
 }
 
@@ -20,11 +30,13 @@ export interface AdminSupplierPayout {
   xeroRemittanceUrl: string | null;
   paidAt: string | null;
   createdAt: string;
+  reconciliation: Reconciliation;
 }
 
 export interface AdminSupplierPayoutsData {
   pendingCompanies: PendingPayableCompany[];
   awaitingPayment: AdminSupplierPayout[];
+  platformReconciliation: Reconciliation;
 }
 
 // System-admin-only. Backs the "Supplier Payouts" card on the admin

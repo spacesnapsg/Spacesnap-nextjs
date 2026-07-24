@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSupplier } from "@/lib/supplier-auth";
 import { ApiValidationError, validationErrorResponse } from "@/lib/api-errors";
-import { getCompanyRevenueByTypeAndMonth } from "@/lib/revenue";
+import { getCompanyNetPayoutByTypeAndMonth } from "@/lib/revenue";
 
-// Supplier Financials "Platform Revenue" chart — the caller's own company,
-// revenue split by listing type per month (Sprint 6.10, replaces the page's
-// buildPlaceholderRevenueByType). `months` clamps to the three original
+// Supplier Financials "My Earnings" chart — the caller's own company, NET
+// PAYOUT split by listing type per month (F2/F5, 2026-07-25: shows what the
+// supplier is actually paid, not the marked-up member price). `months` clamps
+// to the three original
 // preset ranges (3/6/12); anything else falls back to 12. `from`/`to`
 // (2026-07-23, real date picker) override `months` entirely when given —
 // same "explicit ISO date, validated, else 400" idiom as parseActivityQuery
@@ -34,6 +35,6 @@ export async function GET(request: NextRequest) {
   const rawMonths = Number(request.nextUrl.searchParams.get("months"));
   const months = ALLOWED_MONTHS.has(rawMonths) ? rawMonths : 12;
 
-  const data = await getCompanyRevenueByTypeAndMonth(auth.companyId, { months, from, to });
+  const data = await getCompanyNetPayoutByTypeAndMonth(auth.companyId, { months, from, to });
   return NextResponse.json({ months: data });
 }

@@ -30,6 +30,46 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+function fmt(credits: number) {
+  return credits.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+interface Recon {
+  grossCollected: number;
+  commissionKept: number;
+  supplierNet: number;
+}
+
+// The three-way money split. Compact inline form for table cells; `tiles` for
+// the platform headline.
+function ReconLine({ recon }: { recon: Recon }) {
+  return (
+    <p className="text-xs text-muted-text mt-0.5">
+      Members paid <span className="text-body-text">{fmt(recon.grossCollected)}</span> = SpaceSnap{" "}
+      <span className="text-body-text">{fmt(recon.commissionKept)}</span> + supplier{" "}
+      <span className="text-body-text">{fmt(recon.supplierNet)}</span>
+    </p>
+  );
+}
+
+function ReconTiles({ recon }: { recon: Recon }) {
+  const items: [string, number, string][] = [
+    ["Members paid (gross)", recon.grossCollected, "text-body-text"],
+    ["SpaceSnap keeps (commission + penalties)", recon.commissionKept, "text-success-green"],
+    ["Owed to suppliers (net)", recon.supplierNet, "text-body-text"],
+  ];
+  return (
+    <div className="flex flex-wrap gap-3 px-6 pb-3">
+      {items.map(([label, value, color]) => (
+        <div key={label} className="flex-1 min-w-[10rem] rounded-lg border border-border/60 px-4 py-3">
+          <p className="text-[11px] uppercase tracking-wide text-muted-text">{label}</p>
+          <p className={`text-lg font-semibold ${color}`}>{fmt(value)} credits</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Manual-entry version of the payout close-out workflow — no live Xero API
 // connection exists yet (no Xero Developer app registered, confirmed
 // 2026-07-24), so an admin closes a period, pastes the Xero Bill URL once
@@ -70,7 +110,17 @@ function ReadyToBillRow({ company }: { company: PendingPayableCompany }) {
           <p className="text-xs text-muted-text mt-0.5">Since {formatDate(company.oldestPendingSince)}</p>
         )}
       </td>
-      <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">{company.pendingTotal} credits</td>
+      <td className="py-3 px-6 text-sm whitespace-nowrap">
+        <span className="text-body-text font-medium">{fmt(company.pendingTotal)} credits</span>
+        <span className="text-xs text-muted-text"> to supplier</span>
+        <ReconLine
+          recon={{
+            grossCollected: company.grossCollected,
+            commissionKept: company.commissionKept,
+            supplierNet: company.pendingTotal,
+          }}
+        />
+      </td>
       <td className="py-3 px-6">
         <div className="flex flex-wrap items-center gap-2">
           <Input
@@ -148,7 +198,11 @@ function AwaitingPaymentRow({ payout }: { payout: AdminSupplierPayout }) {
           {formatDate(payout.periodStart)} – {formatDate(payout.periodEnd)}
         </p>
       </td>
-      <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">{payout.totalAmount} credits</td>
+      <td className="py-3 px-6 text-sm whitespace-nowrap">
+        <span className="text-body-text font-medium">{fmt(payout.totalAmount)} credits</span>
+        <span className="text-xs text-muted-text"> to supplier</span>
+        <ReconLine recon={payout.reconciliation} />
+      </td>
       <td className="py-3 px-6">
         <div className="flex flex-wrap items-center gap-2">
           <Input
@@ -211,6 +265,13 @@ function SupplierPayoutsCard() {
         <p className="text-sm text-muted-text text-center py-12">Loading…</p>
       ) : (
         <>
+          <div className="px-6 pb-1">
+            <p className="text-xs text-muted-text">
+              All-time reconciliation across every payable — the split each payout batch is checked against.
+            </p>
+          </div>
+          {data && <ReconTiles recon={data.platformReconciliation} />}
+
           <div className="px-6 pt-2 pb-1">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted-text">Ready to Bill</h3>
           </div>
@@ -222,8 +283,8 @@ function SupplierPayoutsCard() {
                 <thead>
                   <tr className="border-b border-border">
                     <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Company</th>
-                    <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
-                      Pending Balance
+                    <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">
+                      Pending (net → supplier)
                     </th>
                     <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">
                       Close Period
@@ -252,8 +313,8 @@ function SupplierPayoutsCard() {
                     <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">
                       Company / Period
                     </th>
-                    <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
-                      Total
+                    <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">
+                      Net → supplier
                     </th>
                     <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">
                       Confirm Payment

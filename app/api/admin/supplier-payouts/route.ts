@@ -9,6 +9,7 @@ import {
   serializeAdminSupplierPayout,
   SupplierPayoutError,
 } from "@/lib/supplier-payouts";
+import { getPlatformReconciliation, serializeReconciliation } from "@/lib/supplier-payables";
 
 // System-admin-only. Backs the "Supplier Payouts" card on the admin
 // Financials page — companies with an un-batched pending balance ("Ready to
@@ -18,12 +19,17 @@ export async function GET() {
   const auth = await requireSystemAdmin();
   if ("error" in auth) return auth.error;
 
-  const [pendingCompanies, awaitingPayment] = await Promise.all([
+  const [pendingCompanies, awaitingPayment, platformReconciliation] = await Promise.all([
     listCompaniesWithPendingPayables(),
     listPayoutsAwaitingPayment(),
+    getPlatformReconciliation(),
   ]);
 
-  return NextResponse.json({ pendingCompanies, awaitingPayment });
+  return NextResponse.json({
+    pendingCompanies,
+    awaitingPayment,
+    platformReconciliation: serializeReconciliation(platformReconciliation),
+  });
 }
 
 // System-admin-only. Closes a payout period for one company (see
