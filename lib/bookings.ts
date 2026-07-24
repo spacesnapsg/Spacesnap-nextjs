@@ -24,6 +24,7 @@ import {
   payoutCadenceForSupplierTier,
 } from "@/lib/booking-payments";
 import { sgdToCredits } from "@/lib/credit-units";
+import { platformCommissionForBooking } from "@/lib/pricing";
 import { getUserRewardTier, rebatePercentForTier } from "@/lib/reward-tiers";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
 import type { ActivityQuery } from "@/lib/activity";
@@ -370,7 +371,18 @@ interface CreateBookingWithDebitParams {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
+  // The marked-up marketplace price the member is actually charged (base ×
+  // the effective per-type markup — resolved in the booking route). Stored as
+  // Booking.sgdAmount.
   cost: Prisma.Decimal;
+  // The supplier's base price for this booking, snapshotted as Booking.baseAmount
+  // — what the supplier's payout share is computed against, distinct from the
+  // marked-up `cost`. Defaults to `cost` (the pre-markup/no-markup case, e.g.
+  // tests) so the supplier gets (100 - commission)% of it exactly as before.
+  baseAmount?: Prisma.Decimal;
+  // The effective per-company booking commission %, snapshotted as
+  // Booking.platformCommissionPercent. Defaults to the platform's own default.
+  commissionPercent?: Prisma.Decimal;
   paymentMethodId: string;
   rewardGrantId?: bigint;
   // Redeems an available BookingCredit as a discount on this booking — see
@@ -548,8 +560,9 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
           startDate: new Date(params.startDate),
           endDate: new Date(params.endDate),
           sgdAmount: params.cost,
+          baseAmount: params.baseAmount ?? params.cost,
           earnedCreditsApplied: discount,
-          platformCommissionPercent: new Prisma.Decimal(PLATFORM_COMMISSION_PERCENT_BOOKINGS),
+          platformCommissionPercent: params.commissionPercent ?? new Prisma.Decimal(PLATFORM_COMMISSION_PERCENT_BOOKINGS),
           rewardTierRebatePercent: new Prisma.Decimal(rebatePercentForTier(rewardTier.tier)),
         },
       });
@@ -798,7 +811,10 @@ export async function declineBookingPendingResolution(
   const chargeAmount = existing.sgdAmount.sub(existing.earnedCreditsApplied);
   const earnedReversalAmount = existing.earnedCreditsApplied;
 
-  const commissionAmount = existing.sgdAmount.mul(existing.platformCommissionPercent).div(100).toDecimalPlaces(2);
+  // The penalty is a share of SpaceSnap's OWN commission on this booking (the
+  // markup + commission% of base = sgdAmount - supplier gross), not of the
+  // whole booking value — the supplier only ever forfeits from SpaceSnap's cut.
+  const commissionAmount = platformCommissionForBooking(existing.sgdAmount, existing.baseAmount, existing.platformCommissionPercent);
   const penaltyDeduction = commissionAmount.mul(supplierPenaltyPercent).div(100).toDecimalPlaces(2);
   const { tier: existingSupplierTier } = await getCompanySupplierTier(existing.listing.companyId);
   const payoutCadence = payoutCadenceForSupplierTier(existingSupplierTier);
@@ -840,6 +856,10 @@ export async function declineBookingPendingResolution(
         companyId: existing.listing.companyId,
         bookingId: updated.id,
         grossAmount: new Prisma.Decimal(0),
+        // No commission earned — the booking was refunded, nothing sold. The
+        // platform's income on a decline is the penalty (penaltyDeduction),
+        // not a commission. See SupplierPayable.commissionAmount's comment.
+        commissionAmount: new Prisma.Decimal(0),
         penaltyDeduction,
         netAmount: penaltyDeduction.negated(),
         payoutCadence,
@@ -1197,6 +1217,9 @@ export async function cancelBookingWithRefund(
           companyId: existing.listing.companyId,
           bookingId: updated.id,
           grossAmount: new Prisma.Decimal(0),
+          // Zero-effect audit row — the user cancelled, money refunded, the
+          // supplier is unaffected and SpaceSnap kept nothing.
+          commissionAmount: new Prisma.Decimal(0),
           penaltyDeduction: new Prisma.Decimal(0),
           netAmount: new Prisma.Decimal(0),
           payoutCadence,

@@ -3,6 +3,7 @@ import { ListingType } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { serializeListing } from "@/lib/listings";
 import { getListingRatingAggregates } from "@/lib/ratings";
+import { getEffectiveCompanyPricingMap } from "@/lib/pricing";
 
 const LISTING_TYPES = new Set<string>(Object.values(ListingType));
 
@@ -60,9 +61,16 @@ export async function GET(request: NextRequest) {
     orderBy: [{ pinnedAt: { sort: "desc", nulls: "last" } }, { boostedAt: "desc" }],
   });
 
-  const ratingAggregates = await getListingRatingAggregates(listings.map((l) => l.id));
+  const [ratingAggregates, pricingByCompany] = await Promise.all([
+    getListingRatingAggregates(listings.map((l) => l.id)),
+    // User-facing: mark up each listing's base price by its company's effective
+    // markup so the marketplace shows what a member will actually be charged.
+    getEffectiveCompanyPricingMap(listings.map((l) => l.companyId)),
+  ]);
 
   return NextResponse.json({
-    listings: listings.map((listing) => serializeListing(listing, ratingAggregates.get(listing.id.toString()))),
+    listings: listings.map((listing) =>
+      serializeListing(listing, ratingAggregates.get(listing.id.toString()), pricingByCompany.get(listing.companyId.toString()))
+    ),
   });
 }

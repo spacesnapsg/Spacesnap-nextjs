@@ -15,6 +15,7 @@ import {
   StripeChargeFailedError,
   StripeRefundFailedError,
 } from "@/lib/bookings";
+import { getEffectiveCompanyPricing, markupPercentForBookingType, applyMarkup } from "@/lib/pricing";
 
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
 const BOOKING_STATUSES = new Set<string>(Object.values(BookingStatus));
@@ -98,10 +99,16 @@ export async function POST(request: NextRequest) {
   }
 
   const priceField = PRICE_FIELD[fields.bookingType];
-  const cost = listing[priceField];
-  if (cost === null) {
+  const base = listing[priceField];
+  if (base === null) {
     return validationErrorResponse(new ApiValidationError({ listingId: ["This listing has no price set for that booking type."] }));
   }
+
+  // The member is charged the supplier's BASE price marked up by the effective
+  // per-company markup for this booking type; the supplier is later paid a
+  // share of the base, not the marked-up total (see createCompletedBookingPayable).
+  const pricing = await getEffectiveCompanyPricing(listing.companyId);
+  const charged = applyMarkup(base, markupPercentForBookingType(pricing, fields.bookingType));
 
   const overlapping = await hasOverlappingBooking(fields.listingId, fields.startDate, fields.endDate);
   if (overlapping) {
@@ -115,7 +122,9 @@ export async function POST(request: NextRequest) {
       bookingType: fields.bookingType,
       startDate: fields.startDate,
       endDate: fields.endDate,
-      cost,
+      cost: charged,
+      baseAmount: base,
+      commissionPercent: pricing.bookingCommissionPercent,
       paymentMethodId: fields.paymentMethodId,
       rewardGrantId: fields.rewardGrantId,
       bookingCreditId: fields.bookingCreditId,

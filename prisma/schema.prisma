@@ -483,6 +483,30 @@ model SupplierPayable {
   companyId        BigInt                @map("company_id")
   bookingId        BigInt                @unique @map("booking_id")
   grossAmount      Decimal               @map("gross_amount") @db.Decimal(10, 2)
+  // What SpaceSnap keeps from the booking's nominal value as its platform cut
+  // (sgdAmount * Booking.platformCommissionPercent, snapshotted at the same
+  // time as grossAmount). Added 2026-07-24 (financial audit F2) — previously
+  // this figure was computed in createCompletedBookingPayable purely to derive
+  // grossAmount (= sgdAmount - commission) and then thrown away, leaving no
+  // row-level record of the platform's own cut per booking. Persisting it
+  // makes the three-way reconciliation derivable entirely from stored
+  // columns, no re-join to bookings needed:
+  //   supplierNet    = netAmount
+  //   commissionKept = commissionAmount + penaltyDeduction  (penalties are
+  //                    also SpaceSnap income — a supplier-decline penalty is
+  //                    money the supplier owes back)
+  //   grossCollected = commissionKept + netAmount           (= the booking's
+  //                    nominal sgdAmount on a completed row; 0 on a
+  //                    refunded/cancelled row)
+  // Only a normal completion sets this > 0. A supplier-decline row (booking
+  // refunded, nothing earned) and a user-cancel zero-row both leave it 0 —
+  // the decline's platform income lives in penaltyDeduction, not here. See
+  // getPayableReconciliation, lib/supplier-payables.ts. NOTE: this is the
+  // NOMINAL split off sgdAmount; a reward-discount the member redeemed at
+  // booking time (Booking.earnedCreditsApplied) is SpaceSnap-funded and comes
+  // out of this commission in actual cash — folding that into the cash view is
+  // the broader end-to-end audit (Part 2 item), not this column.
+  commissionAmount Decimal               @default(0) @map("commission_amount") @db.Decimal(10, 2)
   penaltyDeduction Decimal               @default(0) @map("penalty_deduction") @db.Decimal(10, 2)
   netAmount        Decimal               @map("net_amount") @db.Decimal(10, 2)
   status           SupplierPayableStatus @default(pending)
@@ -542,6 +566,38 @@ model SupplierPayout {
   payables SupplierPayable[]
 
   @@map("supplier_payouts")
+}
+
+// Platform-wide DEFAULT pricing/commission, set ONLY by a system admin
+// (2026-07-24, financial audit F2 follow-on). Single row, id always 1 (see
+// getPlatformPricingConfig, lib/pricing.ts, which creates it on first read if
+// absent). Suppliers never see or set any of this.
+//
+// The marketplace price a member pays is the supplier's listed BASE price
+// marked up by the booking-type markup below (daily/weekly/monthly), and
+// SpaceSnap's cut is that markup PLUS bookingCommissionPercent of the base;
+// the supplier is paid (100 - bookingCommissionPercent)% of their base
+// regardless of booking type. Consumables carry no markup — the member pays
+// the supplier's RSP and SpaceSnap keeps consumablesCommissionPercent of it.
+// Confirmed with the product owner 2026-07-24 (worked example: base 100 →
+// daily member price 150, supplier 90, SpaceSnap 60).
+//
+// Per-company overrides live on Company.* (nullable, also admin-only) and win
+// when set; null there inherits these defaults. See getEffectiveCompanyPricing,
+// lib/pricing.ts. Every rate is snapshotted onto the Booking/consumable
+// payable at charge/completion time, never read live afterward, same
+// "snapshot, don't let a later rate change reshuffle a settled row" discipline
+// as Booking.platformCommissionPercent and SupplierPayable.payoutCadence.
+model PlatformPricingConfig {
+  id                           Int      @id @default(1)
+  bookingMarkupDailyPercent    Decimal  @default(50) @map("booking_markup_daily_percent") @db.Decimal(6, 2)
+  bookingMarkupWeeklyPercent   Decimal  @default(30) @map("booking_markup_weekly_percent") @db.Decimal(6, 2)
+  bookingMarkupMonthlyPercent  Decimal  @default(20) @map("booking_markup_monthly_percent") @db.Decimal(6, 2)
+  bookingCommissionPercent     Decimal  @default(10) @map("booking_commission_percent") @db.Decimal(5, 2)
+  consumablesCommissionPercent Decimal  @default(7) @map("consumables_commission_percent") @db.Decimal(5, 2)
+  updatedAt                    DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_pricing_config")
 }
 
 // A per-COMPANY credit ledger, distinct from the per-USER purchased/earned
@@ -990,6 +1046,19 @@ model Company {
   // there's no independent source of truth to re-derive this from (a spent
   // Bump doesn't leave its own row anywhere else to re-sum).
   bumpsAvailable       Int      @default(0) @map("bumps_available")
+  // Per-company pricing/commission OVERRIDES (2026-07-24, financial audit F2
+  // follow-on), set ONLY by a system admin (no supplier-facing editor). Each
+  // is nullable: null inherits the matching PlatformPricingConfig default,
+  // a set value wins. Resolved together by getEffectiveCompanyPricing
+  // (lib/pricing.ts) and snapshotted onto each Booking/consumable payable at
+  // charge time — never read live afterward. Distinct from the free/preferred/
+  // top supplier tier below, which is a separate live-computed rebate concept,
+  // not a per-company price the admin dictates.
+  bookingMarkupDailyPercent    Decimal? @map("booking_markup_daily_percent") @db.Decimal(6, 2)
+  bookingMarkupWeeklyPercent   Decimal? @map("booking_markup_weekly_percent") @db.Decimal(6, 2)
+  bookingMarkupMonthlyPercent  Decimal? @map("booking_markup_monthly_percent") @db.Decimal(6, 2)
+  bookingCommissionPercent     Decimal? @map("booking_commission_percent") @db.Decimal(5, 2)
+  consumablesCommissionPercent Decimal? @map("consumables_commission_percent") @db.Decimal(5, 2)
   // Supplier payment tier (free/preferred/top) is deliberately NOT a column
   // here — it's live-computed from rating + rolling-window spend
   // (lib/supplier-tiers.ts, Sprint 6.10, confirmed with the product owner
@@ -1511,14 +1580,30 @@ model Booking {
   bookingType               BookingType         @map("booking_type")
   startDate                 DateTime            @map("start_date") @db.Date
   endDate                   DateTime            @map("end_date") @db.Date
+  // What the member is actually charged (the supplier's base price marked up
+  // by the booking-type markup — see getEffectiveCompanyPricing, lib/pricing.ts).
+  // 2026-07-24 (financial audit F2): before markup existed, sgdAmount WAS the
+  // base (no markup was applied at all); now it is the marked-up marketplace
+  // price. Pre-markup rows keep their old meaning — for them baseAmount was
+  // backfilled equal to sgdAmount.
   sgdAmount                 Decimal             @map("sgd_amount") @db.Decimal(10, 2)
+  // The supplier's own base price for this booking, snapshotted at creation
+  // (2026-07-24, financial audit F2). The supplier is paid
+  // (100 - platformCommissionPercent)% of THIS, not of the marked-up
+  // sgdAmount, so both are needed to reconstruct the split at completion:
+  // supplier gross = baseAmount * (1 - commission%); SpaceSnap commission =
+  // sgdAmount - supplier gross (= the markup + commission% of base). See
+  // createCompletedBookingPayable, lib/supplier-payables.ts.
+  baseAmount                Decimal             @default(0) @map("base_amount") @db.Decimal(10, 2)
   earnedCreditsApplied      Decimal             @default(0) @map("earned_credits_applied") @db.Decimal(10, 2)
-  // Snapshotted at booking creation (see PLATFORM_COMMISSION_PERCENT_BOOKINGS,
-  // lib/booking-payments.ts), not a live constant read at cancellation time —
-  // same "don't let a later rate change reshuffle an existing booking" design
-  // as SupplierPayable.invoicingCadence. Confirmed with the product owner
-  // 2026-07-21: flat 10% for space/equipment bookings (consumables/bulk
-  // orders use a different, separately-scoped rate).
+  // Snapshotted at booking creation from the effective per-company booking
+  // commission rate (getEffectiveCompanyPricing, lib/pricing.ts — a
+  // PlatformPricingConfig default, or the company's own admin-set override),
+  // not a live constant read at cancellation time — same "don't let a later
+  // rate change reshuffle an existing booking" design as
+  // SupplierPayable.payoutCadence. Was a hardcoded flat 10%
+  // (PLATFORM_COMMISSION_PERCENT_BOOKINGS) until 2026-07-24; the constant
+  // remains only as the config's own default value.
   platformCommissionPercent Decimal             @default(10) @map("platform_commission_percent") @db.Decimal(5, 2)
   // Sprint 6.5 addition (2026-07-21) — User Reward Tier system. Snapshotted
   // at booking creation from getUserRewardTier (lib/reward-tiers.ts), same

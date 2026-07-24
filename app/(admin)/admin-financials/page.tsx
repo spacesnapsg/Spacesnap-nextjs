@@ -4,6 +4,7 @@ import { useState } from "react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
+import PricingCommissionCard from "@/components/PricingCommissionCard";
 import { useAdminFinancials } from "@/lib/hooks/useAdminFinancials";
 import {
   useAdminSupplierPayouts,
@@ -17,7 +18,10 @@ import { ApiRequestError } from "@/lib/api-client";
 
 const TYPE_LABELS: Record<string, string> = {
   booking: "Booking",
+  booking_payment: "Booking",
+  booking_modification_fee: "Reschedule fee",
   purchase: "Purchase",
+  purchased_spend: "Consumable sale",
   refund: "Refund",
   topup: "Top-up",
 };
@@ -315,6 +319,8 @@ export default function AdminFinancialsPage() {
               </table>
             </div>
           </Card>
+
+          <PricingCommissionCard />
 
           <SupplierPayoutsCard />
 

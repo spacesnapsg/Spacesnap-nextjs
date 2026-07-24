@@ -4,6 +4,7 @@ import { ApiValidationError } from "@/lib/api-errors";
 import type { ListingRatingAggregate } from "@/lib/ratings";
 import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 import { getCompanyPurchasedBalance, InsufficientCompanyPurchasedBalanceError } from "@/lib/company-credits";
+import { applyMarkup, type EffectivePricing as CompanyPricing } from "@/lib/pricing";
 
 // API contract uses the same field names as the Prisma model / DB columns
 // (type, priceDay, priceWeek, priceMonth, pricePerUnit, stockQuantity,
@@ -39,9 +40,25 @@ function serializeDecimal(value: Listing["priceDay"]): number | null {
   return value === null ? null : sgdToCredits(Number(value));
 }
 
+// Marks a stored BASE price up by the given per-type markup, then converts to
+// the cosmetic credits unit. Used only on the user-facing (marketplace) path —
+// see serializeListing's `pricing` param.
+function serializeMarketplaceDecimal(base: Listing["priceDay"], markupPercent: Prisma.Decimal): number | null {
+  if (base === null) return null;
+  return sgdToCredits(Number(applyMarkup(new Prisma.Decimal(base), markupPercent)));
+}
+
+// `pricing` is the viewer-context switch (2026-07-24, financial audit F2):
+//   - Provided (USER-FACING marketplace/booking routes): priceDay/Week/Month
+//     are the BASE marked up by the per-type markup — the actual price a
+//     member pays, kept in lockstep with what the booking route charges.
+//     Consumables' pricePerUnit is never marked up.
+//   - Omitted (SUPPLIER-FACING routes, listing edit): the raw base the
+//     supplier entered, unchanged.
 export function serializeListing(
   listing: Listing | ListingWithCertificates,
-  ratingAggregate?: ListingRatingAggregate
+  ratingAggregate?: ListingRatingAggregate,
+  pricing?: CompanyPricing | null
 ) {
   return {
     id: listing.id.toString(),
@@ -57,9 +74,9 @@ export function serializeListing(
     amenities: (listing.amenities as string[] | null) ?? [],
     isAvailable: listing.isAvailable,
     requireApproval: listing.requireApproval,
-    priceDay: serializeDecimal(listing.priceDay),
-    priceWeek: serializeDecimal(listing.priceWeek),
-    priceMonth: serializeDecimal(listing.priceMonth),
+    priceDay: pricing ? serializeMarketplaceDecimal(listing.priceDay, pricing.bookingMarkupDailyPercent) : serializeDecimal(listing.priceDay),
+    priceWeek: pricing ? serializeMarketplaceDecimal(listing.priceWeek, pricing.bookingMarkupWeeklyPercent) : serializeDecimal(listing.priceWeek),
+    priceMonth: pricing ? serializeMarketplaceDecimal(listing.priceMonth, pricing.bookingMarkupMonthlyPercent) : serializeDecimal(listing.priceMonth),
     pricePerUnit: serializeDecimal(listing.pricePerUnit),
     stockQuantity: listing.stockQuantity,
     packSize: listing.packSize,

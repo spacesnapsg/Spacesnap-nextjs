@@ -16,7 +16,7 @@ export interface CompanyRevenue {
 export interface RevenueTransactionRow {
   id: string;
   createdAt: string;
-  type: "topup" | "booking" | "refund" | "purchase";
+  type: "topup" | "booking" | "refund" | "purchase" | "booking_payment" | "booking_modification_fee" | "purchased_spend";
   amount: string;
   companyId: string | null;
   companyName: string | null;

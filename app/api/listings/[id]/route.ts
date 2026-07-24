@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { notFoundResponse } from "@/lib/api-errors";
 import { parseBigIntParam, serializeListing } from "@/lib/listings";
 import { getListingRatingAggregates } from "@/lib/ratings";
+import { getEffectiveCompanyPricing } from "@/lib/pricing";
 
 // Public single-listing view + required certs. Mirrors old
 // ListingController@show.
@@ -17,7 +18,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   });
   if (!listing) return notFoundResponse("Listing not found.");
 
-  const ratingAggregates = await getListingRatingAggregates([listing.id]);
+  const [ratingAggregates, pricing] = await Promise.all([
+    getListingRatingAggregates([listing.id]),
+    getEffectiveCompanyPricing(listing.companyId),
+  ]);
 
-  return NextResponse.json({ listing: serializeListing(listing, ratingAggregates.get(listing.id.toString())) });
+  return NextResponse.json({ listing: serializeListing(listing, ratingAggregates.get(listing.id.toString()), pricing) });
 }

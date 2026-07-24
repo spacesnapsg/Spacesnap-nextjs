@@ -11,12 +11,44 @@ function formatAsCredits(sgd: Prisma.Decimal): string {
 }
 
 // "Revenue" = money that actually moved from a user to an operator/the
-// platform. `topup` is money entering a user's own wallet, not revenue —
-// excluded. `booking`/`purchase` are debits (negative amount); `refund`
-// reverses a booking debit (positive amount), so summing all three and
-// negating nets out declined bookings correctly (a booking that was
-// declined contributes 0, not -amount).
-const REVENUE_TRANSACTION_TYPES: TransactionType[] = ["booking", "purchase", "refund"];
+// platform. Debits are negative, refunds positive, so summing every type
+// below and negating nets a declined-then-refunded booking to 0 (not
+// -amount) automatically.
+//
+// This list deliberately spans BOTH ledger generations, because the two
+// coexist in a live DB during the split-ledger transition:
+//   - Legacy/seed types (`booking`, `purchase`): the pre-split combined
+//     ledger. prisma/seed.ts still writes `booking` rows with real amounts,
+//     and any pre-transition rows use these too. (`booking` is also written
+//     as a zero-amount confirm-audit row by the live path — those add 0, so
+//     keeping the type in is harmless.)
+//   - Split-ledger types the live write paths actually use now:
+//     `booking_payment` (the real Stripe booking charge — the PRIMARY revenue
+//     stream, createBookingWithDebit), `booking_modification_fee` (reschedule
+//     fee, real Stripe, non-refundable — modifyBookingWithFee), and
+//     `purchased_spend` (Buy Now consumables sale from purchasedBalance —
+//     createPurchaseWithDebit). These were the gap: the split-ledger rewrite
+//     moved every real booking/consumable charge onto these values, but this
+//     list was never updated, so completed bookings reported 0 revenue and
+//     refunds pushed it negative (the refund was counted, the original charge
+//     wasn't). Fixed 2026-07-24 (financial audit F1).
+//
+// No double-counting: a live booking writes exactly one `booking_payment`
+// (its charge) plus a zero-amount `booking` audit row; a Buy Now writes one
+// `purchased_spend`; a bulk order one `purchase`. An earned-credit discount
+// on any of them is a separate `earned_spend` row, deliberately NOT counted
+// here (earned credits are promotional issuance, not money received — the
+// charge row already reflects the post-discount amount actually collected).
+// `topup`/`purchased_topup` (money into a user's own wallet, not revenue) and
+// `earned_grant`/`earned_spend` stay excluded.
+const REVENUE_TRANSACTION_TYPES: TransactionType[] = [
+  "booking",
+  "purchase",
+  "refund",
+  "booking_payment",
+  "booking_modification_fee",
+  "purchased_spend",
+];
 
 const revenueTransactionInclude = {
   booking: { select: { listing: { select: { companyId: true, company: { select: { name: true } } } } } },

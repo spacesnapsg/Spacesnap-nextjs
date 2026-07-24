@@ -2,6 +2,8 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { payoutCadenceForSupplierTier } from "@/lib/booking-payments";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
+import { sgdToCredits } from "@/lib/credit-units";
+import { supplierGrossForBase } from "@/lib/pricing";
 
 // Live-computed, never stored denormalized — same "SUM over the ledger"
 // principle as getCreditBalance (lib/credits.ts). A company's pending
@@ -38,8 +40,10 @@ export async function createCompletedBookingPayable(tx: Prisma.TransactionClient
     include: { listing: true },
   });
 
-  const commissionAmount = booking.sgdAmount.mul(booking.platformCommissionPercent).div(100).toDecimalPlaces(2);
-  const grossAmount = booking.sgdAmount.sub(commissionAmount);
+  // The supplier is paid (100 - commission)% of their BASE price; SpaceSnap's
+  // cut is everything else the member paid (the markup + commission% of base).
+  const grossAmount = supplierGrossForBase(booking.baseAmount, booking.platformCommissionPercent);
+  const commissionAmount = booking.sgdAmount.sub(grossAmount).toDecimalPlaces(2);
   const { tier } = await getCompanySupplierTier(booking.listing.companyId, tx);
 
   await tx.supplierPayable.create({
@@ -47,6 +51,7 @@ export async function createCompletedBookingPayable(tx: Prisma.TransactionClient
       companyId: booking.listing.companyId,
       bookingId: booking.id,
       grossAmount,
+      commissionAmount,
       penaltyDeduction: new Prisma.Decimal(0),
       netAmount: grossAmount,
       payoutCadence: payoutCadenceForSupplierTier(tier),

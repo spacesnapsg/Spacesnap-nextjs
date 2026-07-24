@@ -8,7 +8,7 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, ListingType, BookingType, type Listing } from "../app/generated/prisma/client";
+import { PrismaClient, ListingType, BookingType, Prisma, type Listing } from "../app/generated/prisma/client";
 import { createBookingWithDebit, confirmBookingWithAudit, declineBookingPendingResolution } from "./bookings";
 import { createCheckIn, checkOutCheckIn } from "./check-ins";
 import { getSupplierPendingPayableBalance } from "./supplier-payables";
@@ -77,6 +77,43 @@ async function completeBooking(userId: string, listing: Listing, startDate: stri
   await checkOutCheckIn(checkIn.id);
   return booking;
 }
+
+describe("createCompletedBookingPayable — markup/commission split (F2)", () => {
+  // The product owner's worked example, end to end through the real payable
+  // path: supplier base 100, member charged 150 (50% markup), 10% commission.
+  // Supplier is paid 90% of BASE (90); SpaceSnap keeps the markup + 10% of
+  // base (60 = 150 - 90).
+  test("base 100 @ 50% markup / 10% commission → supplier 90, SpaceSnap 60", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id, "100.00");
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(10),
+        endDate: daysFromNow(10),
+        cost: new Prisma.Decimal("150.00"), // marked-up marketplace price
+        baseAmount: new Prisma.Decimal("100.00"), // supplier's base
+        commissionPercent: new Prisma.Decimal("10"),
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await confirmBookingWithAudit(booking.id);
+      const checkIn = await createCheckIn({ userId: user.id, listingId: listing.id, bookingId: booking.id });
+      await checkOutCheckIn(checkIn.id);
+
+      const payable = await prisma.supplierPayable.findUniqueOrThrow({ where: { bookingId: booking.id } });
+      assert.equal(payable.grossAmount.toString(), "90");
+      assert.equal(payable.commissionAmount.toString(), "60");
+      assert.equal(payable.netAmount.toString(), "90");
+      // Reconciliation identity: member paid (150) = SpaceSnap (60) + supplier (90).
+      assert.equal(payable.commissionAmount.add(payable.netAmount).toString(), booking.sgdAmount.toString());
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
 
 describe("getSupplierPendingPayableBalance", () => {
   test("returns zero for a company with no SupplierPayable rows at all", async () => {
