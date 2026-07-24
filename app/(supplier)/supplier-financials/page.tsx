@@ -251,8 +251,7 @@ export default function SupplierFinancialsPage() {
           Accounts Receivable, Receipts &amp; Invoices
         </h3>
         <p className="text-sm text-muted-text">
-          Not wired yet — there&apos;s no Invoice, Receipt, or payout concept in the schema at
-          all (Sprint 6&apos;s Stripe integration is unbuilt). Tracked as a backend gap.
+          Coming soon — invoice and receipt management will appear here in a future release.
         </p>
       </Card>
 

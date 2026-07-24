@@ -25,6 +25,7 @@ export function serializeBulkOrderRequest(request: BulkOrderRequest | BulkOrderR
     estimatedDeliveryDate: request.estimatedDeliveryDate ? request.estimatedDeliveryDate.toISOString().slice(0, 10) : null,
     cancellationRequestedAt: request.cancellationRequestedAt ? request.cancellationRequestedAt.toISOString() : null,
     cancellationReason: request.cancellationReason,
+    declineReason: request.declineReason,
     createdAt: request.createdAt.toISOString(),
     updatedAt: request.updatedAt.toISOString(),
     ...("listing" in request ? { listingName: request.listing.name } : {}),
@@ -221,7 +222,7 @@ export class BulkOrderNotDeclinableError extends Error {
 // debited for a pending/confirmed bulk order. Releases the hold if declining
 // from `confirmed` (a `pending` decline never had one — releaseHoldForBulkOrder
 // is a no-op in that case).
-export async function declineBulkOrder(bulkOrderRequestId: bigint): Promise<BulkOrderRequest> {
+export async function declineBulkOrder(bulkOrderRequestId: bigint, reason?: string): Promise<BulkOrderRequest> {
   return prisma.$transaction(async (tx) => {
     const request = await tx.bulkOrderRequest.findUniqueOrThrow({ where: { id: bulkOrderRequestId } });
     if (request.status !== BulkOrderStatus.pending && request.status !== BulkOrderStatus.confirmed) {
@@ -232,7 +233,7 @@ export async function declineBulkOrder(bulkOrderRequestId: bigint): Promise<Bulk
 
     const updated = await tx.bulkOrderRequest.update({
       where: { id: bulkOrderRequestId },
-      data: { status: BulkOrderStatus.cancelled },
+      data: { status: BulkOrderStatus.cancelled, declineReason: reason ?? null },
     });
 
     await tx.activityLog.create({

@@ -316,14 +316,17 @@ export default function SupplierRequestsPage() {
     });
   }
 
-  function handleDeclineConfirm() {
+  function handleDeclineConfirm(reason: string) {
     if (!declineTarget) return;
     setActionError(null);
-    declineBooking.mutate(declineTarget.id, {
-      onError: (error) => {
-        setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong.");
-      },
-    });
+    declineBooking.mutate(
+      { id: declineTarget.id, reason },
+      {
+        onError: (error) => {
+          setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong.");
+        },
+      }
+    );
     setDeclineTarget(null);
   }
 
@@ -359,14 +362,17 @@ export default function SupplierRequestsPage() {
     });
   }
 
-  function handleDeclineBulkOrderConfirm() {
+  function handleDeclineBulkOrderConfirm(reason: string) {
     if (!declineBulkOrderTarget) return;
     setActionError(null);
-    declineBulkOrder.mutate(declineBulkOrderTarget.id, {
-      onError: (error) => {
-        setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong.");
-      },
-    });
+    declineBulkOrder.mutate(
+      { id: declineBulkOrderTarget.id, reason },
+      {
+        onError: (error) => {
+          setActionError(error instanceof ApiRequestError ? error.message : "Something went wrong.");
+        },
+      }
+    );
     setDeclineBulkOrderTarget(null);
   }
 
@@ -463,7 +469,7 @@ export default function SupplierRequestsPage() {
                     onDecline={(id, name) => setDeclineTarget({ id, name })}
                     isMutating={
                       (confirmBooking.isPending && confirmBooking.variables === booking.id) ||
-                      (declineBooking.isPending && declineBooking.variables === booking.id)
+                      (declineBooking.isPending && declineBooking.variables?.id === booking.id)
                     }
                   />
                 ))
@@ -496,7 +502,7 @@ export default function SupplierRequestsPage() {
                     onReviewCancellation={(id, name, reason) => setCancellationReviewTarget({ id, name, reason })}
                     isMutating={
                       (confirmBulkOrder.isPending && confirmBulkOrder.variables?.id === request.id) ||
-                      (declineBulkOrder.isPending && declineBulkOrder.variables === request.id) ||
+                      (declineBulkOrder.isPending && declineBulkOrder.variables?.id === request.id) ||
                       (fulfillBulkOrder.isPending && fulfillBulkOrder.variables === request.id) ||
                       (approveCancellation.isPending && approveCancellation.variables === request.id) ||
                       (rejectCancellation.isPending && rejectCancellation.variables === request.id)

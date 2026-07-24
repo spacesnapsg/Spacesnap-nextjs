@@ -13,6 +13,7 @@ export interface SupplierBulkOrderRequest {
   estimatedDeliveryDate: string | null;
   cancellationRequestedAt: string | null;
   cancellationReason: string | null;
+  declineReason: string | null;
   listingName?: string;
   userName?: string;
   userEmail?: string;
@@ -60,9 +61,10 @@ export function useConfirmBulkOrder() {
 export function useDeclineBulkOrder() {
   const invalidate = useInvalidateSupplierBulkOrders();
   return useMutation({
-    mutationFn: (id: string) =>
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
       apiFetch<{ bulkOrderRequest: SupplierBulkOrderRequest }>(`/api/supplier/bulk-order-requests/${id}/decline`, {
         method: "PATCH",
+        body: JSON.stringify({ reason }),
       }),
     onSuccess: invalidate,
   });

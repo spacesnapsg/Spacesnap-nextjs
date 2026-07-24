@@ -232,8 +232,8 @@ export default function FinancialsPage() {
           Payment Methods
         </h2>
         <p className="text-sm text-muted-text">
-          Payment methods aren&apos;t available yet — Stripe integration is planned for Sprint 6. Top-ups
-          are credits-only for now (no real charge occurs).
+          Saved-card management is coming soon. Top-ups are credits-only for now — for bookings, you can
+          already pay by card at checkout.
         </p>
       </Card>
 

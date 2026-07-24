@@ -551,8 +551,7 @@ export default function UserDashboardPage() {
       <Card className="mb-6">
         <h2 className="text-lg font-semibold text-body-text mb-2">Currently Active</h2>
         <p className="text-sm text-muted-text">
-          Not wired yet — there&apos;s no GET endpoint to list active check-ins (only POST create and
-          PATCH check-out exist). Tracked as a backend gap.
+          Coming soon — live check-in status will appear here once kiosk check-in is rolled out.
         </p>
       </Card>
 

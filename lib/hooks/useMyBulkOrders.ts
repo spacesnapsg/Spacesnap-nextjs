@@ -13,6 +13,7 @@ export interface MyBulkOrderRequest {
   estimatedDeliveryDate: string | null;
   cancellationRequestedAt: string | null;
   cancellationReason: string | null;
+  declineReason: string | null;
   listingName?: string;
   createdAt: string;
   updatedAt: string;

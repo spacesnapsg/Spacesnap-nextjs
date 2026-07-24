@@ -7,7 +7,7 @@ import { serializeBulkOrderRequest, declineBulkOrder, BulkOrderNotDeclinableErro
 
 // No refund logic needed here (unlike booking decline) — credits are only
 // ever debited at fulfillment, never at request creation. See lib/bulk-orders.ts.
-export async function PATCH(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSupplier();
   if ("error" in auth) return auth.error;
 
@@ -24,8 +24,14 @@ export async function PATCH(_request: Request, { params }: { params: Promise<{ i
     return forbiddenResponse("You do not have access to this bulk order request.");
   }
 
+  const body = await request.json().catch(() => null);
+  const reason =
+    body && typeof body === "object" && typeof (body as Record<string, unknown>).reason === "string"
+      ? ((body as Record<string, unknown>).reason as string)
+      : undefined;
+
   try {
-    const updated = await declineBulkOrder(bulkOrderRequestId);
+    const updated = await declineBulkOrder(bulkOrderRequestId, reason);
     return NextResponse.json({ bulkOrderRequest: serializeBulkOrderRequest(updated) });
   } catch (error) {
     if (error instanceof BulkOrderNotDeclinableError) {

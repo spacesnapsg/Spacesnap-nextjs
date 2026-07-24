@@ -1607,6 +1607,10 @@ model BulkOrderRequest {
   // cleared, status stays confirmed).
   cancellationRequestedAt DateTime?       @map("cancellation_requested_at")
   cancellationReason      String?         @map("cancellation_reason")
+  // Supplier-authored, set once on decline (see declineBulkOrder in
+  // lib/bulk-orders.ts) — distinct from cancellationReason above, which is
+  // buyer-authored and part of the cancellation-request pair.
+  declineReason           String?         @map("decline_reason")
   createdAt               DateTime        @default(now()) @map("created_at")
   updatedAt               DateTime        @updatedAt @map("updated_at")
 

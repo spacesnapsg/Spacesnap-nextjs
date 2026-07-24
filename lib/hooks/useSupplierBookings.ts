@@ -70,8 +70,11 @@ export function useConfirmBooking() {
 export function useDeclineBooking() {
   const invalidate = useInvalidateSupplierBookings();
   return useMutation({
-    mutationFn: (id: string) =>
-      apiFetch<{ booking: SupplierBooking }>(`/api/supplier/bookings/${id}/decline`, { method: "PATCH" }),
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      apiFetch<{ booking: SupplierBooking }>(`/api/supplier/bookings/${id}/decline`, {
+        method: "PATCH",
+        body: JSON.stringify({ reason }),
+      }),
     onSuccess: invalidate,
   });
 }

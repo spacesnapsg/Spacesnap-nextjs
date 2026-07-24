@@ -207,6 +207,25 @@ describe("declineBulkOrder", () => {
     }
   });
 
+  test("persists the supplier's decline reason", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createConsumablesListing(company.id);
+      const bulkOrderRequest = await createBulkOrder({
+        userId: user.id,
+        listingId: listing.id,
+        quantity: 1,
+        cost: listing.pricePerUnit!,
+      });
+
+      const updated = await declineBulkOrder(bulkOrderRequest.id, "Out of stock");
+      assert.equal(updated.declineReason, "Out of stock");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
   test("a confirmed request can still be declined", async () => {
     const company = await createCompany();
     const user = await createUser();
