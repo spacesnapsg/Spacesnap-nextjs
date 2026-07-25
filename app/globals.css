@@ -1,2 +1,116 @@
 @import "tailwindcss";
 @config "../tailwind.config.ts";
+
+/* Marketing "Features" (platform/marketplace) page motion */
+@keyframes ss-marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+@keyframes ss-pulse-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss-marquee-track {
+    animation: none !important;
+  }
+}
+
+/* Fluid type + layout for the Features page (design uses fixed px) */
+.ss-h1 {
+  font-size: 86px;
+}
+.ss-lede {
+  font-size: 22px;
+}
+.ss-h2 {
+  font-size: 52px;
+}
+.ss-cta-h {
+  font-size: 44px;
+}
+.ss-pad {
+  padding-left: 56px;
+  padding-right: 56px;
+}
+.ss-difference {
+  padding: 110px 56px 96px;
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: 64px;
+  align-items: center;
+}
+.ss-cta {
+  position: relative;
+  overflow: hidden;
+  margin: 0 56px 96px;
+  padding: 72px 64px;
+  border-radius: 26px;
+  border: 1px solid rgba(77, 184, 176, 0.3);
+  background: linear-gradient(
+    140deg,
+    rgba(77, 184, 176, 0.16),
+    rgba(10, 14, 20, 0.2)
+  );
+  box-shadow: inset 0 0 120px rgba(77, 184, 176, 0.08),
+    0 40px 120px -50px rgba(77, 184, 176, 0.6);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 44px;
+  align-items: center;
+  justify-content: space-between;
+}
+.ss-card:hover {
+  transform: translateY(-8px);
+  border-color: rgba(77, 184, 176, 0.55);
+  box-shadow: 0 26px 70px -28px rgba(77, 184, 176, 0.55),
+    inset 0 0 60px rgba(77, 184, 176, 0.06);
+}
+.ss-passport-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 40px 100px -26px rgba(77, 184, 176, 0.95);
+}
+.ss-cta-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 0 70px rgba(77, 184, 176, 0.95);
+}
+
+@media (max-width: 860px) {
+  .ss-hero {
+    padding: 72px 24px 56px !important;
+  }
+  .ss-pad {
+    padding-left: 24px !important;
+    padding-right: 24px !important;
+  }
+  .ss-h1 {
+    font-size: 52px;
+  }
+  .ss-lede {
+    font-size: 18px;
+  }
+  .ss-h2 {
+    font-size: 34px;
+  }
+  .ss-cta-h {
+    font-size: 30px;
+  }
+  .ss-difference {
+    grid-template-columns: 1fr;
+    gap: 36px;
+    padding: 64px 24px;
+  }
+  .ss-cta {
+    margin: 0 24px 64px;
+    padding: 44px 28px;
+  }
+}

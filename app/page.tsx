@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Home as HomeIcon, Zap, CheckCircle } from "lucide-react";
 import MarketingNavbar from "@/components/MarketingNavbar";
 import MarketingFooter from "@/components/MarketingFooter";
+import Reveal from "@/components/marketing/Reveal";
 
 const CTA_CLASSES =
   "inline-flex items-center justify-center h-12 px-8 rounded-full font-semibold text-sm uppercase tracking-wide transition-shadow bg-user-teal-end text-white ring-[5px] ring-[rgba(27,158,152,0.1)] shadow-[0_0_0_rgba(0,255,179,0)] hover:shadow-[0_0_24px_12px_rgba(0,255,179,0.3)]";
@@ -90,7 +91,7 @@ export default function Home() {
       </section>
 
       <section className="px-6 py-20">
-        <div className="max-w-2xl mx-auto text-center">
+        <Reveal className="max-w-2xl mx-auto text-center">
           <h2 className="text-3xl font-medium text-white">
             What is SpaceSnap?
           </h2>
@@ -99,8 +100,7 @@ export default function Home() {
             access to regulated spaces, so members skip the
             capex, reduce their opex and operators skip the liability risk plus increase utilization rate of their offerings.
           </p>
-          
-        </div>
+        </Reveal>
       </section>
 
       <section className="px-6 py-20 border-t border-border">
@@ -117,14 +117,14 @@ export default function Home() {
             accessible experience for all members.
           </p>
           <div className="mt-10 grid gap-10 sm:grid-cols-3">
-            {BENEFITS.map(({ icon: Icon, title, description }) => (
-              <div key={title}>
+            {BENEFITS.map(({ icon: Icon, title, description }, i) => (
+              <Reveal key={title} delay={i * 120}>
                 <div className="w-12 h-12 rounded-full border border-border flex items-center justify-center">
                   <Icon className="w-5 h-5 text-white" />
                 </div>
                 <h3 className="mt-4 font-semibold text-white">{title}</h3>
                 <p className="mt-2 text-sm text-muted-text">{description}</p>
-              </div>
+              </Reveal>
             ))}
           </div>
         </div>
@@ -290,7 +290,7 @@ export default function Home() {
               className="object-cover"
             />
           </div>
-          <div className="text-center md:text-left flex flex-col items-center md:items-start">
+          <Reveal className="text-center md:text-left flex flex-col items-center md:items-start">
             <h2 className="text-3xl font-medium text-white">
               Skip the friction, get in before the launch.
             </h2>
@@ -300,7 +300,7 @@ export default function Home() {
             <Link href="/signup" className={`inline-flex mt-8 ${CTA_CLASSES}`}>
               Claim Founding Access
             </Link>
-          </div>
+          </Reveal>
         </div>
       </section>
 

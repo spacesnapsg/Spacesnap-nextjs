@@ -7,6 +7,17 @@ import { usePathname } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import Navbar from "./Navbar";
 
+const PLATFORM_LINKS = [
+  { label: "Marketplace", href: "/platform/marketplace" },
+  { label: "Digital Passport", href: "/platform/digital-passport" },
+];
+
+const SOLUTIONS_LINKS = [
+  { label: "For Startups", href: "/solutions/startups" },
+  { label: "For Space Providers", href: "/solutions/space-providers" },
+  { label: "For Suppliers", href: "/solutions/suppliers" },
+];
+
 const RESOURCES_LINKS = [
   { label: "Product Roadmap", href: "/resources/product-roadmap" },
   { label: "SpaceSnap Insights", href: "/resources/insights" },
@@ -29,9 +40,17 @@ function NavLink({ href, label }: { href: string; label: string }) {
   );
 }
 
-function ResourcesDropdown() {
+function NavDropdown({
+  label,
+  links,
+}: {
+  label: string;
+  links: { label: string; href: string }[];
+}) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pathname = usePathname();
+  const isActive = links.some(({ href }) => pathname === href);
 
   useEffect(() => {
     if (!open) return;
@@ -52,22 +71,24 @@ function ResourcesDropdown() {
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
-        className="flex items-center gap-1 text-sm text-muted-text hover:text-white transition-colors"
+        className={`flex items-center gap-1 text-sm transition-colors ${
+          isActive ? "text-white" : "text-muted-text hover:text-white"
+        }`}
       >
-        Resources
+        {label}
         <ChevronDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && (
         <div className="absolute left-0 top-full mt-3 w-56 rounded-card border border-border bg-card p-2 z-50">
-          {RESOURCES_LINKS.map(({ label, href }) => (
+          {links.map(({ label: linkLabel, href }) => (
             <Link
               key={href}
               href={href}
               onClick={() => setOpen(false)}
               className="block rounded px-3 py-2 text-sm text-muted-text hover:bg-background hover:text-white transition-colors"
             >
-              {label}
+              {linkLabel}
             </Link>
           ))}
         </div>
@@ -108,8 +129,10 @@ export default function MarketingNavbar() {
       <div className="flex flex-col xl:flex-row xl:items-center gap-3 xl:gap-8">
         <NavLink href="/" label="Home" />
         <NavLink href="/about" label="About Us" />
+        <NavDropdown label="Platform" links={PLATFORM_LINKS} />
+        <NavDropdown label="Solutions" links={SOLUTIONS_LINKS} />
         <NavLink href="/partners" label="Partners" />
-        <ResourcesDropdown />
+        <NavDropdown label="Resources" links={RESOURCES_LINKS} />
       </div>
     </Navbar>
   );
