@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Digital Passport — example UI capture</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --card: #151a23;
+    --border: #1f2937;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --hint: #6b7280;
+    --teal-start: #1a9d96;
+    --teal-end: #4db8b0;
+    --amber: #f59e0b;
+    --green: #22c55e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #05070b;
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 16px 48px;
+    min-height: 100vh;
+  }
+  .caption {
+    font-size: 13px;
+    color: var(--hint);
+    letter-spacing: 0.02em;
+    margin-bottom: 16px;
+    text-align: center;
+    max-width: 880px;
+  }
+  .caption b { color: var(--muted); font-weight: 600; }
+  /* 4:5 portrait frame — screenshot THIS (or the whole page). */
+  .frame {
+    width: 880px;
+    max-width: 100%;
+    aspect-ratio: 4 / 5;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 40px 120px -50px rgba(0,0,0,0.9);
+    padding: 40px 40px 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  .h-title {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, var(--teal-start), var(--teal-end));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin: 0;
+  }
+  .h-sub { font-size: 15px; color: var(--muted); margin: 6px 0 0; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .profile { display: flex; align-items: center; gap: 20px; }
+  .avatar {
+    width: 84px; height: 84px; border-radius: 50%; flex: none;
+    background: linear-gradient(150deg, var(--teal-end), var(--teal-start));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; font-weight: 800; color: #04100c;
+  }
+  .p-name { font-size: 24px; font-weight: 800; margin: 0; }
+  .p-role { font-size: 14px; color: var(--muted); margin: 4px 0 0; }
+  .p-meta { display: flex; gap: 22px; margin-top: 12px; flex-wrap: wrap; }
+  .p-meta span { font-size: 13px; color: var(--hint); display: inline-flex; align-items: center; gap: 7px; }
+  .p-meta svg { opacity: 0.7; }
+
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .stat {
+    border-radius: 16px; padding: 22px 24px;
+    background: linear-gradient(150deg, rgba(77,184,176,0.9), rgba(26,157,150,0.9));
+    color: #04120e;
+  }
+  .stat.alt {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .stat .lbl { font-size: 13px; font-weight: 700; letter-spacing: 0.01em; display: inline-flex; align-items: center; gap: 8px; }
+  .stat .big { font-size: 40px; font-weight: 900; letter-spacing: -0.02em; margin: 10px 0 2px; }
+  .stat .big small { font-size: 18px; font-weight: 700; opacity: 0.7; }
+  .stat .note { font-size: 12.5px; opacity: 0.85; }
+
+  .section-title { font-size: 16px; font-weight: 700; margin: 0 0 14px; display: inline-flex; align-items: center; gap: 9px; }
+  .section-title .ic { color: var(--teal-end); }
+
+  .badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .badge {
+    border: 1px solid var(--border); border-radius: 14px; padding: 16px 14px;
+    background: #10151d; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 9px;
+  }
+  .badge.earned { border-color: rgba(77,184,176,0.45); background: rgba(77,184,176,0.08); }
+  .badge .disc {
+    width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: #1b222d; color: var(--hint);
+  }
+  .badge.earned .disc { background: linear-gradient(150deg, var(--teal-end), var(--teal-start)); color: #04120e; }
+  .badge .bname { font-size: 12.5px; font-weight: 600; line-height: 1.3; color: var(--text); }
+  .badge .bstat { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .badge.earned .bstat { color: var(--teal-end); }
+  .badge:not(.earned) .bstat { color: var(--hint); }
+</style>
+</head>
+<body>
+  <div class="caption">
+    <b>Digital Passport — example UI (4:5 portrait).</b> Screenshot the framed card below (or the whole page) and send it back — it becomes the image in the marketing placeholder.
+  </div>
+
+  <div class="frame">
+    <div>
+      <h1 class="h-title">Digital Passport</h1>
+      <p class="h-sub">Your certifications, training, and credentials in one place</p>
+    </div>
+
+    <!-- Profile -->
+    <div class="card profile">
+      <div class="avatar">AT</div>
+      <div>
+        <p class="p-name">Alex Tan</p>
+        <p class="p-role">Research Scientist · Nimbus Bio</p>
+        <div class="p-meta">
+          <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>alex.tan@nimbusbio.co</span>
+          <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Member since Mar 2026</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="row">
+      <div class="stat">
+        <div class="lbl"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>Certifications</div>
+        <div class="big">3<small> / 3</small></div>
+        <div class="note">All required certifications earned</div>
+      </div>
+      <div class="stat alt">
+        <div class="lbl" style="color:var(--teal-end)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>Proficiencies</div>
+        <div class="big">7</div>
+        <div class="note" style="color:var(--muted)">Verified at source by operators & manufacturers</div>
+      </div>
+    </div>
+
+    <!-- Proficiency badges -->
+    <div class="card">
+      <p class="section-title"><span class="ic"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg></span>Proficiency Badges</p>
+      <div class="badges">
+        <div class="badge earned">
+          <div class="disc"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div class="bname">Basic Safety Induction</div>
+          <div class="bstat">Earned</div>
+        </div>
+        <div class="badge earned">
+          <div class="disc"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div class="bname">Fume Hood Handling</div>
+          <div class="bstat">Earned</div>
+        </div>
+        <div class="badge earned">
+          <div class="disc"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div class="bname">Fire Safety Marshal</div>
+          <div class="bstat">Earned</div>
+        </div>
+        <div class="badge earned">
+          <div class="disc"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div class="bname">PCR Thermocycler</div>
+          <div class="bstat">Earned</div>
+        </div>
+        <div class="badge">
+          <div class="disc"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <div class="bname">BSL-2 Containment</div>
+          <div class="bstat">Locked</div>
+        </div>
+        <div class="badge">
+          <div class="disc"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <div class="bname">Cold Room Access</div>
+          <div class="bstat">Locked</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

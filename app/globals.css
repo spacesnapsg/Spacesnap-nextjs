@@ -84,6 +84,113 @@
   box-shadow: 0 0 70px rgba(77, 184, 176, 0.95);
 }
 
+/* Platform › Digital Passport page */
+.dp-hero-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+}
+.dp-hero-copy {
+  padding: 104px 56px 96px;
+}
+.dp-hero-visual {
+  border-left: 1px solid rgba(229, 231, 235, 0.1);
+  padding: 56px 56px 56px 48px;
+  display: flex;
+  align-items: center;
+}
+.dp-pad {
+  padding-left: 56px;
+  padding-right: 56px;
+}
+.dp-section {
+  padding-top: 92px;
+  padding-bottom: 96px;
+}
+.dp-diff {
+  padding: 96px 56px 104px;
+}
+.dp-cta {
+  padding: 76px 56px;
+}
+.dp-h1 {
+  font-size: 84px;
+}
+.dp-lede {
+  font-size: 21.5px;
+}
+.dp-h2 {
+  font-size: 44px;
+}
+.dp-cta-h {
+  font-size: 46px;
+}
+.dp-compare-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.dp-cred-row:hover {
+  background: rgba(229, 231, 235, 0.025);
+}
+.dp-cta-btn:hover {
+  transform: translateY(-3px);
+}
+
+@media (max-width: 860px) {
+  .dp-hero-grid {
+    grid-template-columns: 1fr;
+  }
+  .dp-hero-copy {
+    padding: 72px 24px 48px;
+  }
+  .dp-hero-visual {
+    border-left: none;
+    border-top: 1px solid rgba(229, 231, 235, 0.1);
+    padding: 40px 24px 56px;
+  }
+  .dp-pad {
+    padding-left: 24px !important;
+    padding-right: 24px !important;
+  }
+  .dp-section {
+    padding-top: 64px;
+    padding-bottom: 64px;
+  }
+  .dp-diff {
+    padding: 64px 24px 72px;
+  }
+  .dp-cta {
+    padding: 52px 24px;
+  }
+  .dp-h1 {
+    font-size: 50px;
+  }
+  .dp-lede {
+    font-size: 18px;
+  }
+  .dp-h2 {
+    font-size: 32px;
+  }
+  .dp-cta-h {
+    font-size: 32px;
+  }
+  .dp-compare-grid {
+    grid-template-columns: 1fr;
+  }
+  .dp-cred-row {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+  .dp-cred-issuer {
+    text-align: left !important;
+    padding-top: 0 !important;
+  }
+  .dp-stats {
+    grid-template-columns: 1fr !important;
+    gap: 18px !important;
+  }
+}
+
 @media (max-width: 860px) {
   .ss-hero {
     padding: 72px 24px 56px !important;

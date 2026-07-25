@@ -127,7 +127,7 @@ export default function MarketplaceFeatures() {
         overflow: "hidden",
       }}
     >
-      {/* Ambient glows + grid */}
+      {/* Ambient glows only — no grid overlay, matching the landing page's (app/page.tsx) hero styling */}
       <div
         aria-hidden
         style={{
@@ -170,18 +170,6 @@ export default function MarketplaceFeatures() {
             borderRadius: "50%",
             background:
               "radial-gradient(circle at 50% 50%, rgba(125,212,205,0.14), rgba(125,212,205,0.05) 44%, rgba(125,212,205,0) 74%)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 720,
-            backgroundImage: `linear-gradient(rgba(${A},0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(${A},0.045) 1px, transparent 1px)`,
-            backgroundSize: "84px 84px",
-            opacity: 0.5,
           }}
         />
       </div>
