@@ -314,8 +314,9 @@ export default function AboutUs() {
             proving it.
           </p>
           <p data-reveal className="au-p-md">
-            The equipment I needed sat behind six-figure price tags and
-            multi-year leases. It was tough in ways I didn&apos;t expect.
+            The equipment I needed sat behind huge price tags and spaces
+            expect multi-year memberships. It was tough in ways I
+            didn&apos;t expect.
           </p>
         </div>
       </section>
@@ -376,7 +377,7 @@ export default function AboutUs() {
             Singapore&apos;s incubation scene.
           </p>
           <p data-reveal className="au-p-md">
-            For five years, I helped run the very infrastructure I&apos;d
+            For five years, I built and ran the very infrastructure I&apos;d
             once been locked out of.
           </p>
         </div>
@@ -523,17 +524,17 @@ export default function AboutUs() {
             None of this is anyone&apos;s fault.
           </p>
           <p data-reveal className="au-p-md">
-            Every new user means manual vetting. Every unknown face is
-            liability the operator carries alone. Access is sold in years,
-            not sessions. And lean teams burn runway buying what they only
-            needed to borrow.
+            A membership is how an operator buys safety: one vetted tenant
+            instead of forty strangers. One contract instead of endless
+            paperwork. Steady revenue instead of a lumpy trickle.
           </p>
           <p
             data-reveal
             className="au-p-lg"
             style={{ color: ACCENT, margin: 0 }}
           >
-            There was simply no layer of trust between a person and a door.
+            Every fear is rational — and every fear points the same way.
+            Sell years, not sessions.
           </p>
         </div>
       </section>
@@ -589,11 +590,14 @@ export default function AboutUs() {
             The realization
           </span>
           <p data-reveal className="au-p-lg">
-            The missing piece was never space — Singapore has world-class
-            facilities.
+            The missing piece was never space. Singapore has world-class
+            facilities sitting idle — and founders who need them going
+            without.
           </p>
           <p data-reveal className="au-p-md">
-            The missing piece was portable, verifiable trust.
+            It was a frozen market: demand too scattered for any one
+            operator to serve, supply too rigid for any founder to use.
+            Each side waiting for the other to move first.
           </p>
         </div>
       </section>
@@ -681,12 +685,14 @@ export default function AboutUs() {
             className="au-p-built"
             style={{ color: "#e6edf3", margin: 0 }}
           >
-            The Digital Passport: your verified training and equipment
-            competencies, carried with you across facilities.
+            So we built the layer that lets both sides move: the Digital
+            Passport.
           </p>
           <p data-reveal className="au-p-md">
-            Prove yourself once, and it travels with you. The door —
-            literally — unlocks.
+            Operators list idle hours at no risk and no admin — verification,
+            compliance and access run themselves. Founders carry it across
+            every facility: prove yourself once, book the session, not the
+            year. The door — literally — unlocks.
           </p>
         </div>
       </section>
@@ -745,7 +751,7 @@ export default function AboutUs() {
         <div data-reveal className="au-cta-card">
           <h3 className="au-cta-h">Building something — or running a facility?</h3>
           <p className="au-cta-p">
-            Get access to the facilities and equipment you need, or open your
+            Get access to the facilities and equipment you need, or release your
             capacity to verified users without carrying the liability alone.
           </p>
           <Link
