@@ -13,10 +13,14 @@ export default function Reveal({
   children,
   className,
   delay = 0,
+  distance = 44,
+  duration = 760,
 }: {
   children: React.ReactNode;
   className?: string;
   delay?: number;
+  distance?: number;
+  duration?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -30,13 +34,18 @@ export default function Reveal({
     // Already in view on load — leave it alone (no flash).
     if (el.getBoundingClientRect().top <= vh * 0.92) return;
 
+    const ease = "cubic-bezier(.16,.84,.44,1)";
     el.style.opacity = "0";
-    el.style.transform = "translateY(20px)";
-    el.style.transition = `opacity 640ms cubic-bezier(.2,.7,.2,1) ${delay}ms, transform 640ms cubic-bezier(.2,.7,.2,1) ${delay}ms`;
+    el.style.transform = `translateY(${distance}px)`;
+    el.style.willChange = "opacity, transform";
+    el.style.transition = `opacity ${duration}ms ${ease} ${delay}ms, transform ${duration}ms ${ease} ${delay}ms`;
 
     const show = () => {
       el.style.opacity = "1";
       el.style.transform = "none";
+      window.setTimeout(() => {
+        el.style.willChange = "auto";
+      }, duration + delay);
     };
 
     const io = new IntersectionObserver(
@@ -57,7 +66,7 @@ export default function Reveal({
       io.disconnect();
       window.clearTimeout(safety);
     };
-  }, [delay]);
+  }, [delay, distance, duration]);
 
   return (
     <div ref={ref} className={className}>

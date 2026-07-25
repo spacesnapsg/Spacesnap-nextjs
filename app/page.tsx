@@ -84,10 +84,12 @@ export default function Home() {
             }}
           />
         </div>
-        <p className="relative max-w-3xl text-2xl sm:text-3xl md:text-4xl font-medium leading-snug text-white text-center">
-          The hardest part of a good idea isn&apos;t the idea. It&apos;s the
-          friction of proving it.
-        </p>
+        <Reveal className="relative max-w-3xl">
+          <p className="text-2xl sm:text-3xl md:text-4xl font-medium leading-snug text-white text-center">
+            The hardest part of a good idea isn&apos;t the idea. It&apos;s the
+            friction of proving it.
+          </p>
+        </Reveal>
       </section>
 
       <section className="px-6 py-20">
@@ -105,20 +107,22 @@ export default function Home() {
 
       <section className="px-6 py-20 border-t border-border">
         <div className="max-w-6xl mx-auto">
-          <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-user-teal-end">
-            <span className="inline-block w-1 h-3.5 bg-user-teal-end" />
-            Benefits
-          </p>
-          <h2 className="mt-2 text-3xl font-medium text-white">
-            Why join SpaceSnap?
-          </h2>
-          <p className="mt-3 text-muted-text max-w-xl">
-            SpaceSnap is designed to provide a seamless, secure, and
-            accessible experience for all members.
-          </p>
+          <Reveal>
+            <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-user-teal-end">
+              <span className="inline-block w-1 h-3.5 bg-user-teal-end" />
+              Benefits
+            </p>
+            <h2 className="mt-2 text-3xl font-medium text-white">
+              Why join SpaceSnap?
+            </h2>
+            <p className="mt-3 text-muted-text max-w-xl">
+              SpaceSnap is designed to provide a seamless, secure, and
+              accessible experience for all members.
+            </p>
+          </Reveal>
           <div className="mt-10 grid gap-10 sm:grid-cols-3">
             {BENEFITS.map(({ icon: Icon, title, description }, i) => (
-              <Reveal key={title} delay={i * 120}>
+              <Reveal key={title} delay={150 + i * 150}>
                 <div className="w-12 h-12 rounded-full border border-border flex items-center justify-center">
                   <Icon className="w-5 h-5 text-white" />
                 </div>
@@ -263,7 +267,7 @@ export default function Home() {
             }}
           />
         </div>
-        <div className="relative max-w-6xl mx-auto">
+        <Reveal className="relative max-w-6xl mx-auto">
           <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-user-teal-end">
             <span className="inline-block w-1 h-3.5 bg-user-teal-end" />
             Founding Offer
@@ -277,20 +281,20 @@ export default function Home() {
             line to shape which equipment and facilities we bring on. Tell us
             what you need, and we&apos;ll build the access around it.
           </p>
-        </div>
+        </Reveal>
       </section>
 
       <section className="px-6 py-24">
         <div className="max-w-6xl mx-auto grid md:grid-cols-2 gap-10 items-center">
-          <div className="relative h-64 md:h-80 rounded-card overflow-hidden">
+          <Reveal className="relative h-64 md:h-80 rounded-card overflow-hidden">
             <Image
               src="/green-lab.jpg.webp"
               alt="Shared lab space"
               fill
               className="object-cover"
             />
-          </div>
-          <Reveal className="text-center md:text-left flex flex-col items-center md:items-start">
+          </Reveal>
+          <Reveal delay={140} className="text-center md:text-left flex flex-col items-center md:items-start">
             <h2 className="text-3xl font-medium text-white">
               Skip the friction, get in before the launch.
             </h2>
