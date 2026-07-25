@@ -10,6 +10,7 @@ import Navbar from "./Navbar";
 const PLATFORM_LINKS = [
   { label: "Marketplace", href: "/platform/marketplace" },
   { label: "Digital Passport", href: "/platform/digital-passport" },
+  { label: "List & Fill", href: "/platform/list-and-fill" },
 ];
 
 const SOLUTIONS_LINKS = [
@@ -97,7 +98,17 @@ function NavDropdown({
   );
 }
 
-export default function MarketingNavbar() {
+export default function MarketingNavbar({
+  accent = "teal",
+}: {
+  /** Supplier-facing pages (e.g. List & Fill) use the purple accent instead of the default member teal. */
+  accent?: "teal" | "purple";
+}) {
+  const signInClass =
+    accent === "purple"
+      ? "bg-supplier-purple-start hover:bg-supplier-purple-end"
+      : "bg-user-teal-end hover:bg-user-teal-start";
+
   return (
     <Navbar
       logo={
@@ -112,7 +123,7 @@ export default function MarketingNavbar() {
       actions={
         <Link
           href="/login"
-          className="inline-flex items-center justify-center h-10 px-5 rounded-full text-sm font-semibold bg-user-teal-end hover:bg-user-teal-start text-white transition-colors"
+          className={`inline-flex items-center justify-center h-10 px-5 rounded-full text-sm font-semibold text-white transition-colors ${signInClass}`}
         >
           Sign In
         </Link>

@@ -191,6 +191,75 @@
   }
 }
 
+/* Platform › List & Fill page */
+.lf-hero {
+  padding: 104px 56px 100px;
+}
+.lf-pad {
+  padding-left: 56px;
+  padding-right: 56px;
+}
+.lf-section {
+  padding-top: 96px;
+  padding-bottom: 96px;
+}
+.lf-cta {
+  padding: 92px 56px 96px;
+}
+.lf-h1 {
+  font-size: 62px;
+}
+.lf-h2 {
+  font-size: 44px;
+}
+.lf-lede {
+  font-size: 20px;
+}
+.lf-cta-h {
+  font-size: 44px;
+}
+.lf-toggle:hover {
+  border-color: rgba(147, 51, 234, 0.5);
+}
+.lf-hero-cta:hover,
+.lf-cta-btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 20px 50px -22px rgba(147, 51, 234, 0.9);
+}
+
+@media (max-width: 860px) {
+  .lf-hero {
+    padding: 72px 24px 56px;
+    gap: 40px !important;
+  }
+  .lf-pad {
+    padding-left: 24px !important;
+    padding-right: 24px !important;
+  }
+  .lf-section {
+    padding-top: 64px;
+    padding-bottom: 64px;
+  }
+  .lf-cta {
+    padding: 64px 24px 72px;
+  }
+  .lf-h1 {
+    font-size: 38px;
+  }
+  .lf-h2 {
+    font-size: 30px;
+  }
+  .lf-lede {
+    font-size: 17px;
+  }
+  .lf-cta-h {
+    font-size: 30px;
+  }
+  .lf-grid6 {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+}
+
 /* About Us page */
 @keyframes au-breathe {
   0%,

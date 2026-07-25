@@ -21,6 +21,7 @@ const SOCIAL_LINKS = [
 const PLATFORM_LINKS = [
   { label: "Marketplace", href: "/platform/marketplace" },
   { label: "Digital Passport", href: "/platform/digital-passport" },
+  { label: "List & Fill", href: "/platform/list-and-fill" },
 ];
 
 const SOLUTIONS_LINKS = [
