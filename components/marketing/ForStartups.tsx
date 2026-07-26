@@ -59,18 +59,23 @@ const FEATURES = [
     title: "Spend follows experiments, not floor area.",
     body: "Pay-as-you-go access to equipment and space. Take an instrument for a day, a cleanroom for a week, and stop when the run is done.",
     shot: "Marketplace booking flow",
+    shotUrl:
+      "https://pub-aee5a0705b5048b3bc38888dd602aeac.r2.dev/marketing/for-startups/booking-flow-v2.png",
   },
   {
     eyebrow: "One passport, every space",
     title: "Onboard once, work anywhere.",
     body: "Once you're verified competent, nothing's in your way. Your Digital Passport carries every sign-off across the network, so the next facility already knows you're cleared before you arrive.",
     shot: "Digital Passport credential view",
+    shotUrl:
+      "https://pub-aee5a0705b5048b3bc38888dd602aeac.r2.dev/marketing/for-startups/passport-card.png" as string | undefined,
   },
   {
     eyebrow: "Walk in cleared",
     title: "Once you're cleared, walk on in.",
     body: "Kiosk check-in verifies your credentials at the door. Quick, secure, fuss-free.",
     shot: "Kiosk check-in",
+    shotUrl: undefined as string | undefined,
   },
 ];
 
@@ -341,6 +346,180 @@ function TrackCheckpoint({
   );
 }
 
+// "Walk in cleared" feature shot — ported from the Claude Design project's
+// "Kiosk Check-in Illustration.dc.html" (kiosk stand, scanning beam, a
+// confirmation card, a visitor icon walking through, all in the site's own
+// teal line-art palette already, so no re-skin was needed). The source used
+// fixed-pixel background divs (a radial glow, a dot-grid) sized for a literal
+// 1200x675 canvas; folded those into the same <svg viewBox> as the line art
+// (gradient + pattern defs) so the whole illustration scales responsively
+// inside the feature slot's 16:10 container instead of assuming a fixed px
+// canvas. The two looping accents (loading-bar sweep, scan-line ping) are
+// driven by fs-kiosk-sweep/fs-kiosk-scan in globals.css, which also carries
+// the prefers-reduced-motion override.
+function KioskIllustration() {
+  return (
+    <svg
+      viewBox="0 0 1200 675"
+      preserveAspectRatio="xMidYMid slice"
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+      }}
+    >
+      <defs>
+        <radialGradient id="fs-kiosk-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="rgba(26,157,150,0.17)" />
+          <stop offset="45%" stopColor="rgba(26,157,150,0.05)" />
+          <stop offset="70%" stopColor="transparent" />
+        </radialGradient>
+        <pattern id="fs-kiosk-dots" width={3} height={3} patternUnits="userSpaceOnUse">
+          <circle cx={1} cy={1} r={0.5} fill="rgba(255,255,255,0.05)" />
+        </pattern>
+      </defs>
+
+      <rect width={1200} height={675} fill="#0a0e14" />
+      <circle cx={792} cy={297} r={390} fill="url(#fs-kiosk-glow)" />
+      <rect width={1200} height={675} fill="url(#fs-kiosk-dots)" opacity={0.5} />
+
+      <g
+        fill="none"
+        stroke="#4db8b0"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        style={{ filter: "drop-shadow(0 0 9px rgba(77,184,176,0.4))" }}
+      >
+        <path d="M90 566h1020" stroke="rgba(77,184,176,0.3)" />
+        <path d="M150 566l36-24M270 566l36-24M990 566l36-24M1080 566l36-24" stroke="rgba(77,184,176,0.14)" />
+
+        <g stroke="rgba(77,184,176,0.22)">
+          <path d="M596 96h520" strokeDasharray="8 12" />
+          <path d="M1116 96v470" />
+        </g>
+
+        <g>
+          <rect x={716} y={150} width={272} height={416} rx={3} stroke="rgba(77,184,176,0.5)" />
+          <rect x={734} y={166} width={236} height={400} rx={2} stroke="rgba(77,184,176,0.28)" />
+          <path
+            d="M760 166v400M786 166v400M812 166v400M838 166v400M864 166v400M890 166v400M916 166v400M942 166v400"
+            stroke="rgba(77,184,176,0.13)"
+          />
+          <rect x={768} y={212} width={168} height={120} rx={2} stroke="rgba(77,184,176,0.35)" />
+          <path d="M768 272h168M852 212v120" stroke="rgba(77,184,176,0.2)" />
+          <circle cx={748} cy={378} r={7} stroke="rgba(127,212,205,0.95)" />
+          <path d="M742 370v-8c0-4 3-7 7-7" stroke="rgba(127,212,205,0.7)" />
+          <path
+            d="M980 300c22-8 30 8 30 22M1002 344c26-4 38 10 40 26M986 254c18-12 30-4 36 6"
+            stroke="rgba(127,212,205,0.4)"
+            strokeDasharray="5 8"
+          />
+        </g>
+
+        <g>
+          <rect x={596} y={248} width={96} height={128} rx={6} stroke="rgba(77,184,176,0.75)" fill="rgba(26,157,150,0.05)" />
+          <rect x={608} y={260} width={72} height={66} rx={3} fill="rgba(26,157,150,0.1)" stroke="rgba(77,184,176,0.4)" />
+          <text
+            x={644}
+            y={288}
+            textAnchor="middle"
+            fill="#7fd4cd"
+            stroke="none"
+            style={{ fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: "0.12em" }}
+          >
+            NOW
+          </text>
+          <text
+            x={644}
+            y={304}
+            textAnchor="middle"
+            fill="#7fd4cd"
+            stroke="none"
+            style={{ fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 600, letterSpacing: "0.12em" }}
+          >
+            LOADING
+          </text>
+          <path d="M615 316h58" stroke="rgba(77,184,176,0.25)" strokeWidth={4} />
+          <path
+            className="fs-kiosk-sweep"
+            d="M615 316h40"
+            stroke="#7fd4cd"
+            strokeWidth={4}
+            strokeDasharray={74}
+          />
+          <circle cx={644} cy={344} r={9} stroke="rgba(127,212,205,0.8)" />
+          <path d="M638 344h12" stroke="rgba(127,212,205,0.5)" />
+          <path d="M614 364h60" stroke="rgba(77,184,176,0.85)" strokeWidth={4} />
+          <path d="M692 300h24" stroke="rgba(77,184,176,0.2)" strokeDasharray="4 6" />
+        </g>
+
+        <g>
+          <rect
+            x={598}
+            y={386}
+            width={140}
+            height={92}
+            rx={8}
+            fill="#0a0e14"
+            stroke="#7fd4cd"
+            style={{ filter: "drop-shadow(0 0 18px rgba(127,212,205,0.6))" }}
+          />
+          <path d="M598 412h140" stroke="rgba(127,212,205,0.5)" />
+          <circle cx={626} cy={446} r={13} stroke="rgba(127,212,205,0.9)" />
+          <path d="M621 442h10M621 450h7" stroke="rgba(127,212,205,0.5)" />
+          <path d="M652 438h66M652 456h44" stroke="rgba(127,212,205,0.62)" />
+          <path d="M612 400h28" stroke="rgba(127,212,205,0.8)" />
+          <path d="M744 432c14-16 22-34 22-52" stroke="rgba(127,212,205,0.5)" strokeDasharray="6 8" />
+          <path d="M760 388l6 -8 6 10" stroke="rgba(127,212,205,0.7)" />
+        </g>
+
+        <g stroke="rgba(77,184,176,0.95)">
+          <circle cx={272} cy={222} r={32} />
+          <path d="M240 216c2-26 62-26 64 0" stroke="rgba(77,184,176,0.7)" />
+          <path d="M258 220h6M280 220h6" />
+          <path d="M266 238c4 3 8 3 12 0" />
+          <path d="M252 252v8c0 5-4 8-9 9M292 252v8c0 5 4 8 9 9" />
+          <path d="M272 254v28" stroke="rgba(77,184,176,0.5)" />
+          <path d="M234 314c0-20 16-32 38-32s38 12 38 32l-4 86h-68z" />
+          <path d="M236 328c-16 14-24 34-22 56 1 14 4 26 8 36" stroke="rgba(77,184,176,0.85)" />
+          <path d="M222 420l-4 14" stroke="rgba(77,184,176,0.6)" />
+          <path d="M308 328c20 6 38 16 52 28l38 22" />
+          <path d="M272 400v34" stroke="rgba(77,184,176,0.4)" />
+          <path d="M242 400l-8 76 2 86" />
+          <path d="M230 566h34" stroke="rgba(77,184,176,0.7)" />
+          <path d="M302 400l10 74-30 78" />
+          <path d="M272 550l32 10" stroke="rgba(77,184,176,0.7)" />
+        </g>
+
+        <g>
+          <rect
+            x={392}
+            y={336}
+            width={46}
+            height={84}
+            rx={7}
+            stroke="rgba(127,212,205,0.95)"
+            fill="rgba(10,14,20,0.9)"
+            style={{ filter: "drop-shadow(0 0 12px rgba(127,212,205,0.5))" }}
+          />
+          <path d="M392 350h46M392 406h46" stroke="rgba(127,212,205,0.4)" />
+          <path d="M405 344h20" stroke="rgba(127,212,205,0.6)" />
+          <circle cx={415} cy={378} r={12} stroke="rgba(127,212,205,0.85)" />
+          <path d="M409 374h12M409 382h8" stroke="rgba(127,212,205,0.55)" />
+          <path d="M398 328c-2-8 2-14 8-16" stroke="rgba(127,212,205,0.35)" />
+        </g>
+
+        <g>
+          <path className="fs-kiosk-scan" d="M452 330h124" stroke="#7fd4cd" strokeDasharray="10 12" />
+          <path d="M562 322l10 8-10 8" stroke="rgba(127,212,205,0.8)" />
+        </g>
+      </g>
+    </svg>
+  );
+}
+
 const STEPS = [
   { n: "1", title: "Create account", body: "Set up your team in a few minutes." },
   {
@@ -454,10 +633,9 @@ export default function ForStartups() {
 
       {/* Hero */}
       <section
-        className="fs-hero fs-pad"
+        className="fs-hero fs-hero-grid fs-pad"
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(400px, 1fr))",
           gap: 72,
           alignItems: "center",
         }}
@@ -541,46 +719,17 @@ export default function ForStartups() {
             </Link>
           </div>
         </div>
-        <div
+        <img
           data-reveal
+          src="https://pub-aee5a0705b5048b3bc38888dd602aeac.r2.dev/marketing/for-startups/hero-marketplace-grid.png"
+          alt="Marketplace listings — book verified lab space and equipment by the session"
           style={{
-            position: "relative",
-            background: "#151a23",
-            border: `1px solid rgba(${A},0.22)`,
+            width: "100%",
+            height: "auto",
             borderRadius: 16,
-            aspectRatio: "4 / 3",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 10,
-            boxShadow: `0 34px 100px -46px rgba(${A},0.6)`,
+            boxShadow: `0 34px 100px -46px rgba(${A},0.5)`,
           }}
-        >
-          <span
-            style={{
-              fontFamily: MONO,
-              fontSize: 11.5,
-              fontWeight: 600,
-              letterSpacing: "0.16em",
-              textTransform: "uppercase",
-              color: ACCENT,
-            }}
-          >
-            Coming soon
-          </span>
-          <span
-            style={{
-              fontSize: 14,
-              color: `rgba(${T},0.42)`,
-              maxWidth: "28ch",
-              textAlign: "center",
-              lineHeight: 1.5,
-            }}
-          >
-            A look at the marketplace booking flow.
-          </span>
-        </div>
+        />
       </section>
 
       {/* Problems */}
@@ -694,44 +843,72 @@ export default function ForStartups() {
               {f.body}
             </p>
           </div>
-          <div
-            style={{
-              order: i % 2 === 0 ? 2 : 1,
-              background: "#151a23",
-              border: `1px solid rgba(${A},0.18)`,
-              borderRadius: 16,
-              aspectRatio: "16 / 10",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-            }}
-          >
-            <span
+          {f.shotUrl ? (
+            <img
+              src={f.shotUrl}
+              alt={f.shot}
               style={{
-                fontFamily: MONO,
-                fontSize: 11.5,
-                fontWeight: 600,
-                letterSpacing: "0.16em",
-                textTransform: "uppercase",
-                color: `rgba(${A},0.8)`,
+                order: i % 2 === 0 ? 2 : 1,
+                width: "100%",
+                height: "auto",
+                borderRadius: 16,
+                boxShadow: `0 34px 100px -46px rgba(${A},0.5)`,
+              }}
+            />
+          ) : i === 2 ? (
+            <div
+              style={{
+                order: i % 2 === 0 ? 2 : 1,
+                borderRadius: 16,
+                aspectRatio: "16 / 10",
+                overflow: "hidden",
+                position: "relative",
               }}
             >
-              Coming soon
-            </span>
-            <span
+              <KioskIllustration />
+            </div>
+          ) : (
+            <div
               style={{
-                fontSize: 14,
-                color: `rgba(${T},0.4)`,
-                maxWidth: "30ch",
-                textAlign: "center",
-                lineHeight: 1.5,
+                order: i % 2 === 0 ? 2 : 1,
+                background: "#151a23",
+                border: `1px solid rgba(${A},0.18)`,
+                borderRadius: 16,
+                aspectRatio: "16 / 10",
+                overflow: "hidden",
+                position: "relative",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 10,
               }}
             >
-              {f.shot}
-            </span>
-          </div>
+              <span
+                style={{
+                  fontFamily: MONO,
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                  color: `rgba(${A},0.8)`,
+                }}
+              >
+                Coming soon
+              </span>
+              <span
+                style={{
+                  fontSize: 14,
+                  color: `rgba(${T},0.4)`,
+                  maxWidth: "30ch",
+                  textAlign: "center",
+                  lineHeight: 1.5,
+                }}
+              >
+                {f.shot}
+              </span>
+            </div>
+          )}
         </section>
       ))}
 

@@ -264,6 +264,9 @@
 .fs-hero {
   padding: 104px 0 96px;
 }
+.fs-hero-grid {
+  grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.6fr);
+}
 .fs-pad {
   padding-left: 56px;
   padding-right: 56px;
@@ -296,6 +299,9 @@
     padding: 72px 0 56px;
     gap: 40px !important;
   }
+  .fs-hero-grid {
+    grid-template-columns: 1fr !important;
+  }
   .fs-pad {
     padding-left: 24px !important;
     padding-right: 24px !important;
@@ -319,6 +325,37 @@
   }
   .fs-cta-h {
     font-size: 30px;
+  }
+}
+
+/* Kiosk check-in illustration (Solutions › For Startups, "Walk in cleared") */
+@keyframes fs-load-sweep {
+  0% {
+    stroke-dashoffset: 74;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes fs-scan-ping {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.fs-kiosk-sweep {
+  animation: fs-load-sweep 2.4s ease-in-out infinite;
+}
+.fs-kiosk-scan {
+  animation: fs-scan-ping 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fs-kiosk-sweep,
+  .fs-kiosk-scan {
+    animation: none !important;
   }
 }
 
