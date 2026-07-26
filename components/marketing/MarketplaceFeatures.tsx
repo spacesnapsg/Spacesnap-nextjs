@@ -26,6 +26,11 @@ const MONO = "var(--font-geist-mono), ui-monospace, monospace";
 // accent as bare rgb channels, for rgba(... , alpha) tints
 const A = "77,184,176";
 
+// "The difference" section image, uploaded to the R2 public bucket
+// (mirrors DigitalPassport.tsx's PASSPORT_SCREENSHOT_URL convention).
+const LAB_SPACE_PHOTO_URL =
+  "https://pub-aee5a0705b5048b3bc38888dd602aeac.r2.dev/marketing/marketplace-features/lab-space-v2.png";
+
 const FEATURES = [
   {
     num: "01",
@@ -494,25 +499,20 @@ export default function MarketplaceFeatures() {
               borderRadius: 20,
               overflow: "hidden",
               border: `1px solid rgba(${A},0.22)`,
-              background: `repeating-linear-gradient(135deg, rgba(${A},0.09) 0 9px, transparent 9px 18px)`,
-              aspectRatio: "4 / 3",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              aspectRatio: "16 / 9", // matches lab-space-v2.png's native 1328×744 ratio, avoids object-fit: cover cropping it
               boxShadow: `0 30px 90px -40px rgba(${A},0.6)`,
             }}
           >
-            <span
+            <img
+              src={LAB_SPACE_PHOTO_URL}
+              alt="A lab space listed on SpaceSnap"
               style={{
-                fontFamily: MONO,
-                fontSize: 12,
-                letterSpacing: "0.12em",
-                color: "rgba(229,231,235,0.5)",
-                textTransform: "uppercase",
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                display: "block",
               }}
-            >
-              lab space photo
-            </span>
+            />
           </div>
         </section>
 
