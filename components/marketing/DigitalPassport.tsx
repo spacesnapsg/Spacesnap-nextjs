@@ -27,8 +27,8 @@ const A = "77,184,176";
 // neutral text as bare channels
 const T = "229,231,235";
 
-// Example passport-UI capture (see public/passport-preview.html for the
-// source page), uploaded to the R2 public bucket.
+// Example passport-UI capture, uploaded to the R2 public bucket (the
+// capture-tool source page has since been cleaned up from public/).
 const PASSPORT_SCREENSHOT_URL =
   "https://pub-aee5a0705b5048b3bc38888dd602aeac.r2.dev/marketing/digital-passport/passport-ui.webp";
 

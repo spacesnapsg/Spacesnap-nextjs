@@ -14,7 +14,7 @@ export default function Page() {
     <div className="flex flex-col min-h-screen bg-background">
       <MarketingNavbar accent="purple" />
       <ListAndFill />
-      <MarketingFooter />
+      <MarketingFooter accent="purple" />
     </div>
   );
 }

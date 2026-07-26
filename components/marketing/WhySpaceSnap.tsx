@@ -4,7 +4,8 @@ import { useEffect } from "react";
 import Link from "next/link";
 
 /**
- * Solutions › For Startups marketing page.
+ * Platform › Why SpaceSnap? marketing page (originally "Solutions › For
+ * Startups" — moved under Platform and relabeled; content unchanged).
  *
  * Ported from the Claude Design project "For Startups v2" (`For Startups
  * v2.dc.html`) — its content, layout and scroll-reveal motion, but re-skinned
@@ -535,7 +536,7 @@ const STEPS = [
   { n: "4", title: "Tap in and work", body: "Check in at the kiosk and start." },
 ];
 
-export default function ForStartups() {
+export default function WhySpaceSnap() {
   // Scroll-reveal: elements starting below the fold fade/rise in on intersect.
   // Honours prefers-reduced-motion by showing everything immediately.
   useEffect(() => {
@@ -661,6 +662,12 @@ export default function ForStartups() {
               letterSpacing: "0.16em",
               textTransform: "uppercase",
               color: ACCENT,
+              border: `1px solid rgba(${A},0.3)`,
+              borderRadius: 999,
+              padding: "8px 16px",
+              background: `rgba(${A},0.06)`,
+              width: "fit-content",
+              whiteSpace: "nowrap",
             }}
           >
             <span
@@ -673,7 +680,7 @@ export default function ForStartups() {
                 animation: "ss-pulse-glow 2.2s ease-in-out infinite",
               }}
             />
-            Solutions · For Startups
+            SpaceSnap solves your problems
           </div>
           <h1
             className="fs-h1"
@@ -685,7 +692,14 @@ export default function ForStartups() {
             }}
           >
             Big-lab capability.{" "}
-            <span style={{ color: ACCENT }}>Startup-sized commitment.</span>
+            <span
+              style={{
+                color: ACCENT,
+                textShadow: `0 0 34px rgba(${A},0.5), 0 0 90px rgba(${A},0.22)`,
+              }}
+            >
+              Startup-sized commitment.
+            </span>
           </h1>
           <p
             className="fs-lede"

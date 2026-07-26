@@ -8,15 +8,10 @@ import { ChevronDown } from "lucide-react";
 import Navbar from "./Navbar";
 
 const PLATFORM_LINKS = [
+  { label: "Why SpaceSnap?", href: "/platform/why-spacesnap" },
   { label: "Marketplace", href: "/platform/marketplace" },
   { label: "Digital Passport", href: "/platform/digital-passport" },
   { label: "List & Fill", href: "/platform/list-and-fill" },
-];
-
-const SOLUTIONS_LINKS = [
-  { label: "For Startups", href: "/solutions/startups" },
-  { label: "For Space Providers", href: "/solutions/space-providers" },
-  { label: "For Suppliers", href: "/solutions/suppliers" },
 ];
 
 const RESOURCES_LINKS = [
@@ -125,12 +120,16 @@ export default function MarketingNavbar({
     accent === "purple"
       ? "bg-supplier-purple-start hover:bg-supplier-purple-end"
       : "bg-user-teal-end hover:bg-user-teal-start";
+  const logoSrc =
+    accent === "purple"
+      ? "/logos/spacesnap-wordmark-purple-transparent.png"
+      : "/logos/spacesnap-wordmark-transparent.png";
 
   return (
     <Navbar
       logo={
         <Image
-          src="/logos/spacesnap-wordmark-transparent.png"
+          src={logoSrc}
           alt="SpaceSnap"
           width={1403}
           height={274}
@@ -158,7 +157,6 @@ export default function MarketingNavbar({
         <NavLink href="/" label="Home" />
         <NavLink href="/about" label="About Us" />
         <NavDropdown label="Platform" links={PLATFORM_LINKS} />
-        <NavDropdown label="Solutions" links={SOLUTIONS_LINKS} />
         <NavLink href="/partners" label="Partners" />
         <NavDropdown label="Resources" links={RESOURCES_LINKS} />
       </div>

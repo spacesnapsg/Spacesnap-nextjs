@@ -1375,7 +1375,10 @@ export default function ListAndFill() {
         data-reveal
         className="lf-pad lf-cta"
         style={{
+          position: "relative",
+          overflow: "hidden",
           borderTop: `1px solid rgba(${T},0.1)`,
+          background: `linear-gradient(140deg, rgba(${A},0.18), rgba(21,26,35,0.4))`,
           display: "flex",
           flexWrap: "wrap",
           gap: 44,
@@ -1383,7 +1386,20 @@ export default function ListAndFill() {
           justifyContent: "space-between",
         }}
       >
-        <div style={{ maxWidth: "30ch" }}>
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: -280,
+            left: "22%",
+            width: 640,
+            height: 640,
+            borderRadius: "50%",
+            background: `radial-gradient(circle, rgba(${A},0.24), rgba(${A},0.06) 46%, transparent 72%)`,
+            pointerEvents: "none",
+          }}
+        />
+        <div style={{ position: "relative", maxWidth: "30ch" }}>
           <h2
             className="lf-cta-h"
             style={{
@@ -1411,16 +1427,19 @@ export default function ListAndFill() {
           href="/signup"
           className="lf-cta-btn"
           style={{
-            background: `linear-gradient(135deg, ${ACCENT_DEEP}, ${ACCENT})`,
-            color: ON_TEXT,
+            position: "relative",
+            background: "#151a23",
+            border: `1px solid rgba(${A_LIGHT},0.55)`,
+            color: ACCENT_LIGHT,
             padding: "20px 34px",
-            borderRadius: 12,
+            borderRadius: 999,
             fontSize: 17,
             fontWeight: 700,
             display: "inline-flex",
             alignItems: "center",
             gap: 12,
             whiteSpace: "nowrap",
+            boxShadow: `0 0 46px rgba(${A},0.55)`,
             transition: "transform 260ms ease, box-shadow 260ms ease",
           }}
         >

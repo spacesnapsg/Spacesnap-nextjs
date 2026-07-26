@@ -19,24 +19,35 @@ const SOCIAL_LINKS = [
 ];
 
 const PLATFORM_LINKS = [
+  { label: "Why SpaceSnap?", href: "/platform/why-spacesnap" },
   { label: "Marketplace", href: "/platform/marketplace" },
   { label: "Digital Passport", href: "/platform/digital-passport" },
   { label: "List & Fill", href: "/platform/list-and-fill" },
 ];
 
-const SOLUTIONS_LINKS = [
-  { label: "For Startups", href: "/solutions/startups" },
-  { label: "For Space Providers", href: "/solutions/space-providers" },
-  { label: "For Suppliers", href: "/solutions/suppliers" },
+const RESOURCES_LINKS = [
+  { label: "Product Roadmap", href: "/resources/product-roadmap" },
+  { label: "SpaceSnap Insights", href: "/resources/insights" },
+  { label: "Latest Releases", href: "/resources/latest-releases" },
 ];
 
-export default function MarketingFooter() {
+export default function MarketingFooter({
+  accent = "teal",
+}: {
+  /** Supplier-facing pages (e.g. List & Fill) use the purple wordmark instead of the default member teal. */
+  accent?: "teal" | "purple";
+}) {
+  const logoSrc =
+    accent === "purple"
+      ? "/logos/spacesnap-wordmark-purple-transparent.png"
+      : "/logos/spacesnap-wordmark-transparent.png";
+
   return (
     <footer className="mt-auto border-t border-border px-6 py-16">
       <div className="max-w-7xl mx-auto grid gap-12 sm:grid-cols-2 lg:grid-cols-[1.3fr_1fr_1fr_1fr]">
         <div className="lg:col-span-1">
           <Image
-            src="/logos/spacesnap-wordmark-transparent.png"
+            src={logoSrc}
             alt="SpaceSnap"
             width={1403}
             height={274}
@@ -66,9 +77,9 @@ export default function MarketingFooter() {
         </div>
 
         <div>
-          <h3 className="text-sm font-semibold text-white">Solutions</h3>
+          <h3 className="text-sm font-semibold text-white">Resources</h3>
           <ul className="mt-4 space-y-3">
-            {SOLUTIONS_LINKS.map(({ label, href }) => (
+            {RESOURCES_LINKS.map(({ label, href }) => (
               <li key={href}>
                 <Link
                   href={href}
