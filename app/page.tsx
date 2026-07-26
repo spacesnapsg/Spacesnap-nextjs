@@ -8,6 +8,11 @@ import Reveal from "@/components/marketing/Reveal";
 const CTA_CLASSES =
   "inline-flex items-center justify-center h-12 px-8 rounded-full font-semibold text-sm uppercase tracking-wide transition-shadow bg-user-teal-end text-white ring-[5px] ring-[rgba(27,158,152,0.1)] shadow-[0_0_0_rgba(0,255,179,0)] hover:shadow-[0_0_24px_12px_rgba(0,255,179,0.3)]";
 
+// "Shared lab space" section photo, uploaded to the R2 public bucket
+// (mirrors DigitalPassport.tsx's / MarketplaceFeatures.tsx's convention).
+const GREEN_LAB_PHOTO_URL =
+  "https://pub-aee5a0705b5048b3bc38888dd602aeac.r2.dev/marketing/landing/green-lab.jpg.webp";
+
 const BENEFITS = [
   {
     icon: HomeIcon,
@@ -288,7 +293,7 @@ export default function Home() {
         <div className="max-w-6xl mx-auto grid md:grid-cols-2 gap-10 items-center">
           <Reveal className="relative h-64 md:h-80 rounded-card overflow-hidden">
             <Image
-              src="/green-lab.jpg.webp"
+              src={GREEN_LAB_PHOTO_URL}
               alt="Shared lab space"
               fill
               className="object-cover"
