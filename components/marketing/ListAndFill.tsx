@@ -136,9 +136,9 @@ const QUEUE_DEFS = [
     id: "q3",
     asset: "Cell culture media — bulk",
     when: "40 units · collect Wed",
-    // Bulk orders settle off-platform — the supplier and member agree the
-    // price directly, no credits change hands. Shown as an indicative value
-    // only, never as a charged amount.
+    // Bulk orders settle off-platform — the supplier and member agree on
+    // the price directly, no credits change hands. Shown as an indicative
+    // value only, never as a charged amount.
     value: "~1,520 (indicative)",
     indicative: true,
     certs: ["Handling cert", "Bulk order"],
@@ -263,8 +263,6 @@ export default function ListAndFill() {
     };
   }, []);
 
-  const openCount = QUEUE_DEFS.filter((q) => !queueState[q.id]).length;
-
   return (
     <main
       style={{
@@ -304,7 +302,7 @@ export default function ListAndFill() {
         <div
           style={{
             position: "relative",
-            maxWidth: "32ch",
+            maxWidth: "36ch",
             display: "flex",
             flexDirection: "column",
             gap: 22,
@@ -321,7 +319,12 @@ export default function ListAndFill() {
               letterSpacing: "0.16em",
               textTransform: "uppercase",
               color: ACCENT,
+              border: `1px solid rgba(${A},0.3)`,
+              borderRadius: 999,
+              padding: "8px 16px",
+              background: `rgba(${A},0.06)`,
               width: "fit-content",
+              whiteSpace: "nowrap",
             }}
           >
             <span
@@ -334,7 +337,7 @@ export default function ListAndFill() {
                 animation: "ss-pulse-glow 2.2s ease-in-out infinite",
               }}
             />
-            For operators — List &amp; Fill
+            For operators with capacity to spare
           </div>
           <h1
             data-reveal
@@ -404,7 +407,7 @@ export default function ListAndFill() {
                 display: "inline-block",
               }}
             >
-              See the booking queue
+              Check out how it works
             </a>
           </div>
         </div>
@@ -754,7 +757,7 @@ export default function ListAndFill() {
               margin: 0,
             }}
           >
-            You only see requests you can actually approve.
+            You decide what needs your approval.
           </h2>
           <p
             style={{
@@ -765,9 +768,11 @@ export default function ListAndFill() {
               textWrap: "pretty",
             }}
           >
-            Required certificates are checked before a request reaches you. If
-            someone isn&apos;t cleared for the asset, they never land in your
-            queue. You confirm or decline — that&apos;s the whole job.
+            Turn on approval for a listing and every request waits for your
+            confirm or decline. Required certificates are checked first
+            either way — if someone isn&apos;t cleared for the asset, they
+            never reach you. Leave approval off, and a qualifying booking
+            confirms automatically.
           </p>
           <div
             style={{
@@ -820,8 +825,8 @@ export default function ListAndFill() {
             }}
           >
             Consumables come through the same queue, including bulk order
-            requests. Those settle off-platform — you and the buyer agree the
-            price directly.
+            requests. Those settle off-platform — you and the member agree on
+            the price directly.
           </p>
         </div>
 
@@ -836,18 +841,12 @@ export default function ListAndFill() {
         >
           <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
               padding: "20px 24px",
               borderBottom: `1px solid rgba(${T},0.1)`,
             }}
           >
             <span style={{ fontSize: 15, fontWeight: 700 }}>
               Incoming requests
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 11, color: ACCENT }}>
-              {openCount} awaiting you
             </span>
           </div>
           {QUEUE_DEFS.map((q) => {

@@ -67,7 +67,12 @@ function NavDropdown({
   }, [open]);
 
   return (
-    <div className="relative" ref={containerRef}>
+    <div
+      className="relative"
+      ref={containerRef}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
@@ -81,17 +86,29 @@ function NavDropdown({
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-3 w-56 rounded-card border border-border bg-card p-2 z-50">
-          {links.map(({ label: linkLabel, href }) => (
-            <Link
-              key={href}
-              href={href}
-              onClick={() => setOpen(false)}
-              className="block rounded px-3 py-2 text-sm text-muted-text hover:bg-background hover:text-white transition-colors"
-            >
-              {linkLabel}
-            </Link>
-          ))}
+        // pt-3 (not mt-3 on the inner box) keeps the gap above the panel
+        // inside this wrapper's own hit-area, so moving the mouse straight
+        // down from the button into the panel doesn't cross a dead zone
+        // and trigger onMouseLeave early.
+        <div className="absolute left-0 top-full pt-3 z-50">
+          <div className="w-56 rounded-card border border-border bg-card p-2">
+            {links.map(({ label: linkLabel, href }) => (
+              <Link
+                key={href}
+                href={href}
+                onClick={() => setOpen(false)}
+                className="group relative block rounded px-3 py-2 text-sm text-muted-text hover:text-white transition-colors"
+              >
+                <span className="relative">
+                  {linkLabel}
+                  <span
+                    aria-hidden
+                    className="absolute left-0 -bottom-0.5 h-px w-full origin-left scale-x-0 bg-user-teal-end transition-transform duration-300 ease-out group-hover:scale-x-100"
+                  />
+                </span>
+              </Link>
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -43,19 +43,19 @@ const CREDENTIALS = [
     num: "01",
     issuer: "Space operators",
     title: "Training proficiencies",
-    body: "What you're actually competent to run — assays, handling classes, containment levels — recorded against the person who assessed you.",
+    body: "What you're actually competent to run — assays, handling classes, emergency response — recorded against the person who assessed you.",
   },
   {
     num: "02",
     issuer: "Space operators",
     title: "Onboarding credentials",
-    body: "Site inductions, access clearances and safety briefings you've already completed, carried from one space to the next instead of repeated.",
+    body: "Site inductions and safety briefings for each space — quick and fuss-free to complete before you even book.",
   },
   {
     num: "03",
     issuer: "Manufacturers",
-    title: "Equipment & method validations",
-    body: "Sign-offs from the people who built the instrument or wrote the method. If you're cleared on the platform, the next lab can see it.",
+    title: "Equipment Training",
+    body: "Sign-offs from whoever built the equipment or maintains it. If you're cleared on the platform, the next lab can see it.",
   },
   {
     num: "04",
@@ -70,7 +70,7 @@ const BEFORE = [
   "Paper certificates chased over email",
   "Operators re-testing competence they can't verify",
   "Equipment sign-offs stuck with a former employer",
-  "Weeks of back-and-forth before you touch a bench",
+  "Significant time spent training",
 ];
 
 const AFTER = [
@@ -170,16 +170,20 @@ export default function DigitalPassport() {
             <div
               data-reveal
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 10,
                 fontFamily: MONO,
                 fontSize: 11.5,
-                letterSpacing: "0.18em",
+                letterSpacing: "0.16em",
                 textTransform: "uppercase",
-                color: `rgba(${T},0.45)`,
+                color: ACCENT,
+                border: `1px solid rgba(${A},0.3)`,
+                borderRadius: 999,
+                padding: "8px 16px",
                 marginBottom: 30,
-                display: "flex",
-                alignItems: "center",
-                gap: 14,
-                flexWrap: "wrap",
+                background: `rgba(${A},0.06)`,
+                width: "fit-content",
               }}
             >
               <span
@@ -192,15 +196,7 @@ export default function DigitalPassport() {
                   animation: "ss-pulse-glow 2s ease-in-out infinite",
                 }}
               />
-              <span>Feature 03</span>
-              <span
-                style={{
-                  width: 44,
-                  height: 1,
-                  background: `rgba(${T},0.25)`,
-                }}
-              />
-              <span style={{ color: ACCENT }}>Digital Passport</span>
+              For members who shouldn&apos;t have to prove it twice
             </div>
             <h1
               data-reveal

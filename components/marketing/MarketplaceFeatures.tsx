@@ -208,7 +208,7 @@ export default function MarketplaceFeatures() {
                 animation: "ss-pulse-glow 1.8s ease-in-out infinite",
               }}
             />
-            Features — for teams who need space now
+            For teams who need space now
           </div>
           <h1
             data-reveal

@@ -29,6 +29,13 @@ const A = "77,184,176";
 const A_DEEP = "26,157,150";
 // body text as bare channels (design's #e6edf3)
 const T = "230,237,243";
+// Operator-side accent (supplier-purple-start, tailwind.config.ts) — used
+// for the "Crossing over" beat where the narrative shifts to running
+// operator/incubator infrastructure, matching the site's teal=member /
+// purple=supplier convention (MarketingNavbar accent prop, List & Fill page).
+const OPERATOR_ACCENT = "#9333ea";
+const OP = "147,51,234";
+const OP_DEEP = "107,33,168"; // supplier-purple-end channels
 
 export default function AboutUs() {
   useEffect(() => {
@@ -102,7 +109,7 @@ export default function AboutUs() {
             if (e.isIntersecting) {
               panel.style.transform = "perspective(700px) rotateY(-58deg)";
               if (beam) beam.style.opacity = "1";
-              if (lock) lock.style.stroke = "rgba(77,184,176,0.25)";
+              if (lock) lock.style.stroke = "rgba(147,51,234,0.25)";
               doorIO?.unobserve(e.target);
             }
           });
@@ -188,23 +195,36 @@ export default function AboutUs() {
           width="132"
           height="143"
           fill="none"
-          stroke={ACCENT}
+          stroke="url(#au-hero-avatar-gradient)"
           strokeWidth={1.5}
           strokeLinecap="round"
           strokeLinejoin="round"
           style={{
             position: "relative",
-            filter: `drop-shadow(0 0 8px rgba(${A},0.55))`,
+            filter: "drop-shadow(0 0 8px rgba(112,118,205,0.55))",
           }}
         >
+          <defs>
+            <linearGradient
+              id="au-hero-avatar-gradient"
+              gradientUnits="userSpaceOnUse"
+              x1="60"
+              y1="8"
+              x2="60"
+              y2="128"
+            >
+              <stop offset="0%" stopColor={ACCENT} />
+              <stop offset="100%" stopColor={OPERATOR_ACCENT} />
+            </linearGradient>
+          </defs>
           <circle cx="60" cy="44" r="24" />
-          <path d="M36 40c2-18 46-18 48 0" stroke={`rgba(${A},0.75)`} />
+          <path d="M36 40c2-18 46-18 48 0" strokeOpacity={0.75} />
           <path d="M50 46h4M66 46h4" />
           <path d="M56 58c3 2 5 2 8 0" />
           <path d="M52 66v8c0 3-3 5-6 6M68 66v8c0 3 3 5 6 6" />
           <path d="M22 128c0-24 14-38 38-38s38 14 38 38" />
-          <path d="M60 90v14" stroke={`rgba(${A},0.5)`} />
-          <circle cx="60" cy="44" r="34" stroke={`rgba(${A},0.2)`} />
+          <path d="M60 90v14" strokeOpacity={0.5} />
+          <circle cx="60" cy="44" r="34" strokeOpacity={0.2} />
         </svg>
         <div
           style={{
@@ -321,7 +341,7 @@ export default function AboutUs() {
         </div>
       </section>
 
-      {/* Crossing over */}
+      {/* Crossing over — narrative shifts to the operator/supplier side */}
       <section className="au-story au-pad">
         <div data-reveal className="au-story-visual">
           <svg
@@ -329,10 +349,10 @@ export default function AboutUs() {
             width="100%"
             style={{
               maxWidth: 420,
-              filter: `drop-shadow(0 0 8px rgba(${A},0.4))`,
+              filter: `drop-shadow(0 0 8px rgba(${OP},0.4))`,
             }}
             fill="none"
-            stroke={ACCENT}
+            stroke={OPERATOR_ACCENT}
             strokeWidth={1.5}
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -343,15 +363,15 @@ export default function AboutUs() {
               width="150"
               height="212"
               rx="4"
-              stroke={`rgba(${A},0.45)`}
+              stroke={`rgba(${OP},0.45)`}
             />
             <path
               d="M38 24v212M56 24v212M74 24v212M92 24v212M110 24v212M128 24v212M146 24v212"
-              stroke={`rgba(${A},0.22)`}
+              stroke={`rgba(${OP},0.22)`}
             />
             <path
               d="M170 130h70"
-              stroke={`rgba(${A},0.35)`}
+              stroke={`rgba(${OP},0.35)`}
               strokeDasharray="5 7"
             />
             <circle cx="268" cy="120" r="13" />
@@ -362,14 +382,14 @@ export default function AboutUs() {
               width="76"
               height="88"
               rx="3"
-              stroke={`rgba(${A},0.55)`}
+              stroke={`rgba(${OP},0.55)`}
             />
             <path d="M56 104h56M56 118h38M56 132h48" />
             <circle cx="84" cy="156" r="8" />
           </svg>
         </div>
         <div className="au-story-copy">
-          <span data-reveal className="au-label">
+          <span data-reveal className="au-label" style={{ color: OPERATOR_ACCENT }}>
             Crossing over
           </span>
           <p data-reveal className="au-p-lg">
@@ -399,30 +419,63 @@ export default function AboutUs() {
             strokeLinecap="round"
             strokeLinejoin="round"
           >
+            <defs>
+              <linearGradient
+                id="au-divider-gradient"
+                gradientUnits="userSpaceOnUse"
+                x1="170"
+                y1="16"
+                x2="170"
+                y2="244"
+              >
+                <stop offset="0%" stopColor={ACCENT} />
+                <stop offset="100%" stopColor={OPERATOR_ACCENT} />
+              </linearGradient>
+            </defs>
             <path
               d="M170 16v228"
-              stroke={`rgba(${A},0.3)`}
+              stroke="url(#au-divider-gradient)"
+              strokeOpacity={0.55}
               strokeDasharray="4 8"
             />
+            {/* The user, stuck on their side — stays teal */}
             <circle cx="66" cy="112" r="13" />
             <path d="M66 125v50M48 142h36M56 214l10-31 10 31" />
             <path d="M118 96l14 14-14 14" stroke={`rgba(${A},0.5)`} />
+            {/* The locked door — the operator/supplier side, purple */}
             <rect
               x="212"
               y="42"
               width="102"
               height="176"
               rx="4"
-              stroke={`rgba(${A},0.45)`}
+              stroke={`rgba(${OP},0.45)`}
             />
-            <path d="M226 42v176" stroke={`rgba(${A},0.3)`} />
-            <rect x="238" y="60" width="62" height="140" rx="3" />
-            <circle cx="250" cy="132" r="4" />
-            <path d="M206 96l-14 14 14 14" stroke={`rgba(${A},0.5)`} />
+            <path d="M226 42v176" stroke={`rgba(${OP},0.3)`} />
+            <rect
+              x="238"
+              y="60"
+              width="62"
+              height="140"
+              rx="3"
+              stroke={OPERATOR_ACCENT}
+            />
+            <circle cx="250" cy="132" r="4" stroke={OPERATOR_ACCENT} />
+            <path d="M206 96l-14 14 14 14" stroke={`rgba(${OP},0.5)`} />
           </svg>
         </div>
         <div className="au-story-copy">
-          <span data-reveal className="au-label">
+          <span
+            data-reveal
+            className="au-label"
+            style={{
+              background: `linear-gradient(90deg, ${ACCENT}, ${OPERATOR_ACCENT})`,
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              color: "transparent",
+            }}
+          >
             Both sides losing
           </span>
           <p data-reveal className="au-p-lg">
@@ -632,13 +685,14 @@ export default function AboutUs() {
             strokeLinecap="round"
             strokeLinejoin="round"
           >
+            {/* The door — the operator/supplier side, purple */}
             <rect
               x="182"
               y="24"
               width="150"
               height="232"
               rx="4"
-              stroke={`rgba(${A},0.5)`}
+              stroke={`rgba(${OP},0.5)`}
             />
             <g
               data-door-panel
@@ -648,17 +702,17 @@ export default function AboutUs() {
                 transition: "transform 1100ms cubic-bezier(.3,.7,.2,1)",
               }}
             >
-              <rect x="194" y="34" width="128" height="212" rx="3" />
+              <rect x="194" y="34" width="128" height="212" rx="3" stroke={OPERATOR_ACCENT} />
               <path
                 d="M212 34v212M230 34v212M248 34v212M266 34v212M284 34v212M302 34v212"
-                stroke={`rgba(${A},0.22)`}
+                stroke={`rgba(${OP},0.22)`}
               />
               <circle
                 data-door-lock
                 cx="304"
                 cy="140"
                 r="6"
-                stroke={`rgba(${A},0.9)`}
+                stroke={`rgba(${OP},0.9)`}
                 style={{ transition: "stroke 700ms ease" }}
               />
             </g>
@@ -677,7 +731,17 @@ export default function AboutUs() {
           </svg>
         </div>
         <div className="au-story-copy" style={{ position: "relative" }}>
-          <span data-reveal className="au-label">
+          <span
+            data-reveal
+            className="au-label"
+            style={{
+              background: `linear-gradient(90deg, ${ACCENT}, ${OPERATOR_ACCENT})`,
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              WebkitTextFillColor: "transparent",
+              color: "transparent",
+            }}
+          >
             What we built
           </span>
           <p
