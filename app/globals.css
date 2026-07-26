@@ -260,6 +260,68 @@
   }
 }
 
+/* Solutions › For Startups page */
+.fs-hero {
+  padding: 104px 0 96px;
+}
+.fs-pad {
+  padding-left: 56px;
+  padding-right: 56px;
+}
+.fs-h1 {
+  font-size: 64px;
+}
+.fs-h2 {
+  font-size: 42px;
+}
+.fs-lede {
+  font-size: 20px;
+}
+.fs-cta {
+  padding: 72px 64px;
+}
+.fs-cta-h {
+  font-size: 46px;
+}
+.fs-step:hover {
+  border-color: rgba(77, 184, 176, 0.45);
+}
+.fs-cta-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 50px -22px rgba(77, 184, 176, 0.9);
+}
+
+@media (max-width: 860px) {
+  .fs-hero {
+    padding: 72px 0 56px;
+    gap: 40px !important;
+  }
+  .fs-pad {
+    padding-left: 24px !important;
+    padding-right: 24px !important;
+  }
+  .fs-feature {
+    padding-bottom: 64px !important;
+  }
+  .fs-h1 {
+    font-size: 38px;
+  }
+  .fs-h2 {
+    font-size: 30px;
+  }
+  .fs-lede {
+    font-size: 17px;
+  }
+  .fs-cta {
+    margin-left: 24px !important;
+    margin-right: 24px !important;
+    padding: 52px 24px;
+  }
+  .fs-cta-h {
+    font-size: 30px;
+  }
+}
+
 /* About Us page */
 @keyframes au-breathe {
   0%,
