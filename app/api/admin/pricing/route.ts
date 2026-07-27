@@ -10,13 +10,21 @@ import {
 
 // System-admin-only. Backs the "Pricing & Commission" panel on the admin
 // Financials page: the platform-wide defaults plus every company's per-supplier
-// overrides. Suppliers have no access to any of this.
-export async function GET() {
+// overrides (searchable + paginated — see listCompanyPricingOverrides).
+// Suppliers have no access to any of this.
+export async function GET(request: NextRequest) {
   const auth = await requireSystemAdmin();
   if ("error" in auth) return auth.error;
 
-  const [config, companies] = await Promise.all([getPlatformPricingConfig(), listCompanyPricingOverrides()]);
-  return NextResponse.json({ config: serializePlatformPricingConfig(config), companies });
+  const { searchParams } = new URL(request.url);
+  const search = searchParams.get("search") ?? undefined;
+  const page = Math.max(1, Number(searchParams.get("page")) || 1);
+
+  const [config, { companies, meta }] = await Promise.all([
+    getPlatformPricingConfig(),
+    listCompanyPricingOverrides({ search, page }),
+  ]);
+  return NextResponse.json({ config: serializePlatformPricingConfig(config), companies, meta });
 }
 
 // System-admin-only. Updates any subset of the platform default rates.

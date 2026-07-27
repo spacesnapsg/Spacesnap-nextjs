@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { Search } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
+import Pagination from "@/components/Pagination";
 import { ApiRequestError } from "@/lib/api-client";
 import {
   useAdminPricing,
@@ -145,7 +147,9 @@ function CompanyRow({ company, config }: { company: CompanyPricing; config: Plat
 // overrides. Placed on the admin Financials page; easy to relocate. Suppliers
 // have no access to any of this.
 export default function PricingCommissionCard() {
-  const { data, isLoading } = useAdminPricing();
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const { data, isLoading } = useAdminPricing({ search: search.trim() || undefined, page });
 
   return (
     <Card className="!p-0 overflow-hidden">
@@ -163,32 +167,52 @@ export default function PricingCommissionCard() {
         <>
           <PlatformDefaults config={data.config} />
 
-          <div className="px-6 pt-2 pb-1">
+          <div className="px-6 pt-2 pb-1 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted-text">Per-Supplier Overrides</h3>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-text pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search suppliers…"
+                className="w-full sm:w-56 bg-background border border-border/40 rounded py-2 pr-3 pl-9 text-xs text-body-text placeholder:text-muted-text focus:outline-none focus:border-admin-red-start transition-colors"
+              />
+            </div>
           </div>
           {data.companies.length === 0 ? (
-            <p className="text-sm text-muted-text text-center py-8">No suppliers yet.</p>
+            <p className="text-sm text-muted-text text-center py-8">
+              {search.trim() ? "No suppliers match your search." : "No suppliers yet."}
+            </p>
           ) : (
-            <div className="overflow-x-auto pb-2">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Supplier</th>
-                    {PRICING_FIELDS.map((f) => (
-                      <th key={f} className="py-2 px-3 text-xs font-medium uppercase tracking-wide text-muted-text">
-                        {PRICING_FIELD_LABELS[f]}
-                      </th>
+            <>
+              <div className="overflow-x-auto pb-2">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="py-2 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Supplier</th>
+                      {PRICING_FIELDS.map((f) => (
+                        <th key={f} className="py-2 px-3 text-xs font-medium uppercase tracking-wide text-muted-text">
+                          {PRICING_FIELD_LABELS[f]}
+                        </th>
+                      ))}
+                      <th className="py-2 px-6" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.companies.map((company) => (
+                      <CompanyRow key={company.companyId} company={company} config={data.config} />
                     ))}
-                    <th className="py-2 px-6" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.companies.map((company) => (
-                    <CompanyRow key={company.companyId} company={company} config={data.config} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-6">
+                <Pagination page={data.meta.page} pageSize={data.meta.perPage} total={data.meta.total} onPageChange={setPage} />
+              </div>
+            </>
           )}
         </>
       )}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AdminNotificationType } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireSupplier } from "@/lib/supplier-auth";
 import { ApiValidationError, validationErrorResponse } from "@/lib/api-errors";
@@ -10,6 +11,7 @@ import {
   serializeListing,
 } from "@/lib/listings";
 import { getListingRatingAggregates } from "@/lib/ratings";
+import { createAdminNotification } from "@/lib/admin-notifications";
 
 // Company-scoped listing management. Mirrors old SupplierListingController.
 export async function GET() {
@@ -68,6 +70,15 @@ export async function POST(request: NextRequest) {
           : {}),
       },
       include: { requiredCertificates: { include: { certificate: true } } },
+    });
+
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId }, select: { name: true } });
+    await createAdminNotification(prisma, {
+      type: AdminNotificationType.new_listing,
+      title: "New listing",
+      message: `${company.name} listed a new ${listing.type} listing: "${listing.name}".`,
+      relatedUserId: auth.userId,
+      relatedCompanyId: auth.companyId,
     });
 
     return NextResponse.json({ listing: serializeListing(listing) }, { status: 201 });

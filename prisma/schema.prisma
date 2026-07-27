@@ -1093,6 +1093,7 @@ model Company {
   supplierRewardRedemptions SupplierRewardRedemption[]
   joinRequests              CompanyJoinRequest[]
   supplierEdmCampaign       SupplierEdmCampaign?
+  adminNotifications        AdminNotification[]
 
   @@map("companies")
 }
@@ -1306,6 +1307,7 @@ model User {
   bannersUpdated            Banner[]                    @relation("BannerUpdatedBy")
   adminEdmCampaignsCreated  AdminEdmCampaign[]          @relation("AdminEdmCampaignCreatedBy")
   supplierEdmCampaignsMade  SupplierEdmCampaign[]       @relation("SupplierEdmCampaignCreatedBy")
+  adminNotifications        AdminNotification[]
 
   @@map("users")
 }
@@ -1356,6 +1358,7 @@ model Certificate {
   trainingSessions    TrainingSession[]
   signoffRequests     CertificateSignoffRequest[]
   notifications       Notification[]
+  adminNotifications  AdminNotification[]
 
   @@map("certificates")
 }
@@ -1676,6 +1679,7 @@ model Booking {
   supplierPayable      SupplierPayable?
   notifications        Notification[]
   companyTransactions  CompanyTransaction[]
+  adminNotifications   AdminNotification[]
 
   @@map("bookings")
 }
@@ -2142,6 +2146,57 @@ model Notification {
   relatedCertificate Certificate? @relation(fields: [relatedCertificateId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
+}
+
+// 2026-07-27 — admin-facing "what happened on the platform" feed, distinct
+// from Notification (which is per-user, e.g. "your booking was confirmed")
+// and Announcement (admin -> users broadcast, the opposite direction). This
+// is platform events -> every system admin. Deliberately not user-scoped —
+// system admins share one feed (no per-admin read/archive state), same
+// "small admin team, shared inbox" model as e.g. the Pending Approvals list
+// on the admin Overview page. isRead/isArchived are independent: a read
+// notification stays in the Active view until explicitly archived; archiving
+// is the only way to leave the Active view.
+enum AdminNotificationType {
+  new_user
+  new_supplier
+  new_booking
+  new_credential
+  // 2026-07-27 additions:
+  new_listing
+  // Buy Now only (createPurchaseWithDebit) — bulk orders are off-platform
+  // (no credits move, see the F3 fix note in Audit-LeftoverSprint.md) so
+  // they don't get a money-movement notification.
+  new_purchase
+  wallet_topup
+  refund
+
+  @@map("admin_notification_type")
+}
+
+model AdminNotification {
+  id                   BigInt                @id @default(autoincrement())
+  type                 AdminNotificationType
+  title                String
+  message              String
+  isRead               Boolean               @default(false) @map("is_read")
+  isArchived           Boolean               @default(false) @map("is_archived")
+  // All four are SetNull (not Cascade) — deleting the user/company/booking/
+  // certificate that triggered a notification shouldn't delete the admin's
+  // audit trail of it having happened, just the deep link.
+  relatedUserId        String?               @map("related_user_id")
+  relatedCompanyId     BigInt?               @map("related_company_id")
+  relatedBookingId     BigInt?               @map("related_booking_id")
+  relatedCertificateId BigInt?               @map("related_certificate_id")
+  createdAt            DateTime              @default(now()) @map("created_at")
+
+  relatedUser        User?        @relation(fields: [relatedUserId], references: [id], onDelete: SetNull)
+  relatedCompany     Company?     @relation(fields: [relatedCompanyId], references: [id], onDelete: SetNull)
+  relatedBooking     Booking?     @relation(fields: [relatedBookingId], references: [id], onDelete: SetNull)
+  relatedCertificate Certificate? @relation(fields: [relatedCertificateId], references: [id], onDelete: SetNull)
+
+  @@index([isArchived, createdAt])
+  @@map("admin_notifications")
 }
 
 // Sprint 6.12 — admin broadcast, deliberately NOT the Notification model's

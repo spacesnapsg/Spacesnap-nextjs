@@ -1,4 +1,5 @@
-import { ActivityActionType, type Prisma, type UserCertificate } from "@/app/generated/prisma/client";
+import { ActivityActionType, AdminNotificationType, type Prisma, type UserCertificate } from "@/app/generated/prisma/client";
+import { createAdminNotification } from "@/lib/admin-notifications";
 
 // Shared by both credentialing paths built for Sprint 4, Item 4 —
 // lib/quiz-attempts.ts (tier1_video_quiz, auto-graded) and
@@ -48,7 +49,10 @@ export async function issueCredential(
     },
   });
 
-  const certificate = await tx.certificate.findUniqueOrThrow({ where: { id: params.certificateId } });
+  const [certificate, user] = await Promise.all([
+    tx.certificate.findUniqueOrThrow({ where: { id: params.certificateId } }),
+    tx.user.findUniqueOrThrow({ where: { id: params.userId }, select: { name: true } }),
+  ]);
   await tx.notification.create({
     data: {
       userId: params.userId,
@@ -57,6 +61,13 @@ export async function issueCredential(
       message: `You earned the "${certificate.name}" certification.`,
       relatedCertificateId: params.certificateId,
     },
+  });
+  await createAdminNotification(tx, {
+    type: AdminNotificationType.new_credential,
+    title: "New credential earned",
+    message: `${user.name} earned the "${certificate.name}" credential.`,
+    relatedUserId: params.userId,
+    relatedCertificateId: params.certificateId,
   });
 
   return credential;

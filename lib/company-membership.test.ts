@@ -40,12 +40,14 @@ async function createUser(overrides: Partial<{ companyId: bigint; isSupplier: bo
 }
 
 async function cleanupUsers(userIds: string[]) {
+  await prisma.adminNotification.deleteMany({ where: { relatedUserId: { in: userIds } } });
   for (const id of userIds) {
     await prisma.user.delete({ where: { id } }).catch(() => {});
   }
 }
 
 async function cleanupCompanies(companyIds: bigint[]) {
+  await prisma.adminNotification.deleteMany({ where: { relatedCompanyId: { in: companyIds } } });
   for (const id of companyIds) {
     await prisma.company.delete({ where: { id } }).catch(() => {});
   }
@@ -63,6 +65,12 @@ describe("resolveCompanyMembership (real DB)", () => {
       const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
       assert.equal(updated.companyId?.toString(), result.company.id);
       assert.equal(updated.isSupplier, true);
+
+      // 2026-07-27 — admin-facing "new supplier" feed.
+      const adminNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: user.id } });
+      assert.equal(adminNotifications.length, 1);
+      assert.equal(adminNotifications[0].type, "new_supplier");
+      assert.equal(adminNotifications[0].relatedCompanyId?.toString(), result.company.id);
     } finally {
       await cleanupUsers([user.id]);
       const created = await prisma.company.findFirst({ where: { name } });
@@ -106,6 +114,10 @@ describe("resolveCompanyMembership (real DB)", () => {
       assert.equal(requests.length, 1);
       assert.equal(requests[0].status, "pending");
       assert.equal(requests[0].requestedByUserId, joiner.id);
+
+      // Not a supplier yet (pending admin approval) — no "new supplier" notification fires here.
+      const adminNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: joiner.id } });
+      assert.equal(adminNotifications.length, 0);
     } finally {
       await cleanupUsers([admin.id, joiner.id]);
       await cleanupCompanies([company.id]);
@@ -237,6 +249,14 @@ describe("company join-request queue (real DB)", () => {
       assert.equal(rejectedUser.companyId, null);
 
       assert.equal((await getPendingCompanyJoinRequests(company.id)).length, 0);
+
+      // 2026-07-27 — admin-approved joins fire "new supplier" too, not just
+      // the auto-joined paths; rejected never does.
+      const approvedNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: approved.id } });
+      assert.equal(approvedNotifications.length, 1);
+      assert.equal(approvedNotifications[0].type, "new_supplier");
+      const rejectedNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: rejected.id } });
+      assert.equal(rejectedNotifications.length, 0);
     } finally {
       await cleanupUsers([admin.id, approved.id, rejected.id]);
       await cleanupCompanies([company.id]);

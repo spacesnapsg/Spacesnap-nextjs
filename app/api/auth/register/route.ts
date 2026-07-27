@@ -1,10 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
+import { AdminNotificationType } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveBuyerOrgMembership } from "@/lib/buyer-organizations";
 import { resolveCompanyMembership } from "@/lib/company-membership";
 import { parseSignupRole, resolveIsMember } from "@/lib/signup-roles";
+import { createAdminNotification } from "@/lib/admin-notifications";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -104,6 +106,13 @@ export async function POST(request: Request) {
       referredByUserId,
       isMember: resolveIsMember(role),
     },
+  });
+
+  await createAdminNotification(prisma, {
+    type: AdminNotificationType.new_user,
+    title: "New account created",
+    message: `${user.name} (${user.email}) signed up.`,
+    relatedUserId: user.id,
   });
 
   // Org resolution happens after the account exists (resolveBuyerOrgMembership/

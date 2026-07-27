@@ -6,6 +6,7 @@ import {
   TransactionType,
   ActivityActionType,
   RewardGrantType,
+  AdminNotificationType,
   type Booking,
   type BookingCredit,
   Prisma,
@@ -32,6 +33,7 @@ import { sgdToCredits } from "@/lib/credit-units";
 import { platformCommissionForBooking, supplierGrossForBase } from "@/lib/pricing";
 import { getUserRewardTier, rebatePercentForTier } from "@/lib/reward-tiers";
 import { getCompanySupplierTier } from "@/lib/supplier-tiers";
+import { createAdminNotification } from "@/lib/admin-notifications";
 import type { ActivityQuery } from "@/lib/activity";
 
 export { RewardGrantNotRedeemableError };
@@ -411,6 +413,12 @@ interface CreateBookingWithDebitParams {
   // around as a smaller remaining credit (confirmed with the product owner,
   // 2026-07-21 — a BookingCredit is a stand-in for a refund, not a wallet).
   bookingCreditId?: bigint;
+  // Listing.requireApproval, resolved by the caller from the listing being
+  // booked (Audit-LeftoverSprint.md, 2026-07-26 finding). When false, the
+  // booking skips the supplier confirm/decline queue and is created straight
+  // into `confirmed`. Defaults to true (the safer, pre-existing behavior) so
+  // every other caller — including tests — is unaffected.
+  requireApproval?: boolean;
 }
 
 // 2026-07-21 write-path session: replaces the old combined-wallet debit with
@@ -583,7 +591,20 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
           earnedCreditsApplied: discount,
           platformCommissionPercent: params.commissionPercent ?? new Prisma.Decimal(PLATFORM_COMMISSION_PERCENT_BOOKINGS),
           rewardTierRebatePercent: new Prisma.Decimal(rebatePercentForTier(rewardTier.tier)),
+          status: params.requireApproval === false ? BookingStatus.confirmed : BookingStatus.pending,
         },
+      });
+
+      const [bookingUser, bookingListing] = await Promise.all([
+        tx.user.findUniqueOrThrow({ where: { id: params.userId }, select: { name: true } }),
+        tx.listing.findUniqueOrThrow({ where: { id: params.listingId }, select: { name: true } }),
+      ]);
+      await createAdminNotification(tx, {
+        type: AdminNotificationType.new_booking,
+        title: "New booking",
+        message: `${bookingUser.name} booked "${bookingListing.name}" (${sgdToCredits(Number(params.cost))} credits).`,
+        relatedUserId: params.userId,
+        relatedBookingId: booking.id,
       });
 
       await tx.transaction.create({
@@ -645,6 +666,13 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
               description: `Booking #${creditToApply.sourceBookingId} credit — ${creditAppliedAmount} SGD applied to booking #${booking.id}, remaining ${creditLeftoverRefund} SGD refunded via Stripe.`,
             },
           });
+          await createAdminNotification(tx, {
+            type: AdminNotificationType.refund,
+            title: "Refund issued",
+            message: `${bookingUser.name} was refunded ${sgdToCredits(Number(creditLeftoverRefund))} credits (booking credit leftover from booking #${creditToApply.sourceBookingId}).`,
+            relatedUserId: params.userId,
+            relatedBookingId: creditToApply.sourceBookingId,
+          });
         }
 
         await tx.activityLog.create({
@@ -671,6 +699,44 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
           relatedListingId: params.listingId,
         },
       });
+
+      // requireApproval === false skips the supplier confirm/decline queue
+      // entirely (booking created straight into `confirmed` above), but the
+      // booking should still carry the same audit trail a manually-confirmed
+      // booking gets — mirrors confirmBookingWithAudit's zero-amount audit
+      // row, activity log, and notification (no additional ledger movement;
+      // credits were already debited above).
+      if (booking.status === BookingStatus.confirmed) {
+        await tx.transaction.create({
+          data: {
+            userId: params.userId,
+            bookingId: booking.id,
+            type: TransactionType.booking,
+            amount: new Prisma.Decimal(0),
+            description: `Booking #${booking.id} auto-confirmed — listing does not require supplier approval, no additional ledger movement here.`,
+          },
+        });
+
+        await tx.activityLog.create({
+          data: {
+            userId: params.userId,
+            actionType: ActivityActionType.booking_confirmed,
+            description: `Booking #${booking.id} auto-confirmed — listing does not require supplier approval.`,
+            relatedListingId: params.listingId,
+          },
+        });
+
+        await tx.notification.create({
+          data: {
+            userId: params.userId,
+            type: "booking_confirmed",
+            title: "Booking confirmed",
+            message: `Your booking #${booking.id} has been confirmed.`,
+            relatedBookingId: booking.id,
+            relatedListingId: params.listingId,
+          },
+        });
+      }
 
       return booking;
     });
@@ -983,6 +1049,15 @@ export async function resolveBookingCreditWithRefund(
         },
       });
 
+      const refundedUser = await tx.user.findUniqueOrThrow({ where: { id: credit.userId }, select: { name: true } });
+      await createAdminNotification(tx, {
+        type: AdminNotificationType.refund,
+        title: "Refund issued",
+        message: `${refundedUser.name} was refunded ${sgdToCredits(Number(credit.amount))} credits (booking #${credit.sourceBookingId}, ${resolvedVia === "user_claim" ? "claimed by user" : "auto-resolved after timeout"}).`,
+        relatedUserId: credit.userId,
+        relatedBookingId: credit.sourceBookingId,
+      });
+
       await tx.notification.deleteMany({ where: { relatedBookingId: credit.sourceBookingId, pinned: true } });
     });
   } catch (error) {
@@ -1209,6 +1284,13 @@ export async function cancelBookingWithRefund(
             stripePaymentIntentId: paymentIntentId,
             description: `Booking #${updated.id} cancelled by user — ${userRefundPercent}% cancellation-window refund of ${stripeRefundAmount} SGD issued via Stripe.`,
           },
+        });
+        await createAdminNotification(tx, {
+          type: AdminNotificationType.refund,
+          title: "Refund issued",
+          message: `${updated.user.name} was refunded ${sgdToCredits(Number(stripeRefundAmount))} credits for cancelling "${updated.listing.name}" (booking #${updated.id}).`,
+          relatedUserId: updated.userId,
+          relatedBookingId: updated.id,
         });
       }
 

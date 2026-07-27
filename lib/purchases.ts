@@ -1,10 +1,11 @@
-import { TransactionType, ActivityActionType, RewardGrantType, type Purchase, Prisma } from "@/app/generated/prisma/client";
+import { TransactionType, ActivityActionType, RewardGrantType, AdminNotificationType, type Purchase, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { assertSufficientPurchasedBalance } from "@/lib/credits";
 import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
 import { sgdToCredits } from "@/lib/credit-units";
 import { createConsumablePayable } from "@/lib/supplier-payables";
+import { createAdminNotification } from "@/lib/admin-notifications";
 
 export { RewardGrantNotRedeemableError };
 
@@ -187,8 +188,19 @@ export async function createPurchaseWithDebit(params: CreatePurchaseWithDebitPar
     // by default) — on the full RSP × qty (`params.cost`), not the
     // discount-reduced charge. The sale is terminal, so this is the only
     // payout event for it.
-    const listing = await tx.listing.findUniqueOrThrow({ where: { id: params.listingId }, select: { companyId: true } });
+    const [listing, purchaser] = await Promise.all([
+      tx.listing.findUniqueOrThrow({ where: { id: params.listingId }, select: { companyId: true, name: true } }),
+      tx.user.findUniqueOrThrow({ where: { id: params.userId }, select: { name: true } }),
+    ]);
     await createConsumablePayable(tx, { companyId: listing.companyId, purchaseId: purchase.id, chargedSgd: params.cost });
+
+    await createAdminNotification(tx, {
+      type: AdminNotificationType.new_purchase,
+      title: "New consumable purchase",
+      message: `${purchaser.name} bought ${params.quantity}x "${listing.name}" (${sgdToCredits(Number(chargeAmount))} credits).`,
+      relatedUserId: params.userId,
+      relatedCompanyId: listing.companyId,
+    });
 
     return purchase;
   });

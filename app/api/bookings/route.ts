@@ -128,6 +128,7 @@ export async function POST(request: NextRequest) {
       paymentMethodId: fields.paymentMethodId,
       rewardGrantId: fields.rewardGrantId,
       bookingCreditId: fields.bookingCreditId,
+      requireApproval: listing.requireApproval,
     });
 
     return NextResponse.json({ booking: serializeBooking(booking) }, { status: 201 });

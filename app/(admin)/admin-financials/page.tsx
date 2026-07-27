@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Search } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
+import Pagination from "@/components/Pagination";
 import PricingCommissionCard from "@/components/PricingCommissionCard";
 import { useAdminFinancials } from "@/lib/hooks/useAdminFinancials";
 import {
@@ -335,8 +337,55 @@ function SupplierPayoutsCard() {
   );
 }
 
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+// A-Z quick filter for Revenue by Operator — client-side over the already-
+// fetched list (that endpoint sums every transaction to compute each
+// company's total, so it isn't a good fit for server-side pagination the
+// way the pricing table and transaction feed are; see getRevenueByCompany).
+function AlphabetFilter({ active, onChange }: { active: string | null; onChange: (letter: string | null) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      <button
+        type="button"
+        onClick={() => onChange(null)}
+        className={`h-7 min-w-[32px] px-2 rounded text-xs font-medium transition-colors ${
+          active === null
+            ? "bg-gradient-to-r from-admin-red-start to-admin-orange-end text-white"
+            : "text-muted-text hover:text-body-text"
+        }`}
+      >
+        All
+      </button>
+      {ALPHABET.map((letter) => (
+        <button
+          key={letter}
+          type="button"
+          onClick={() => onChange(letter)}
+          className={`h-7 min-w-[24px] px-1.5 rounded text-xs font-medium transition-colors ${
+            active === letter
+              ? "bg-gradient-to-r from-admin-red-start to-admin-orange-end text-white"
+              : "text-muted-text hover:text-body-text"
+          }`}
+        >
+          {letter}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminFinancialsPage() {
-  const { data, isLoading, isError } = useAdminFinancials();
+  const [operatorLetter, setOperatorLetter] = useState<string | null>(null);
+  const [feedSearch, setFeedSearch] = useState("");
+  const [feedPage, setFeedPage] = useState(1);
+  const { data, isLoading, isError } = useAdminFinancials({ feedSearch: feedSearch.trim() || undefined, feedPage });
+
+  const filteredRevenueByCompany = useMemo(() => {
+    if (!data) return [];
+    if (!operatorLetter) return data.revenueByCompany;
+    return data.revenueByCompany.filter((row) => row.companyName.trim().toUpperCase().startsWith(operatorLetter));
+  }, [data, operatorLetter]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -354,31 +403,38 @@ export default function AdminFinancialsPage() {
       ) : (
         <div className="flex flex-col gap-6">
           <Card className="!p-0 overflow-hidden">
-            <div className="p-6 pb-2">
-              <h2 className="text-lg font-semibold text-body-text">Revenue by Operator</h2>
+            <div className="p-6 pb-3">
+              <h2 className="text-lg font-semibold text-body-text mb-3">Revenue by Operator</h2>
+              <AlphabetFilter active={operatorLetter} onChange={setOperatorLetter} />
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Company</th>
-                    <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
-                      Revenue
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.revenueByCompany.map((row) => (
-                    <tr key={row.companyId} className="border-b border-border/60 last:border-0">
-                      <td className="py-3 px-6 text-sm text-body-text whitespace-nowrap">{row.companyName}</td>
-                      <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">
-                        {row.revenue} credits
-                      </td>
+            {filteredRevenueByCompany.length === 0 ? (
+              <p className="text-sm text-muted-text text-center py-12">
+                {operatorLetter ? `No operators starting with "${operatorLetter}".` : "No operators yet."}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Company</th>
+                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
+                        Revenue
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {filteredRevenueByCompany.map((row) => (
+                      <tr key={row.companyId} className="border-b border-border/60 last:border-0">
+                        <td className="py-3 px-6 text-sm text-body-text whitespace-nowrap">{row.companyName}</td>
+                        <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">
+                          {row.revenue} credits
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Card>
 
           <PricingCommissionCard />
@@ -386,51 +442,76 @@ export default function AdminFinancialsPage() {
           <SupplierPayoutsCard />
 
           <Card className="!p-0 overflow-hidden">
-            <div className="p-6 pb-2">
+            <div className="p-6 pb-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <h2 className="text-lg font-semibold text-body-text">Cross-Company Transaction Feed</h2>
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-text pointer-events-none" />
+                <input
+                  type="text"
+                  value={feedSearch}
+                  onChange={(e) => {
+                    setFeedSearch(e.target.value);
+                    setFeedPage(1);
+                  }}
+                  placeholder="Search by company…"
+                  className="w-full sm:w-56 bg-background border border-border/40 rounded py-2 pr-3 pl-9 text-xs text-body-text placeholder:text-muted-text focus:outline-none focus:border-admin-red-start transition-colors"
+                />
+              </div>
             </div>
             {data.transactionFeed.length === 0 ? (
-              <p className="text-sm text-muted-text text-center py-12">No revenue transactions yet.</p>
+              <p className="text-sm text-muted-text text-center py-12">
+                {feedSearch.trim() ? "No transactions match your search." : "No revenue transactions yet."}
+              </p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-border">
-                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Date</th>
-                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Company</th>
-                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Type</th>
-                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
-                        Amount
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.transactionFeed.map((row) => (
-                      <tr key={row.id} className="border-b border-border/60 last:border-0">
-                        <td className="py-3 px-6 text-sm text-muted-text whitespace-nowrap">
-                          {new Date(row.createdAt).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })}
-                        </td>
-                        <td className="py-3 px-6 text-sm text-body-text whitespace-nowrap">
-                          {row.companyName ?? "—"}
-                        </td>
-                        <td className="py-3 px-6 text-sm text-muted-text whitespace-nowrap">
-                          {TYPE_LABELS[row.type] ?? row.type}
-                        </td>
-                        <td className="py-3 px-6 text-sm text-right whitespace-nowrap">
-                          <span className={Number(row.amount) < 0 ? "text-error-red" : "text-success-green"}>
-                            {Number(row.amount) >= 0 ? "+" : ""}
-                            {row.amount} credits
-                          </span>
-                        </td>
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-border">
+                        <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Date</th>
+                        <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Company</th>
+                        <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Type</th>
+                        <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
+                          Amount
+                        </th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {data.transactionFeed.map((row) => (
+                        <tr key={row.id} className="border-b border-border/60 last:border-0">
+                          <td className="py-3 px-6 text-sm text-muted-text whitespace-nowrap">
+                            {new Date(row.createdAt).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </td>
+                          <td className="py-3 px-6 text-sm text-body-text whitespace-nowrap">
+                            {row.companyName ?? "—"}
+                          </td>
+                          <td className="py-3 px-6 text-sm text-muted-text whitespace-nowrap">
+                            {TYPE_LABELS[row.type] ?? row.type}
+                          </td>
+                          <td className="py-3 px-6 text-sm text-right whitespace-nowrap">
+                            <span className={Number(row.amount) < 0 ? "text-error-red" : "text-success-green"}>
+                              {Number(row.amount) >= 0 ? "+" : ""}
+                              {row.amount} credits
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-6">
+                  <Pagination
+                    page={data.transactionFeedMeta.page}
+                    pageSize={data.transactionFeedMeta.perPage}
+                    total={data.transactionFeedMeta.total}
+                    onPageChange={setFeedPage}
+                  />
+                </div>
+              </>
             )}
           </Card>
         </div>

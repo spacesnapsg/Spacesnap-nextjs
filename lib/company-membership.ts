@@ -1,5 +1,7 @@
+import { AdminNotificationType } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
+import { createAdminNotification } from "@/lib/admin-notifications";
 
 // Sprint 6.10 follow-on (2026-07-23) — company-side membership management.
 // Closes the gap flagged while scoping Buyer Organization: Company never had
@@ -76,6 +78,8 @@ export async function resolveCompanyMembership(
   }
 
   return prisma.$transaction(async (tx) => {
+    const actingUser = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true } });
+
     let company = await tx.company.findFirst({
       where: { name: { equals: name, mode: "insensitive" } },
     });
@@ -85,6 +89,13 @@ export async function resolveCompanyMembership(
       await tx.user.update({
         where: { id: userId },
         data: { companyId: company.id, isSupplier: true },
+      });
+      await createAdminNotification(tx, {
+        type: AdminNotificationType.new_supplier,
+        title: "New supplier",
+        message: `${actingUser.name} is now a supplier at ${company.name}.`,
+        relatedUserId: userId,
+        relatedCompanyId: company.id,
       });
       return { status: "joined" as const, company: { id: company.id.toString(), name: company.name } };
     }
@@ -97,6 +108,13 @@ export async function resolveCompanyMembership(
       await tx.user.update({
         where: { id: userId },
         data: { companyId: company.id, isSupplier: true },
+      });
+      await createAdminNotification(tx, {
+        type: AdminNotificationType.new_supplier,
+        title: "New supplier",
+        message: `${actingUser.name} is now a supplier at ${company.name}.`,
+        relatedUserId: userId,
+        relatedCompanyId: company.id,
       });
       return { status: "joined" as const, company: { id: company.id.toString(), name: company.name } };
     }
@@ -162,9 +180,19 @@ export async function resolveCompanyJoinRequest(
     });
 
     if (decision === "approved") {
-      await tx.user.update({
-        where: { id: request.requestedByUserId },
-        data: { companyId: admin.companyId, isSupplier: true },
+      const [requestedByUser, company] = await Promise.all([
+        tx.user.update({
+          where: { id: request.requestedByUserId },
+          data: { companyId: admin.companyId, isSupplier: true },
+        }),
+        tx.company.findUniqueOrThrow({ where: { id: admin.companyId }, select: { name: true } }),
+      ]);
+      await createAdminNotification(tx, {
+        type: AdminNotificationType.new_supplier,
+        title: "New supplier",
+        message: `${requestedByUser.name} is now a supplier at ${company.name}.`,
+        relatedUserId: requestedByUser.id,
+        relatedCompanyId: admin.companyId,
       });
     }
 

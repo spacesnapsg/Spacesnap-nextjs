@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
 export type PricingField =
@@ -43,12 +43,27 @@ export interface CompanyPricing {
 interface AdminPricing {
   config: PlatformPricingConfig;
   companies: CompanyPricing[];
+  meta: { page: number; perPage: number; total: number };
 }
 
-export function useAdminPricing() {
+interface AdminPricingFilters {
+  search?: string;
+  page?: number;
+}
+
+export function useAdminPricing(filters: AdminPricingFilters = {}) {
+  const params = new URLSearchParams();
+  if (filters.search) params.set("search", filters.search);
+  if (filters.page) params.set("page", String(filters.page));
+  const qs = params.toString();
+
   return useQuery({
-    queryKey: ["admin-pricing"],
-    queryFn: () => apiFetch<AdminPricing>("/api/admin/pricing"),
+    queryKey: ["admin-pricing", filters],
+    queryFn: () => apiFetch<AdminPricing>(`/api/admin/pricing${qs ? `?${qs}` : ""}`),
+    // Without this, every search keystroke makes `data` briefly undefined,
+    // which unmounts the search input itself (behind the card's `!data`
+    // loading gate) — see the same fix on useAdminFinancials.
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -64,7 +64,10 @@ async function createUser() {
   });
 }
 
-function createSpaceListing(companyId: bigint, overrides: { priceDay?: string; priceWeek?: string; priceMonth?: string } = {}) {
+function createSpaceListing(
+  companyId: bigint,
+  overrides: { priceDay?: string; priceWeek?: string; priceMonth?: string; requireApproval?: boolean } = {}
+) {
   return prisma.listing.create({
     data: {
       companyId,
@@ -79,6 +82,10 @@ function createSpaceListing(companyId: bigint, overrides: { priceDay?: string; p
 }
 
 async function cleanupCompanyAndUsers(companyId: bigint, userIds: string[]) {
+  // AdminNotification's relatedBooking/relatedUser FKs are SetNull, not
+  // Cascade (see its schema comment — the admin audit trail should outlive
+  // whatever it references), so they're not swept by the deletes below.
+  await prisma.adminNotification.deleteMany({ where: { relatedUserId: { in: userIds } } });
   await prisma.company.delete({ where: { id: companyId } });
   for (const userId of userIds) {
     await prisma.user.delete({ where: { id: userId } });
@@ -237,6 +244,13 @@ describe("createBookingWithDebit (2026-07-21, Stripe charge + RewardGrant discou
       assert.equal(transactions[0].amount.toString(), "-10");
       assert.ok(transactions[0].stripePaymentIntentId);
 
+      // 2026-07-27 — admin-facing "new booking" feed.
+      const adminNotifications = await prisma.adminNotification.findMany({ where: { relatedBookingId: booking.id } });
+      assert.equal(adminNotifications.length, 1);
+      assert.equal(adminNotifications[0].type, "new_booking");
+      assert.equal(adminNotifications[0].relatedUserId, user.id);
+      assert.match(adminNotifications[0].message, new RegExp(`${listing.name}`));
+
       // A booking charged directly via Stripe never moves the combined
       // ledger sum on its own (no topup involved) — booking_payment amounts
       // are still summed by getCreditBalance's blind SUM (it has no type
@@ -320,6 +334,93 @@ describe("createBookingWithDebit (2026-07-21, Stripe charge + RewardGrant discou
 
       const transactions = await prisma.transaction.findMany({ where: { userId: user.id } });
       assert.equal(transactions.length, 1); // only the first booking's charge, nothing orphaned from the second
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("defaults to `pending` (supplier confirm/decline queue) when requireApproval is omitted", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id);
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-09",
+        endDate: "2027-09-09",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+
+      assert.equal(booking.status, "pending");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("Audit-LeftoverSprint.md finding (2026-07-26): a listing with requireApproval=false skips the queue and books straight into `confirmed`, with the same audit trail a manual confirm gets", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id, { requireApproval: false });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-10",
+        endDate: "2027-09-10",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        requireApproval: listing.requireApproval,
+      });
+
+      assert.equal(booking.status, "confirmed");
+
+      // Same audit trail confirmBookingWithAudit would have produced: the
+      // real charge, plus a zero-amount "booking" audit row, no double count.
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id }, orderBy: { id: "asc" } });
+      assert.equal(transactions.length, 2);
+      assert.equal(transactions[0].type, TransactionType.booking_payment);
+      assert.equal(transactions[0].amount.toString(), "-10");
+      assert.equal(transactions[1].type, TransactionType.booking);
+      assert.equal(transactions[1].amount.toString(), "0");
+
+      const activity = await prisma.activityLog.findMany({ where: { userId: user.id, relatedListingId: listing.id }, orderBy: { id: "asc" } });
+      assert.deepEqual(
+        activity.map((a) => a.actionType),
+        ["booking_created", "booking_confirmed"]
+      );
+
+      const notifications = await prisma.notification.findMany({ where: { relatedBookingId: booking.id } });
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].type, "booking_confirmed");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("requireApproval=true (explicit) still books into `pending`", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id, { requireApproval: true });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-09-11",
+        endDate: "2027-09-11",
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+        requireApproval: listing.requireApproval,
+      });
+
+      assert.equal(booking.status, "pending");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -944,6 +1045,13 @@ describe("resolveBookingCreditWithRefund — user claims a refund instead of reb
 
       const pinnedAfter = await prisma.notification.findFirst({ where: { relatedBookingId: booking.id, pinned: true } });
       assert.equal(pinnedAfter, null);
+
+      // 2026-07-27 — admin-facing "refund issued" money-movement feed.
+      const adminRefundNotifications = await prisma.adminNotification.findMany({
+        where: { relatedBookingId: booking.id, type: "refund" },
+      });
+      assert.equal(adminRefundNotifications.length, 1);
+      assert.match(adminRefundNotifications[0].message, new RegExp(`${user.name}.*100 credits`));
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -1079,6 +1187,13 @@ describe("createBookingWithDebit — bookingCreditId redemption", () => {
       const creditAfter = await prisma.bookingCredit.findUniqueOrThrow({ where: { id: credit.id } });
       assert.equal(creditAfter.status, "applied"); // fully consumed either way, never left as a smaller credit
       assert.equal(creditAfter.appliedToBookingId?.toString(), newBooking.id.toString());
+
+      // 2026-07-27 — admin-facing "refund issued" money-movement feed.
+      const adminRefundNotifications = await prisma.adminNotification.findMany({
+        where: { relatedBookingId: declinedBooking.id, type: "refund" },
+      });
+      assert.equal(adminRefundNotifications.length, 1);
+      assert.match(adminRefundNotifications[0].message, new RegExp(`${user.name}.*180 credits`));
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }
@@ -1336,6 +1451,13 @@ describe("cancelBookingWithRefund — user-initiated, day-tier applies to the us
       const refund = await prisma.transaction.findFirst({ where: { bookingId: booking.id, type: TransactionType.refund } });
       assert.ok(refund);
       assert.equal(refund!.amount.toString(), "10");
+
+      // 2026-07-27 — admin-facing "refund issued" money-movement feed.
+      const adminRefundNotifications = await prisma.adminNotification.findMany({
+        where: { relatedBookingId: booking.id, type: "refund" },
+      });
+      assert.equal(adminRefundNotifications.length, 1);
+      assert.match(adminRefundNotifications[0].message, new RegExp(`${user.name}.*100 credits.*${listing.name}`));
 
       // Zero-effect audit row — the booking earned nothing, and the
       // supplier isn't owed anything for it either way.

@@ -218,41 +218,79 @@ function toNum(d: Prisma.Decimal): number {
   return Number(d);
 }
 
+const COMPANY_PRICING_SELECT = {
+  id: true,
+  name: true,
+  bookingMarkupDailyPercent: true,
+  bookingMarkupWeeklyPercent: true,
+  bookingMarkupMonthlyPercent: true,
+  bookingCommissionPercent: true,
+  consumablesCommissionPercent: true,
+} satisfies Prisma.CompanySelect;
+
+type CompanyPricingRow = Prisma.CompanyGetPayload<{ select: typeof COMPANY_PRICING_SELECT }>;
+
+function shapeCompanyPricingRow(c: CompanyPricingRow, config: PlatformPricingConfig) {
+  const overrides: Record<ConfigField, number | null> = {
+    bookingMarkupDailyPercent: c.bookingMarkupDailyPercent === null ? null : toNum(c.bookingMarkupDailyPercent),
+    bookingMarkupWeeklyPercent: c.bookingMarkupWeeklyPercent === null ? null : toNum(c.bookingMarkupWeeklyPercent),
+    bookingMarkupMonthlyPercent: c.bookingMarkupMonthlyPercent === null ? null : toNum(c.bookingMarkupMonthlyPercent),
+    bookingCommissionPercent: c.bookingCommissionPercent === null ? null : toNum(c.bookingCommissionPercent),
+    consumablesCommissionPercent: c.consumablesCommissionPercent === null ? null : toNum(c.consumablesCommissionPercent),
+  };
+  const effective: Record<ConfigField, number> = {
+    bookingMarkupDailyPercent: overrides.bookingMarkupDailyPercent ?? toNum(config.bookingMarkupDailyPercent),
+    bookingMarkupWeeklyPercent: overrides.bookingMarkupWeeklyPercent ?? toNum(config.bookingMarkupWeeklyPercent),
+    bookingMarkupMonthlyPercent: overrides.bookingMarkupMonthlyPercent ?? toNum(config.bookingMarkupMonthlyPercent),
+    bookingCommissionPercent: overrides.bookingCommissionPercent ?? toNum(config.bookingCommissionPercent),
+    consumablesCommissionPercent: overrides.consumablesCommissionPercent ?? toNum(config.consumablesCommissionPercent),
+  };
+  return { companyId: c.id.toString(), companyName: c.name, overrides, effective };
+}
+
 // Admin-only. Every company with both its raw overrides (null = inheriting
 // the default) and the resolved effective rates, for the per-supplier pricing
 // table in the admin panel.
-export async function listCompanyPricingOverrides() {
-  const config = await getPlatformPricingConfig();
-  const companies = await prisma.company.findMany({
-    select: {
-      id: true,
-      name: true,
-      bookingMarkupDailyPercent: true,
-      bookingMarkupWeeklyPercent: true,
-      bookingMarkupMonthlyPercent: true,
-      bookingCommissionPercent: true,
-      consumablesCommissionPercent: true,
-    },
-    orderBy: { name: "asc" },
-  });
+const COMPANY_PRICING_PER_PAGE = 10;
 
-  return companies.map((c) => {
-    const overrides: Record<ConfigField, number | null> = {
-      bookingMarkupDailyPercent: c.bookingMarkupDailyPercent === null ? null : toNum(c.bookingMarkupDailyPercent),
-      bookingMarkupWeeklyPercent: c.bookingMarkupWeeklyPercent === null ? null : toNum(c.bookingMarkupWeeklyPercent),
-      bookingMarkupMonthlyPercent: c.bookingMarkupMonthlyPercent === null ? null : toNum(c.bookingMarkupMonthlyPercent),
-      bookingCommissionPercent: c.bookingCommissionPercent === null ? null : toNum(c.bookingCommissionPercent),
-      consumablesCommissionPercent: c.consumablesCommissionPercent === null ? null : toNum(c.consumablesCommissionPercent),
-    };
-    const effective: Record<ConfigField, number> = {
-      bookingMarkupDailyPercent: overrides.bookingMarkupDailyPercent ?? toNum(config.bookingMarkupDailyPercent),
-      bookingMarkupWeeklyPercent: overrides.bookingMarkupWeeklyPercent ?? toNum(config.bookingMarkupWeeklyPercent),
-      bookingMarkupMonthlyPercent: overrides.bookingMarkupMonthlyPercent ?? toNum(config.bookingMarkupMonthlyPercent),
-      bookingCommissionPercent: overrides.bookingCommissionPercent ?? toNum(config.bookingCommissionPercent),
-      consumablesCommissionPercent: overrides.consumablesCommissionPercent ?? toNum(config.consumablesCommissionPercent),
-    };
-    return { companyId: c.id.toString(), companyName: c.name, overrides, effective };
-  });
+// search/page added 2026-07-27 (admin UI request — the per-supplier override
+// table has no bound on company count, same "will get crazy as it grows"
+// concern as the admin/users list, which already established this
+// search+skip/take pattern (app/api/admin/users/route.ts).
+export async function listCompanyPricingOverrides(options: { search?: string; page?: number } = {}) {
+  const page = Math.max(1, options.page ?? 1);
+  const where: Prisma.CompanyWhereInput = options.search
+    ? { name: { contains: options.search, mode: "insensitive" } }
+    : {};
+
+  const [config, companies, total] = await Promise.all([
+    getPlatformPricingConfig(),
+    prisma.company.findMany({
+      where,
+      select: COMPANY_PRICING_SELECT,
+      orderBy: { name: "asc" },
+      skip: (page - 1) * COMPANY_PRICING_PER_PAGE,
+      take: COMPANY_PRICING_PER_PAGE,
+    }),
+    prisma.company.count({ where }),
+  ]);
+
+  return {
+    companies: companies.map((c) => shapeCompanyPricingRow(c, config)),
+    meta: { page, perPage: COMPANY_PRICING_PER_PAGE, total },
+  };
+}
+
+// Admin-only. Single-company lookup, same shape as one row of
+// listCompanyPricingOverrides — used after a PATCH to return the just-updated
+// company without depending on which search/page it would land on in the
+// paginated list (app/api/admin/pricing/companies/[id]/route.ts).
+export async function getCompanyPricingOverride(companyId: bigint) {
+  const [config, company] = await Promise.all([
+    getPlatformPricingConfig(),
+    prisma.company.findUnique({ where: { id: companyId }, select: COMPANY_PRICING_SELECT }),
+  ]);
+  return company ? shapeCompanyPricingRow(company, config) : null;
 }
 
 export function serializePlatformPricingConfig(config: PlatformPricingConfig) {

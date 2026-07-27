@@ -93,7 +93,14 @@ describe("createTopUp (F4: real Stripe charge backs the credit)", () => {
 
       const balanceAfter = await getCreditBalance(user.id);
       assert.equal(balanceAfter.toString(), "15");
+
+      // 2026-07-27 — admin-facing "wallet top-up" money-movement feed.
+      const adminNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: user.id } });
+      assert.equal(adminNotifications.length, 1);
+      assert.equal(adminNotifications[0].type, "wallet_topup");
+      assert.match(adminNotifications[0].message, new RegExp(`${user.name}.*150 credits`));
     } finally {
+      await prisma.adminNotification.deleteMany({ where: { relatedUserId: user.id } });
       await prisma.user.delete({ where: { id: user.id } });
     }
   });
@@ -129,6 +136,7 @@ describe("createTopUp (F4: real Stripe charge backs the credit)", () => {
       assert.equal(transactions.length, 2);
       assert.ok(transactions.every((t) => t.type === TransactionType.purchased_topup));
     } finally {
+      await prisma.adminNotification.deleteMany({ where: { relatedUserId: user.id } });
       await prisma.user.delete({ where: { id: user.id } });
     }
   });
@@ -141,6 +149,7 @@ describe("createTopUp (F4: real Stripe charge backs the credit)", () => {
       assert.equal(transaction.amount.toString(), "49.99");
       assert.equal(balance.toString(), "49.99");
     } finally {
+      await prisma.adminNotification.deleteMany({ where: { relatedUserId: user.id } });
       await prisma.user.delete({ where: { id: user.id } });
     }
   });

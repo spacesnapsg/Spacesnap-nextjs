@@ -1,32 +1,57 @@
 "use client";
 
 import { signOut } from "next-auth/react";
-import { Home, Users, Gift, Banknote, UserCheck, Award, Megaphone, LogOut } from "lucide-react";
+import Link from "next/link";
+import { Home, Users, Gift, Banknote, UserCheck, Award, Megaphone, LogOut, Bell, FileBarChart } from "lucide-react";
 import Navbar from "./Navbar";
 import NavGroup, { NavItem } from "./NavGroup";
 import LogoBox from "./LogoBox";
+import HamburgerMenu from "./HamburgerMenu";
+import { useAdminNotificationsUnreadCount } from "@/lib/hooks/useAdminNotifications";
+
+const MORE_MENU_ITEMS = [
+  { label: "Notifications", href: "/admin-notifications", icon: <Bell size={16} /> },
+  { label: "Reports", href: "/admin-reports", icon: <FileBarChart size={16} /> },
+];
 
 export default function AdminNavbar() {
+  const { data: unreadData } = useAdminNotificationsUnreadCount();
+
   return (
     <Navbar
       logo={<LogoBox src="/logos/logo-orange.png" />}
       actions={
-        <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
-          className="border border-border rounded p-2 text-body-text"
-          aria-label="Sign out"
-        >
-          <LogOut size={18} />
-        </button>
+        <>
+          <HamburgerMenu items={MORE_MENU_ITEMS} badgeCount={unreadData?.count ?? 0} />
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="border border-border rounded p-2 text-body-text"
+            aria-label="Sign out"
+          >
+            <LogOut size={18} />
+          </button>
+        </>
       }
       mobileActions={
-        <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
-          className="flex items-center gap-2 text-sm text-muted-text rounded-lg px-2 py-2 hover:bg-card transition-colors"
-        >
-          <LogOut size={16} />
-          Sign Out
-        </button>
+        <>
+          {MORE_MENU_ITEMS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="flex items-center gap-2 text-sm text-muted-text rounded-lg px-2 py-2 hover:bg-card transition-colors"
+            >
+              {item.icon}
+              {item.label}
+            </Link>
+          ))}
+          <button
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="flex items-center gap-2 text-sm text-muted-text rounded-lg px-2 py-2 hover:bg-card transition-colors"
+          >
+            <LogOut size={16} />
+            Sign Out
+          </button>
+        </>
       }
     >
       <NavGroup>

@@ -31,6 +31,7 @@ async function createCertificate() {
 async function cleanup(userId: string, certificateId: bigint) {
   await prisma.activityLog.deleteMany({ where: { userId } });
   await prisma.userCertificate.deleteMany({ where: { userId } });
+  await prisma.adminNotification.deleteMany({ where: { relatedUserId: userId } });
   await prisma.user.delete({ where: { id: userId } });
   await prisma.certificate.delete({ where: { id: certificateId } });
 }
@@ -54,6 +55,13 @@ describe("issueCredential", () => {
       assert.equal(log.length, 1);
       assert.equal(log[0].actionType, "credential_issued");
       assert.equal(log[0].description, "Test issuance.");
+
+      // 2026-07-27 — admin-facing "new credential earned" feed.
+      const adminNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: user.id } });
+      assert.equal(adminNotifications.length, 1);
+      assert.equal(adminNotifications[0].type, "new_credential");
+      assert.equal(adminNotifications[0].relatedCertificateId, certificate.id);
+      assert.match(adminNotifications[0].message, new RegExp(`${user.name}.*${certificate.name}`));
     } finally {
       await cleanup(user.id, certificate.id);
     }

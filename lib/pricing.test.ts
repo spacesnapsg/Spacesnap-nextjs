@@ -17,6 +17,8 @@ import {
   supplierGrossForBase,
   platformCommissionForBooking,
   supplierGrossForConsumable,
+  listCompanyPricingOverrides,
+  getCompanyPricingOverride,
 } from "./pricing";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -106,5 +108,68 @@ describe("effective pricing resolution", () => {
     } finally {
       await prisma.company.delete({ where: { id: company.id } });
     }
+  });
+});
+
+// 2026-07-27 — admin UI request: the per-supplier override table needed
+// search + pagination before the company list "gets crazy" as it grows,
+// same concern already solved for /api/admin/users.
+describe("listCompanyPricingOverrides — search + pagination", () => {
+  test("search filters to matching company names only, with an accurate total", async () => {
+    const prefix = `PricingSearchXYZ-${Date.now()}`;
+    const companies = await Promise.all([
+      prisma.company.create({ data: { name: `${prefix} Alpha` } }),
+      prisma.company.create({ data: { name: `${prefix} Beta` } }),
+      prisma.company.create({ data: { name: `${prefix} Gamma` } }),
+    ]);
+    try {
+      const result = await listCompanyPricingOverrides({ search: prefix });
+      assert.equal(result.meta.total, 3);
+      assert.equal(result.companies.length, 3);
+      assert.ok(result.companies.every((c) => c.companyName.startsWith(prefix)));
+
+      // Case-insensitive, matches the admin/users search convention.
+      const lower = await listCompanyPricingOverrides({ search: prefix.toLowerCase() });
+      assert.equal(lower.meta.total, 3);
+    } finally {
+      await prisma.company.deleteMany({ where: { id: { in: companies.map((c) => c.id) } } });
+    }
+  });
+
+  test("a page past the last result is empty but reports the real total", async () => {
+    const prefix = `PricingSearchPage-${Date.now()}`;
+    const company = await prisma.company.create({ data: { name: prefix } });
+    try {
+      const result = await listCompanyPricingOverrides({ search: prefix, page: 2 });
+      assert.equal(result.companies.length, 0);
+      assert.equal(result.meta.total, 1);
+      assert.equal(result.meta.page, 2);
+    } finally {
+      await prisma.company.delete({ where: { id: company.id } });
+    }
+  });
+});
+
+describe("getCompanyPricingOverride — single-company lookup for the post-PATCH response", () => {
+  test("returns the company's overrides/effective rates independent of the paginated list", async () => {
+    const company = await createCompany();
+    try {
+      await updateCompanyPricingOverrides(company.id, { bookingCommissionPercent: 20 });
+      const row = await getCompanyPricingOverride(company.id);
+      assert.ok(row);
+      assert.equal(row!.companyId, company.id.toString());
+      assert.equal(row!.overrides.bookingCommissionPercent, 20);
+      assert.equal(row!.effective.bookingCommissionPercent, 20);
+      // Untouched field still inherits the platform default.
+      assert.equal(row!.overrides.consumablesCommissionPercent, null);
+      assert.equal(row!.effective.consumablesCommissionPercent, 7);
+    } finally {
+      await prisma.company.delete({ where: { id: company.id } });
+    }
+  });
+
+  test("returns null for a company that doesn't exist", async () => {
+    const row = await getCompanyPricingOverride(BigInt(999999999));
+    assert.equal(row, null);
   });
 });

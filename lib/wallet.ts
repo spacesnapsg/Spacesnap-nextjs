@@ -1,9 +1,10 @@
-import { TransactionType, ActivityActionType, type Transaction, Prisma } from "@/app/generated/prisma/client";
+import { TransactionType, ActivityActionType, AdminNotificationType, type Transaction, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getCreditBalance } from "@/lib/credits";
 import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 import { stripe, toStripeCents, StripeChargeFailedError } from "@/lib/stripe";
+import { createAdminNotification } from "@/lib/admin-notifications";
 
 // Sprint 3.5 known-gap #5, corrected scope: the sprint plan's checklist item
 // says "type: purchase transactions actually created by app code" — that's
@@ -121,6 +122,14 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal, paymen
           title: "Credit top-up received",
           message: `${sgdToCredits(Number(amount))} credits were added to your credit wallet.`,
         },
+      });
+
+      const topupUser = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true } });
+      await createAdminNotification(tx, {
+        type: AdminNotificationType.wallet_topup,
+        title: "Wallet top-up",
+        message: `${topupUser.name} topped up their wallet with ${sgdToCredits(Number(amount))} credits.`,
+        relatedUserId: userId,
       });
 
       const balance = await getCreditBalance(userId, tx);

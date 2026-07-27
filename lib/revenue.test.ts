@@ -26,7 +26,7 @@ import {
   type Listing,
   type User,
 } from "../app/generated/prisma/client";
-import { getRevenueByCompany, getCompanyNetPayoutByTypeAndMonth } from "./revenue";
+import { getRevenueByCompany, getCompanyNetPayoutByTypeAndMonth, getRevenueTransactionFeed } from "./revenue";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -186,6 +186,58 @@ describe("getRevenueByCompany — split-ledger F1 fix", () => {
       });
       // Only the 90 SGD actually collected counts → 900 credits, not 1000.
       assert.equal(await revenueForCompany(company.id), "900.00");
+    } finally {
+      await cleanup(company, user);
+    }
+  });
+});
+
+// 2026-07-27 — admin UI request: the cross-company feed needed search +
+// pagination before the transaction count "gets crazy" as it grows.
+describe("getRevenueTransactionFeed — search + pagination", () => {
+  test("search filters to the searched company's own transactions only, with an accurate total", async () => {
+    const { company, user, spaceListing } = await createFixture();
+    const other = await createFixture();
+    try {
+      await bookingTransaction(user, spaceListing, TransactionType.booking_payment, "-10.00");
+      await bookingTransaction(user, spaceListing, TransactionType.booking_payment, "-20.00");
+      await bookingTransaction(other.user, other.spaceListing, TransactionType.booking_payment, "-30.00");
+
+      const result = await getRevenueTransactionFeed({ search: company.name });
+      assert.equal(result.meta.total, 2);
+      assert.equal(result.transactions.length, 2);
+      assert.ok(result.transactions.every((t) => t.companyId === company.id.toString()));
+    } finally {
+      await cleanup(company, user);
+      await cleanup(other.company, other.user);
+    }
+  });
+
+  test("a page past the last result is empty but reports the real total", async () => {
+    const { company, user, spaceListing } = await createFixture();
+    try {
+      await bookingTransaction(user, spaceListing, TransactionType.booking_payment, "-10.00");
+
+      const result = await getRevenueTransactionFeed({ search: company.name, page: 2 });
+      assert.equal(result.transactions.length, 0);
+      assert.equal(result.meta.total, 1);
+      assert.equal(result.meta.page, 2);
+    } finally {
+      await cleanup(company, user);
+    }
+  });
+
+  test("zero-amount audit rows stay excluded from both the list and the total, same as the unfiltered feed", async () => {
+    const { company, user, spaceListing } = await createFixture();
+    try {
+      const booking = await bookingTransaction(user, spaceListing, TransactionType.booking_payment, "-10.00");
+      await prisma.transaction.create({
+        data: { userId: user.id, bookingId: booking.id, type: TransactionType.booking, amount: "0" },
+      });
+
+      const result = await getRevenueTransactionFeed({ search: company.name });
+      assert.equal(result.meta.total, 1);
+      assert.equal(result.transactions[0].type, TransactionType.booking_payment);
     } finally {
       await cleanup(company, user);
     }

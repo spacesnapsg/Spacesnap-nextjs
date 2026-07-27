@@ -56,6 +56,7 @@ function createConsumablesListing(companyId: bigint, stockQuantity = 10, pricePe
 }
 
 async function cleanupCompanyAndUsers(companyId: bigint, userIds: string[]) {
+  await prisma.adminNotification.deleteMany({ where: { relatedUserId: { in: userIds } } });
   await prisma.company.delete({ where: { id: companyId } });
   for (const userId of userIds) {
     await prisma.user.delete({ where: { id: userId } });
@@ -155,6 +156,13 @@ describe("createPurchaseWithDebit (Buy Now)", () => {
 
       const bulkOrderRequests = await prisma.bulkOrderRequest.findMany({ where: { userId: user.id } });
       assert.equal(bulkOrderRequests.length, 0, "Buy Now must not create a BulkOrderRequest row");
+
+      // 2026-07-27 — admin-facing "new consumable purchase" feed.
+      const adminNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: user.id } });
+      assert.equal(adminNotifications.length, 1);
+      assert.equal(adminNotifications[0].type, "new_purchase");
+      assert.equal(adminNotifications[0].relatedCompanyId?.toString(), company.id.toString());
+      assert.match(adminNotifications[0].message, new RegExp(`${user.name}.*${listing.name}`));
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
     }

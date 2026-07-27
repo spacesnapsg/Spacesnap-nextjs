@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
 export interface PlatformRevenueSummary {
@@ -27,11 +27,27 @@ interface AdminFinancials {
   summary: PlatformRevenueSummary;
   revenueByCompany: CompanyRevenue[];
   transactionFeed: RevenueTransactionRow[];
+  transactionFeedMeta: { page: number; perPage: number; total: number };
 }
 
-export function useAdminFinancials() {
+interface AdminFinancialsFilters {
+  feedSearch?: string;
+  feedPage?: number;
+}
+
+export function useAdminFinancials(filters: AdminFinancialsFilters = {}) {
+  const params = new URLSearchParams();
+  if (filters.feedSearch) params.set("feedSearch", filters.feedSearch);
+  if (filters.feedPage) params.set("feedPage", String(filters.feedPage));
+  const qs = params.toString();
+
   return useQuery({
-    queryKey: ["admin-financials"],
-    queryFn: () => apiFetch<AdminFinancials>("/api/admin/financials"),
+    queryKey: ["admin-financials", filters],
+    queryFn: () => apiFetch<AdminFinancials>(`/api/admin/financials${qs ? `?${qs}` : ""}`),
+    // Every feed search keystroke / page change is a new queryKey — without
+    // this, `data` briefly goes undefined on each one, which flips the page's
+    // top-level isLoading gate and unmounts the whole tree (losing the
+    // Pricing & Commission card's own local search state in the process).
+    placeholderData: keepPreviousData,
   });
 }

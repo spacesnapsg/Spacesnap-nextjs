@@ -134,29 +134,64 @@ export interface RevenueTransactionRow {
   description: string | null;
 }
 
+const REVENUE_FEED_PER_PAGE = 25;
+
+// A transaction has no direct company FK — the company only exists via
+// whichever of the three optional relations is set (same shape resolveCompany
+// reads) — so a company-name search has to fan out across all three rather
+// than filtering a single column.
+function revenueFeedCompanySearch(search: string): Prisma.TransactionWhereInput {
+  const nameFilter = { name: { contains: search, mode: "insensitive" as const } };
+  return {
+    OR: [
+      { booking: { listing: { company: nameFilter } } },
+      { bulkOrderRequest: { listing: { company: nameFilter } } },
+      { purchase: { listing: { company: nameFilter } } },
+    ],
+  };
+}
+
 // Admin Financials "cross-company transaction feed" — excludes zero-amount
 // rows (e.g. the booking-confirm audit row, see lib/bookings.ts) since those
 // aren't revenue events, just an audit trail for one that already happened.
-export async function getRevenueTransactionFeed(limit = 25): Promise<RevenueTransactionRow[]> {
-  const transactions = await prisma.transaction.findMany({
-    where: { type: { in: REVENUE_TRANSACTION_TYPES }, amount: { not: 0 } },
-    include: revenueTransactionInclude,
-    orderBy: { createdAt: "desc" },
-    take: limit,
-  });
+// search/page added 2026-07-27 (admin UI request — same "will get crazy as it
+// grows" concern as the per-supplier pricing table, see listCompanyPricingOverrides).
+export async function getRevenueTransactionFeed(
+  options: { search?: string; page?: number } = {}
+): Promise<{ transactions: RevenueTransactionRow[]; meta: { page: number; perPage: number; total: number } }> {
+  const page = Math.max(1, options.page ?? 1);
+  const where: Prisma.TransactionWhereInput = {
+    type: { in: REVENUE_TRANSACTION_TYPES },
+    amount: { not: 0 },
+    ...(options.search ? revenueFeedCompanySearch(options.search) : {}),
+  };
 
-  return transactions.map((t) => {
-    const company = resolveCompany(t);
-    return {
-      id: t.id.toString(),
-      createdAt: t.createdAt.toISOString(),
-      type: t.type,
-      amount: formatAsCredits(t.amount.negated()),
-      companyId: company?.companyId.toString() ?? null,
-      companyName: company?.companyName ?? null,
-      description: t.description,
-    };
-  });
+  const [transactions, total] = await Promise.all([
+    prisma.transaction.findMany({
+      where,
+      include: revenueTransactionInclude,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * REVENUE_FEED_PER_PAGE,
+      take: REVENUE_FEED_PER_PAGE,
+    }),
+    prisma.transaction.count({ where }),
+  ]);
+
+  return {
+    transactions: transactions.map((t) => {
+      const company = resolveCompany(t);
+      return {
+        id: t.id.toString(),
+        createdAt: t.createdAt.toISOString(),
+        type: t.type,
+        amount: formatAsCredits(t.amount.negated()),
+        companyId: company?.companyId.toString() ?? null,
+        companyName: company?.companyName ?? null,
+        description: t.description,
+      };
+    }),
+    meta: { page, perPage: REVENUE_FEED_PER_PAGE, total },
+  };
 }
 
 export interface CompanyNetPayoutByTypeMonth {
