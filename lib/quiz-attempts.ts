@@ -1,4 +1,4 @@
-import { ActivityActionType, type QuizAttempt } from "@/app/generated/prisma/client";
+import { ActivityActionType, CredentialProvenance, type QuizAttempt } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { issueCredential } from "@/lib/training-credentials";
@@ -157,6 +157,7 @@ export async function gradeAndSubmitQuizAttempt(params: GradeAndSubmitParams): P
         userId: params.userId,
         certificateId: video.certificateId,
         description: `Earned via passing the "${video.title}" quiz.`,
+        provenance: CredentialProvenance.tier1_video_quiz,
       });
       credentialIssued = true;
     }

@@ -8,6 +8,7 @@ import {
   CertificateEarningMethod,
   CertificateSource,
   CertificateStatus,
+  CredentialProvenance,
   ListingType,
   TransactionType,
   RewardCatalogueCategory,
@@ -328,11 +329,15 @@ async function main() {
   });
 
   // --- user_certificates (earned certs, incl. one expired) --------------
+  // earnedVia mirrors each certificate's own earningMethod here, same 1:1
+  // mapping the credential-provenance migration's backfill used — there's
+  // only one earning path per cert in this seed data.
   await prisma.userCertificate.create({
     data: {
       userId: ethan.id,
       certificateId: safetyInduction.id,
       earnedDate: new Date("2026-01-15"),
+      earnedVia: CredentialProvenance.tier1_video_quiz,
     },
   });
   await prisma.userCertificate.create({
@@ -341,6 +346,7 @@ async function main() {
       certificateId: fireMarshalCert.id,
       earnedDate: new Date("2025-01-10"),
       expiryDate: new Date("2026-01-10"), // already expired relative to 2026-07-19
+      earnedVia: CredentialProvenance.tier2b_operator_or_sme_signoff,
     },
   });
   await prisma.userCertificate.create({
@@ -349,6 +355,7 @@ async function main() {
       certificateId: forkliftCert.id,
       earnedDate: new Date("2026-03-01"),
       expiryDate: new Date("2027-03-01"),
+      earnedVia: CredentialProvenance.tier2a_operator_signoff,
     },
   });
   await prisma.userCertificate.create({
@@ -356,6 +363,7 @@ async function main() {
       userId: farah.id,
       certificateId: safetyInduction.id,
       earnedDate: new Date("2026-02-20"),
+      earnedVia: CredentialProvenance.tier1_video_quiz,
     },
   });
 

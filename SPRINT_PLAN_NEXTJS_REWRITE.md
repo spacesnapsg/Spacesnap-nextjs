@@ -170,7 +170,7 @@ This is the sprint that didn't exist as its own thing in the original build — 
 - [ ] Tier logic — **SCRAPPED, redesigned as certificate-set gating.** The original item 2 design (achieved tier per equipment class only increases; higher tier satisfies lower requirement) was built (`lib/tiers.ts`) on a wrong assumption. Confirmed with the product owner: there is no numeric tier progression — "tier" is just a label for *how* a certificate was earned (self-serve video/quiz vs. operator sign-off vs. operator-or-SME sign-off), not a level of achievement. Every path produces the same `user_certificates` row. `lib/tiers.ts`/`lib/tiers.test.ts` deleted; replaced by a plain set-difference module, `lib/certificate-gating.ts` (`getMissingCertificates`), wired into `missingCertificateIds` in `lib/bookings.ts`. See CLAUDE1.md "Sprint 4, Item 2 (revised)" session note for the full pivot writeup. Leaving this line unchecked because the *product-facing* tier concept (whatever UI/flow eventually surfaces `earning_method` to users) is still undefined — the gating mechanism itself is done and tested.
 - [x] `certificates.earning_method` enum column added (`tier1_video_quiz` / `tier2a_operator_signoff` / `tier2b_operator_or_sme_signoff`), via a real migration (`prisma/migrations/20260719064218_add_certificate_earning_method`), kept distinct from the existing `certificates.category` column per the "don't conflate the two" note in CODEBASE_SUMMARY.md.
 - [x] Booking validation: double-booking prevention enforced end-to-end — app-layer pre-check (`hasOverlappingBooking`, `lib/bookings.ts`) added ahead of the insert, plus the existing DB-constraint 23P01 catch now shares the identical clean message for the race window. See CLAUDE1.md "Sprint 4, Item 3" session note.
-- [x] Training/credentialing flow: submit, review, pass/fail, issue credential — three earning paths, matching `CertificateEarningMethod`'s own labels (no unified "review" step exists across all three, by design): tier1_video_quiz is auto-graded (`lib/quiz-attempts.ts`, `POST /api/training-videos/[id]/quiz-attempts`, no reviewer); tier2b_operator_or_sme_signoff is a scheduled multi-participant session, reusing the existing `training_enrollments` status column (`completed` = pass, `cancelled` = fail — no new statuses added); tier2a_operator_signoff is an on-demand, per-user operator review (live demo request or uploaded recording evidence), a new `CertificateSignoffRequest` model (`lib/certificate-signoffs.ts`) — **corrected mid-sprint**: the first pass wrongly conflated tier2a with tier2b via `training_enrollments`, fixed after the product owner clarified they're different flows. All three paths issue credentials through a shared `lib/training-credentials.ts` helper. See CLAUDE1.md "Sprint 4, Item 4" and "Sprint 4, Item 4, Correction."
+- [x] Training/credentialing flow: submit, review, pass/fail, issue credential — three earning paths, matching `CertificateEarningMethod`'s own labels (no unified "review" step exists across all three, by design): tier1_video_quiz is auto-graded (`lib/quiz-attempts.ts`, `POST /api/training-videos/[id]/quiz-attempts`, no reviewer); tier2b_operator_or_sme_signoff is a scheduled multi-participant session, reusing the existing `training_enrollments` status column (`completed` = pass, `cancelled` = fail — no new statuses added); tier2a_operator_signoff is an on-demand, per-user operator review (live demo request or uploaded recording evidence), a new `CertificateSignoffRequest` model (`lib/certificate-signoffs.ts`) — **corrected mid-sprint**: the first pass wrongly conflated tier2a with tier2b via `training_enrollments`, fixed after the product owner clarified they're different flows. All three paths issue credentials through a shared `lib/training-credentials.ts` helper. See CLAUDE1.md "Sprint 4, Item 4" and "Sprint 4, Item 4, Correction." **Extended 2026-07-27 with credential provenance** — see Sprint 7.14 below; a second earning path to the same certificate (internal company sign-off, tier2a1) is now representable without touching `earning_method`.
 - [x] **Close the route-protection gap found in the Sprint 3 Session 2 session/cookie
       review (see `CLAUDE1.md`, "Sprint 3, Session 2" section, 2026-07-19):
       there is currently no server-side route protection anywhere** — no
@@ -1784,6 +1784,77 @@ conversation before implementation starts.
 - [ ] Implement, page by page, once Sprint 7.12's content exists to animate
 
 ---
+
+## Sprint 7.14: Credential Provenance — `earned_via` on `user_certificates` (2026-07-27)
+
+Branch `feat/credential-provenance`, off `main`, not merged. Unblocks a
+second path to an existing certificate — company-admin internal sign-off,
+"tier2a1" — without touching `certificates.earning_method`, which describes
+how a certificate is *defined* to be earned, not how a given user actually
+earned it. Two different users can now hold the same certificate via two
+different provenances; the earlier design couldn't express that at all.
+
+- [x] New enum `CredentialProvenance` (`tier1_video_quiz` /
+  `tier2a_operator_signoff` / `tier2a1_internal_company_signoff` /
+  `tier2b_operator_or_sme_signoff`) — deliberately a separate enum from
+  `CertificateEarningMethod`, not a reuse, since the two answer different
+  questions (certificate-level definition vs. per-credential fact).
+- [x] `user_certificates.earned_via` (NOT NULL), migration
+  `prisma/migrations/20260727081239_add_credential_provenance` — added
+  nullable, backfilled 1:1 from each row's certificate's `earning_method`
+  (the only mapping possible today, since every certificate had exactly one
+  earning path before this session), then set NOT NULL in the same
+  migration file. Applied to the isolated `spacesnap_nextjs_test` DB only;
+  **`spacesnap_dev` migration is still pending** — run `npx prisma migrate
+  deploy` against it manually.
+- [x] `listings.accepts_internal_signoff Boolean @default(false)` — opt-in,
+  same migration. Defaults false on purpose: an operator must actively
+  decide an internally-signed-off credential satisfies their booking gate.
+- [x] `lib/credential-provenance.ts` — pure module: `PROVENANCE_RANK` (only
+  `tier2a1_internal_company_signoff` ranks below the other three, which rank
+  equally with each other — no ordering implied among tier1/tier2a/tier2b
+  themselves), `isStrongerProvenance`, `resolveProvenanceOnRenewal` (equal
+  ranks are a no-op; a credential's provenance can never be silently
+  downgraded to internal by a later internal sign-off), `satisfiesListing`
+  (internal only satisfies when the listing opted in; every other
+  provenance always satisfies).
+- [x] `lib/training-credentials.ts`'s `issueCredential` now takes a
+  `provenance` argument and resolves it against whatever's already on the
+  row (if anything) via `resolveProvenanceOnRenewal` before writing — no
+  behavioral change to `earnedDate` renewal. All three existing callers
+  (`lib/quiz-attempts.ts` → tier1, `lib/certificate-signoffs.ts` → tier2a,
+  `lib/training-enrollments.ts` → tier2b) updated to pass their provenance.
+- [x] Gating: `getMissingCertificates` (`lib/certificate-gating.ts`) now
+  also checks `satisfiesListing` per held credential, and
+  `missingCertificateIds` (`lib/bookings.ts`) fetches the listing's
+  `acceptsInternalSignoff` to pass through — a user holding only an
+  internal credential for a required cert is missing it on a listing that
+  hasn't opted in.
+- [x] `earning_method` untouched; `CertificateSignoffRequest` and its
+  `@@unique(userId, certificateId)` untouched — the internal (tier2a1) path
+  will use its own separate tables in a later session, so the two paths
+  coexist without relaxing that constraint.
+- [x] Zero UI changes — no listing-form toggle, no passport provenance
+  badge. Explicitly out of scope; leave for a future session if wanted.
+- [x] Tests: new `lib/credential-provenance.test.ts` (17 cases: ranking,
+  never-downgrade-to-internal, internal-then-operator upgrade, equal-rank
+  no-op, `satisfiesListing` × all 4 provenances × both listing states).
+  Extended `lib/certificate-gating.test.ts` (+3: internal+accepting=
+  satisfied, internal+not-accepting=missing, operator+not-accepting=
+  satisfied) and `lib/training-credentials.test.ts` (+2: renewal never-
+  downgrade, renewal upgrade), plus fixture updates in
+  `lib/quiz-attempts.test.ts` and `prisma/seed.ts` for the new NOT NULL
+  column. Registered in `package.json`'s `test` script. `npm test`: 476
+  passing (454 pre-existing + 22 new), 0 regressions. `tsc --noEmit`,
+  `eslint .`, and `next build` all clean; the 4 pre-existing eslint errors /
+  16 warnings (unrelated: a `passport/page.tsx` effect lint, `<img>` /
+  unescaped-entity / unused-var warnings, one `any` in a test file) are
+  unchanged from `main`, confirmed via `git stash`.
+- [ ] **Not built, per the brief's explicit scope** — the CA batch/internal
+  training event model that will actually *produce* tier2a1 credentials
+  (its routes, its UI), and any UI surfacing provenance at all. Both
+  deferred to a later session; this session only lays the schema/gating
+  groundwork so that later work has something to write into.
 
 ## Notes
 

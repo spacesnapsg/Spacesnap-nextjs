@@ -6,7 +6,7 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, CertificateEarningMethod } from "../app/generated/prisma/client";
+import { PrismaClient, CertificateEarningMethod, CredentialProvenance } from "../app/generated/prisma/client";
 import {
   gradeAndSubmitQuizAttempt,
   parseQuizSubmission,
@@ -204,7 +204,13 @@ describe("gradeAndSubmitQuizAttempt (Sprint 4, Item 4 — tier1_video_quiz)", ()
     const { video, questions } = await createVideoWithQuiz(certificate.id);
     try {
       await prisma.userCertificate.create({
-        data: { userId: user.id, certificateId: certificate.id, earnedDate: new Date("2020-01-01"), expiryDate: new Date("2021-01-01") },
+        data: {
+          userId: user.id,
+          certificateId: certificate.id,
+          earnedDate: new Date("2020-01-01"),
+          expiryDate: new Date("2021-01-01"),
+          earnedVia: CredentialProvenance.tier1_video_quiz,
+        },
       });
 
       const { credentialIssued } = await gradeAndSubmitQuizAttempt({

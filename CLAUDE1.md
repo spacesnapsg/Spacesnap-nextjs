@@ -5511,3 +5511,185 @@ Once restarted, verified via real HTTP calls against the dev server
 (`app/(user)/passport/page.tsx`'s setState-in-effect,
 `prisma/tests/db-constraints.test.ts`'s explicit-`any`), confirmed neither
 file was touched this session. `next build` clean, every new route listed.
+
+## Credential Provenance — `earned_via` on `user_certificates` (2026-07-27)
+
+Branch `feat/credential-provenance`, off `main`, not merged, not pushed.
+Brief: introduce credential *provenance* — how a specific user earned a
+specific credential, recorded on the credential itself — to unblock a second
+path to the same certificate (company-admin internal sign-off, "tier2a1",
+to be built in a later session) and let operators opt in per-listing to
+whether internally-signed credentials satisfy their booking gates. Told
+explicitly not to re-derive a numeric tier model — see "Sprint 4, Item 2
+(revised)" above: there isn't one, and this session didn't reintroduce one.
+
+**The core distinction, stated precisely because it's easy to blur:**
+`certificates.earning_method` (`CertificateEarningMethod`) describes how a
+*certificate* is defined to be earned — a property of the certificate
+catalog entry. The new `user_certificates.earned_via`
+(`CredentialProvenance`) describes how *this specific user* actually earned
+*this specific credential* — a property of the earned row. Today the two
+happen to be 1:1 (every certificate has exactly one earning path), which is
+exactly why the migration's backfill could be a direct mapping. They stop
+being 1:1 the moment a second path to the same certificate exists — the
+whole reason this field needed to live on `user_certificates` and not stay
+inferred from `certificates`. Kept them as two separate enums (not one enum
+reused, not `earned_via` derived from `earning_method` at read time)
+because conflating them was explicitly the thing to avoid — see the schema
+comments on both fields.
+
+**What was built:**
+- `CredentialProvenance` enum: `tier1_video_quiz`, `tier2a_operator_signoff`,
+  `tier2a1_internal_company_signoff`, `tier2b_operator_or_sme_signoff`.
+- `user_certificates.earned_via` — migration
+  `prisma/migrations/20260727081239_add_credential_provenance` written by
+  hand (generated via `prisma migrate dev --create-only`, then edited): adds
+  the column nullable, backfills every existing row from a
+  `certificates.earning_method` join (raw SQL `UPDATE ... FROM ... CASE`),
+  then `ALTER COLUMN ... SET NOT NULL` in the same file. Applied to
+  `spacesnap_nextjs_test` only via `npm run test:db:migrate`; confirmed via
+  `prisma migrate status` against `.env`'s `spacesnap_dev` that it's still
+  listed as pending there. **Dev DB migration is intentionally not run —
+  the product owner applies it manually**: `npx prisma migrate deploy`
+  (with `spacesnap_dev`'s `DATABASE_URL`, i.e. no `DOTENV_CONFIG_PATH`
+  override) picks it up as the sole pending migration.
+- `listings.accepts_internal_signoff Boolean @default(false)`, same
+  migration. Judgment call already made by the brief, not this session: false
+  by default, opt-in only.
+- `lib/credential-provenance.ts` — pure, no Prisma/DB dependency at runtime
+  (same pattern as `lib/certificate-gating.ts`; it imports the
+  `CredentialProvenance` enum's *type* from the generated client the same
+  way that file already imports `CertificateId`-adjacent types, not a live
+  `PrismaClient`). `PROVENANCE_RANK` is a flat `Record`, not a numeric tier
+  ladder — deliberately: `tier2a1_internal_company_signoff` maps to `0`,
+  the other three all map to `1`, so there is no ordering among
+  tier1/tier2a/tier2b themselves, only "internal vs. everything else." A
+  future provenance added below tier2a1, or a genuine ladder among the other
+  three, would both need a real product decision first, same as the
+  scrapped tier model — flagging this as the *only* ranking rule that
+  exists, not a starting point to extend by guessing.
+- `resolveProvenanceOnRenewal(existing, incoming)`: `isStrongerProvenance`
+  strictly greater-than, so **equal ranks return `existing` unchanged** —
+  this matters concretely for tier1/tier2a/tier2b re-earning each other
+  (e.g. a tier2b renewal on a tier1-earned credential doesn't silently
+  relabel it tier2b). The one hard invariant named in the brief — a
+  credential must never be downgraded to internal by a later internal
+  sign-off — falls out of this same strictly-greater-than rule for free,
+  no special-cased branch needed.
+- `satisfiesListing(earnedVia, acceptsInternalSignoff)`: only
+  `tier2a1_internal_company_signoff` is conditional; every other value
+  returns `true` unconditionally regardless of the listing's setting.
+- `lib/training-credentials.ts`'s `issueCredential` now takes a required
+  `provenance: CredentialProvenance` param. Implementation detail worth
+  flagging: Prisma's `upsert` can't conditionally compute a field's value
+  from the pre-existing row's own current value in one call, so this reads
+  the existing row's `earnedVia` first (inside the same `tx`, so still one
+  atomic unit with the rest of `issueCredential`'s writes), resolves it via
+  `resolveProvenanceOnRenewal` if a row exists, and writes the resolved
+  value on `create` and `update` both (`create` has no "existing" to
+  resolve against, so it's just `params.provenance` there). No change to
+  `earnedDate`/`expiryDate` renewal behavior. All three existing callers
+  updated to pass their provenance: `lib/quiz-attempts.ts` →
+  `tier1_video_quiz`, `lib/certificate-signoffs.ts` →
+  `tier2a_operator_signoff`, `lib/training-enrollments.ts` →
+  `tier2b_operator_or_sme_signoff` — a direct, unsurprising mapping, exactly
+  the "respective provenance" the brief asked for.
+- Gating: `getMissingCertificates` (`lib/certificate-gating.ts`) gained a
+  required `acceptsInternalSignoff: boolean` parameter (inserted before the
+  existing optional `asOf`, so every call site needed updating — there was
+  only one, `missingCertificateIds`) and now filters held credentials
+  through `satisfiesListing` in addition to the existing expiry check.
+  `missingCertificateIds` (`lib/bookings.ts`) now also fetches the
+  `Listing.acceptsInternalSignoff` flag (one added `findUniqueOrThrow`
+  alongside the existing two `Promise.all` queries) and the held
+  certificates' `earnedVia`, and passes both through. Traced the call path
+  first, per the brief's instruction, before touching it — both routes that
+  call `missingCertificateIds` (`app/api/bookings/route.ts`,
+  `app/api/supplier/bookings/[id]/confirm/route.ts`) needed zero changes,
+  since the function's own signature didn't change.
+
+**Untouched, exactly as instructed:** `certificates.earning_method` itself
+— not renamed, not reused, not made to derive `earned_via` or vice versa.
+`CertificateSignoffRequest` and its `@@unique(userId, certificateId)` —
+unmodified; the future internal-sign-off path gets its own tables later,
+so the two paths will coexist without relaxing this constraint. No UI: no
+listing-form toggle for `accepts_internal_signoff`, no provenance badge on
+the passport page — left as TODOs in intent, not in code, since the brief
+was explicit that adding UI here means stopping, not building a stub.
+
+**Fixture fallout from the new NOT NULL column**, all mechanical, no
+production-code behavior implications: `prisma/seed.ts`'s four
+`userCertificate.create` calls needed an `earnedVia` matching each row's
+certificate's `earningMethod` (same 1:1 mapping the migration's backfill
+used), and `lib/quiz-attempts.test.ts`'s one hand-constructed
+pre-existing-credential fixture needed the same. Caught by `tsc --noEmit`
+before running anything, not by a failing test — the generated Prisma types
+make an omitted required field a compile error on `.create()`, not a
+runtime surprise.
+
+**Tests:** new `lib/credential-provenance.test.ts`, 17 cases (`node:test`,
+pure functions, no DB) — ranking including "internal ranks below all
+three others" and "the other three rank equally," `isStrongerProvenance` in
+both directions plus the equal-rank case, `resolveProvenanceOnRenewal`'s
+never-downgrade/upgrade/equal-no-op/same-value cases, and `satisfiesListing`
+looped across all four provenance values × both listing states (8 cases).
+Extended `lib/certificate-gating.test.ts` (+3: internal held credential
+satisfied when the listing accepts internal sign-off, missing when it
+doesn't, and an operator-earned credential still satisfies a listing that
+doesn't accept internal sign-off — confirms the non-internal paths are
+unaffected by the new listing setting). Extended
+`lib/training-credentials.test.ts` (+2, hitting the real test DB like the
+rest of that file: renewal via internal sign-off never downgrades an
+existing operator credential; renewal via operator sign-off upgrades an
+existing internal-only one). All new/extended test files registered in
+`package.json`'s `test` script (`lib/credential-provenance.test.ts` added
+ahead of `lib/certificate-gating.test.ts`, matching that file's existing
+list order/style).
+
+**Verified:** `npm test` — **476/476** (454 pre-existing + 22 new: 17 + 3 +
+2), 0 regressions. `npx tsc --noEmit` clean. `npx eslint .` — same 4
+pre-existing errors / 16 warnings as `main` (`passport/page.tsx`'s
+setState-in-effect, `WhySpaceSnap.tsx`'s unescaped entities,
+`db-constraints.test.ts`'s explicit-`any`, plus assorted `<img>`/unused-var
+warnings across marketing components and `prisma/seed.ts`) — confirmed via
+`git stash` immediately before this session's changes landed, then
+`git stash pop` to restore them; zero new findings introduced. `next build`
+clean.
+
+**Judgment calls made, not explicitly specified in the brief:**
+- `PROVENANCE_RANK` as a flat two-tier `Record` (0 for internal, 1 for
+  everything else) rather than, say, four distinct integers — chosen
+  because the brief only ever describes a single boundary ("weakest" vs.
+  "the other three rank equally"), and inventing finer-grained numeric gaps
+  between tier1/tier2a/tier2b would be exactly the kind of unrequested
+  ordering the scrapped tier model already got burned on.
+  `isStrongerProvenance`/`resolveProvenanceOnRenewal` are written against
+  the rank values generically (`>`), not against a hardcoded "is it
+  internal" check, so if a real ordering among the other three is ever
+  confirmed, only the `PROVENANCE_RANK` table needs to change.
+- Where to fetch `Listing.acceptsInternalSignoff` in the gating path: added
+  it inside `missingCertificateIds` itself (one more parallel query)
+  rather than requiring callers to pass the listing in, since neither
+  existing caller already had the full `Listing` row in scope at the call
+  site and the brief said not to restructure the booking flow.
+- Migration file was hand-edited after `prisma migrate dev --create-only`
+  rather than trusting the raw generated diff: the generated SQL also
+  included an unrelated `ALTER COLUMN "referral_code" SET DEFAULT ...` on
+  `users` that turned out to be a no-op against the test DB's actual
+  current default (confirmed via `psql \d users` before deciding) — almost
+  certainly Prisma's diffing re-emitting a `dbgenerated()` default it can't
+  otherwise verify byte-for-byte, unrelated pre-existing drift, not
+  something this session's schema change caused. Left out of this
+  migration entirely rather than silently folding an unrelated statement
+  into a change titled credential provenance.
+- Migration naming: the brief said "`spacesnap_testing`," which isn't an
+  actual database name anywhere in this repo (confirmed via grep) — the
+  established isolated test DB is `spacesnap_nextjs_test` per this file's
+  own "DB (test)" line near the top and every prior session's convention;
+  treated as the same target and applied there.
+
+**Not built, confirmed out of scope by the brief itself:** the CA
+batch/internal training event model that will eventually *produce*
+tier2a1 credentials (routes, UI) — later session. Any UI surfacing
+provenance to a user or operator — explicitly told to stop and leave a TODO
+rather than build one if tempted; no such temptation acted on.

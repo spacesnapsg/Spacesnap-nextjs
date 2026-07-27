@@ -14,6 +14,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
+import { ListingNotFoundError } from "@/lib/listings";
 import { stripe, toStripeCents, StripeChargeFailedError, StripeRefundFailedError } from "@/lib/stripe";
 
 // Re-exported for the several booking routes that import these from here
@@ -336,22 +337,34 @@ export function parseModifyBookingFields(body: unknown): ParsedModifyBookingFiel
 }
 
 // Fetches the required/held certificate ids and delegates the actual gating
-// decision (required minus held-and-not-expired) to the pure set-difference
-// module — see lib/certificate-gating.ts. Mirrors BookingController::store
-// and SupplierBookingController's shared missing-certificate check.
+// decision (required minus held-and-not-expired-and-satisfying) to the pure
+// set-difference module — see lib/certificate-gating.ts. Mirrors
+// BookingController::store and SupplierBookingController's shared
+// missing-certificate check. A held credential earned via internal
+// (tier2a1) company sign-off only counts when this listing has opted in via
+// `accepts_internal_signoff` — see lib/credential-provenance.ts.
+//
+// Throws ListingNotFoundError (not a generic Prisma "not found") when
+// listingId doesn't resolve, so a deleted/bad listing id is distinguishable
+// from — and can never be misreported as — the user being short a
+// certificate: satisfiesListing must never be evaluated against a listing
+// that doesn't exist.
 export async function missingCertificateIds(listingId: bigint, userId: string): Promise<bigint[]> {
-  const [required, held] = await Promise.all([
+  const [listing, required, held] = await Promise.all([
+    prisma.listing.findUnique({ where: { id: listingId }, select: { acceptsInternalSignoff: true } }),
     prisma.listingRequiredCertificate.findMany({ where: { listingId }, select: { certificateId: true } }),
     prisma.userCertificate.findMany({
       where: { userId },
-      select: { certificateId: true, expiryDate: true },
+      select: { certificateId: true, expiryDate: true, earnedVia: true },
     }),
   ]);
+  if (!listing) throw new ListingNotFoundError();
 
   const missingIds = new Set(
     getMissingCertificates(
       required.map((r) => r.certificateId.toString()),
-      held.map((h) => ({ certificateId: h.certificateId.toString(), expiryDate: h.expiryDate }))
+      held.map((h) => ({ certificateId: h.certificateId.toString(), expiryDate: h.expiryDate, earnedVia: h.earnedVia })),
+      listing.acceptsInternalSignoff
     )
   );
   return required.map((r) => r.certificateId).filter((id) => missingIds.has(id.toString()));

@@ -51,6 +51,22 @@ enum CertificateEarningMethod {
   @@map("certificate_earning_method")
 }
 
+// How a *specific user* earned a *specific* credential — recorded on
+// UserCertificate, not Certificate. Distinct from CertificateEarningMethod,
+// which describes how a certificate is defined to be earned (a property of
+// the certificate). Provenance is a property of the earned credential
+// itself, because a second path to the same certificate (company-admin
+// internal sign-off, tier2a1) can coexist with the certificate's own
+// earningMethod. See lib/credential-provenance.ts for ranking/gating rules.
+enum CredentialProvenance {
+  tier1_video_quiz
+  tier2a_operator_signoff
+  tier2a1_internal_company_signoff
+  tier2b_operator_or_sme_signoff
+
+  @@map("credential_provenance")
+}
+
 enum ListingType {
   space
   equipment
@@ -1406,6 +1422,11 @@ model Listing {
   // marketplace's Pinned tier by accident.
   pinnedAt        DateTime?   @map("pinned_at")
   pinnedUntil     DateTime?   @map("pinned_until")
+  // Credential provenance (session: feat/credential-provenance). Opt-in,
+  // deliberately defaulted false — an operator must actively decide that a
+  // company-admin-signed-off (tier2a1) credential satisfies their booking
+  // gate; they are never opted in silently. See lib/credential-provenance.ts.
+  acceptsInternalSignoff Boolean @default(false) @map("accepts_internal_signoff")
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
 
@@ -1445,6 +1466,12 @@ model UserCertificate {
   certificateId BigInt    @map("certificate_id")
   earnedDate    DateTime  @map("earned_date") @db.Date
   expiryDate    DateTime? @map("expiry_date") @db.Date
+  // How THIS user earned THIS credential (session: feat/credential-provenance).
+  // Backfilled 1:1 from certificate.earningMethod at migration time, since
+  // only one earning path per certificate existed before this session — see
+  // that migration's raw-SQL backfill. Not the same field as, and never
+  // conflated with, Certificate.earningMethod. See lib/credential-provenance.ts.
+  earnedVia     CredentialProvenance @map("earned_via")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 

@@ -1,4 +1,10 @@
-import { TrainingEnrollmentStatus, ActivityActionType, Prisma, type TrainingEnrollment } from "@/app/generated/prisma/client";
+import {
+  TrainingEnrollmentStatus,
+  ActivityActionType,
+  CredentialProvenance,
+  Prisma,
+  type TrainingEnrollment,
+} from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { issueCredential } from "@/lib/training-credentials";
@@ -221,6 +227,7 @@ export async function updateEnrollmentStatus(
         userId: existing.userId,
         certificateId: existing.trainingSession.certificateId,
         description: `Earned via completing "${existing.trainingSession.title}" (sign-off).`,
+        provenance: CredentialProvenance.tier2b_operator_or_sme_signoff,
       });
     }
 

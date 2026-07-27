@@ -1,6 +1,7 @@
 import {
   ActivityActionType,
   CertificateEarningMethod,
+  CredentialProvenance,
   SignoffRequestStatus,
   SignoffSubmissionType,
   type CertificateSignoffRequest,
@@ -245,6 +246,7 @@ export async function reviewSignoffRequest(params: ReviewSignoffRequestParams): 
         userId: existing.userId,
         certificateId: existing.certificateId,
         description: `Earned via operator sign-off for "${existing.certificate.name}".`,
+        provenance: CredentialProvenance.tier2a_operator_signoff,
       });
     }
 

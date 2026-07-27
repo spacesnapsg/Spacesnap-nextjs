@@ -6,7 +6,7 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../app/generated/prisma/client";
+import { CredentialProvenance, PrismaClient } from "../app/generated/prisma/client";
 import { issueCredential } from "./training-credentials";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -42,7 +42,12 @@ describe("issueCredential", () => {
     const certificate = await createCertificate();
     try {
       await prisma.$transaction((tx) =>
-        issueCredential(tx, { userId: user.id, certificateId: certificate.id, description: "Test issuance." })
+        issueCredential(tx, {
+          userId: user.id,
+          certificateId: certificate.id,
+          description: "Test issuance.",
+          provenance: CredentialProvenance.tier1_video_quiz,
+        })
       );
 
       const credential = await prisma.userCertificate.findUnique({
@@ -50,6 +55,7 @@ describe("issueCredential", () => {
       });
       assert.ok(credential);
       assert.equal(credential!.expiryDate, null);
+      assert.equal(credential!.earnedVia, CredentialProvenance.tier1_video_quiz);
 
       const log = await prisma.activityLog.findMany({ where: { userId: user.id } });
       assert.equal(log.length, 1);
@@ -77,17 +83,89 @@ describe("issueCredential", () => {
           certificateId: certificate.id,
           earnedDate: new Date("2020-01-01"),
           expiryDate: new Date("2021-01-01"),
+          earnedVia: CredentialProvenance.tier1_video_quiz,
         },
       });
 
       await prisma.$transaction((tx) =>
-        issueCredential(tx, { userId: user.id, certificateId: certificate.id, description: "Renewal." })
+        issueCredential(tx, {
+          userId: user.id,
+          certificateId: certificate.id,
+          description: "Renewal.",
+          provenance: CredentialProvenance.tier1_video_quiz,
+        })
       );
 
       const rows = await prisma.userCertificate.findMany({ where: { userId: user.id, certificateId: certificate.id } });
       assert.equal(rows.length, 1);
       assert.equal(rows[0].expiryDate, null);
       assert.ok(rows[0].earnedDate.getFullYear() >= 2026);
+    } finally {
+      await cleanup(user.id, certificate.id);
+    }
+  });
+
+  // Session: feat/credential-provenance — resolveProvenanceOnRenewal wiring.
+  test("renewal via internal sign-off never downgrades an existing operator-signed-off credential", async () => {
+    const user = await createUser();
+    const certificate = await createCertificate();
+    try {
+      await prisma.userCertificate.create({
+        data: {
+          userId: user.id,
+          certificateId: certificate.id,
+          earnedDate: new Date("2020-01-01"),
+          expiryDate: new Date("2021-01-01"),
+          earnedVia: CredentialProvenance.tier2a_operator_signoff,
+        },
+      });
+
+      await prisma.$transaction((tx) =>
+        issueCredential(tx, {
+          userId: user.id,
+          certificateId: certificate.id,
+          description: "Internal renewal attempt.",
+          provenance: CredentialProvenance.tier2a1_internal_company_signoff,
+        })
+      );
+
+      const row = await prisma.userCertificate.findUniqueOrThrow({
+        where: { userId_certificateId: { userId: user.id, certificateId: certificate.id } },
+      });
+      assert.equal(row.earnedVia, CredentialProvenance.tier2a_operator_signoff);
+      assert.equal(row.expiryDate, null);
+    } finally {
+      await cleanup(user.id, certificate.id);
+    }
+  });
+
+  test("renewal via operator sign-off upgrades an existing internal-only credential", async () => {
+    const user = await createUser();
+    const certificate = await createCertificate();
+    try {
+      await prisma.userCertificate.create({
+        data: {
+          userId: user.id,
+          certificateId: certificate.id,
+          earnedDate: new Date("2020-01-01"),
+          expiryDate: null,
+          earnedVia: CredentialProvenance.tier2a1_internal_company_signoff,
+        },
+      });
+
+      await prisma.$transaction((tx) =>
+        issueCredential(tx, {
+          userId: user.id,
+          certificateId: certificate.id,
+          description: "Operator sign-off.",
+          provenance: CredentialProvenance.tier2a_operator_signoff,
+        })
+      );
+
+      const row = await prisma.userCertificate.findUniqueOrThrow({
+        where: { userId_certificateId: { userId: user.id, certificateId: certificate.id } },
+      });
+      assert.equal(row.earnedVia, CredentialProvenance.tier2a_operator_signoff);
     } finally {
       await cleanup(user.id, certificate.id);
     }

@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, BookingType, TransactionType, RewardGrantType, Prisma } from "../app/generated/prisma/client";
 import { getCreditBalance } from "./credits";
+import { ListingNotFoundError } from "./listings";
 import {
   hasOverlappingBooking,
   createBookingWithDebit,
@@ -36,6 +37,7 @@ import {
   BookingModificationNotEligibleError,
   BookingModificationOverlapError,
   ModificationPaymentMethodRequiredError,
+  missingCertificateIds,
 } from "./bookings";
 
 const TEST_PAYMENT_METHOD_ID = "pm_card_visa";
@@ -207,6 +209,21 @@ describe("hasOverlappingBooking (app-layer mirror of bookings_no_overlap)", () =
       assert.equal(result, false);
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// Session: feat/credential-provenance — a deleted/bad listingId must throw
+// ListingNotFoundError, not silently fall through to gating logic (which
+// would otherwise evaluate satisfiesListing against a listing that doesn't
+// exist and could misreport a fully-credentialed user as missing certs).
+describe("missingCertificateIds — listing-not-found", () => {
+  test("a nonexistent listingId throws ListingNotFoundError, not a credential-gating result", async () => {
+    const user = await createUser();
+    try {
+      await assert.rejects(() => missingCertificateIds(BigInt(999999999), user.id), ListingNotFoundError);
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
     }
   });
 });

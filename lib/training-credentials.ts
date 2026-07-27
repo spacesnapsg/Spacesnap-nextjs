@@ -1,5 +1,12 @@
-import { ActivityActionType, AdminNotificationType, type Prisma, type UserCertificate } from "@/app/generated/prisma/client";
+import {
+  ActivityActionType,
+  AdminNotificationType,
+  type CredentialProvenance,
+  type Prisma,
+  type UserCertificate,
+} from "@/app/generated/prisma/client";
 import { createAdminNotification } from "@/lib/admin-notifications";
+import { resolveProvenanceOnRenewal } from "@/lib/credential-provenance";
 
 // Shared by both credentialing paths built for Sprint 4, Item 4 —
 // lib/quiz-attempts.ts (tier1_video_quiz, auto-graded) and
@@ -26,18 +33,30 @@ import { createAdminNotification } from "@/lib/admin-notifications";
 // comment on UserCertificate.expiryDate.
 export async function issueCredential(
   tx: Prisma.TransactionClient,
-  params: { userId: string; certificateId: bigint; description: string }
+  params: { userId: string; certificateId: bigint; description: string; provenance: CredentialProvenance }
 ): Promise<UserCertificate> {
+  // Provenance must never be silently downgraded on renewal (e.g. an
+  // internal sign-off re-earning a credential someone already holds via
+  // operator sign-off) — resolve against whatever's already on the row, if
+  // anything, before writing. See lib/credential-provenance.ts.
+  const existing = await tx.userCertificate.findUnique({
+    where: { userId_certificateId: { userId: params.userId, certificateId: params.certificateId } },
+    select: { earnedVia: true },
+  });
+  const earnedVia = existing ? resolveProvenanceOnRenewal(existing.earnedVia, params.provenance) : params.provenance;
+
   const credential = await tx.userCertificate.upsert({
     where: { userId_certificateId: { userId: params.userId, certificateId: params.certificateId } },
     create: {
       userId: params.userId,
       certificateId: params.certificateId,
       earnedDate: new Date(),
+      earnedVia,
     },
     update: {
       earnedDate: new Date(),
       expiryDate: null,
+      earnedVia,
     },
   });
 
