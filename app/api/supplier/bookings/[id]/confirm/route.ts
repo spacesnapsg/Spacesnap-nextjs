@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireSupplier } from "@/lib/supplier-auth";
 import { forbiddenResponse, notFoundResponse } from "@/lib/api-errors";
-import { parseBigIntParam } from "@/lib/listings";
+import { parseBigIntParam, ListingNotFoundError } from "@/lib/listings";
 import { missingCertificateIds, serializeBooking, confirmBookingWithAudit, BookingNotConfirmableError } from "@/lib/bookings";
 
 // Mirrors old SupplierBookingController::confirm (company-ownership check
@@ -25,7 +25,13 @@ export async function PATCH(_request: Request, { params }: { params: Promise<{ i
     return forbiddenResponse("You do not have access to this booking.");
   }
 
-  const missing = await missingCertificateIds(booking.listingId, booking.userId);
+  let missing;
+  try {
+    missing = await missingCertificateIds(booking.listingId, booking.userId);
+  } catch (error) {
+    if (error instanceof ListingNotFoundError) return notFoundResponse(error.message);
+    throw error;
+  }
   if (missing.length > 0) {
     const certificates = await prisma.certificate.findMany({
       where: { id: { in: missing } },

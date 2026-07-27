@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { BookingStatus } from "@/app/generated/prisma/client";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { ApiValidationError, unauthorizedResponse, validationErrorResponse } from "@/lib/api-errors";
+import { ApiValidationError, notFoundResponse, unauthorizedResponse, validationErrorResponse } from "@/lib/api-errors";
 import {
   BOOKING_OVERLAP_MESSAGE,
   createBookingWithDebit,
@@ -15,6 +15,7 @@ import {
   StripeChargeFailedError,
   StripeRefundFailedError,
 } from "@/lib/bookings";
+import { ListingNotFoundError } from "@/lib/listings";
 import { getEffectiveCompanyPricing, markupPercentForBookingType, applyMarkup } from "@/lib/pricing";
 
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
@@ -83,7 +84,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const missing = await missingCertificateIds(fields.listingId, session.user.id);
+  let missing;
+  try {
+    missing = await missingCertificateIds(fields.listingId, session.user.id);
+  } catch (error) {
+    if (error instanceof ListingNotFoundError) return notFoundResponse(error.message);
+    throw error;
+  }
   if (missing.length > 0) {
     const certificates = await prisma.certificate.findMany({
       where: { id: { in: missing } },
