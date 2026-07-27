@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireSystemAdmin } from "@/lib/admin-auth";
 import { notFoundResponse, validationErrorResponse, ApiValidationError } from "@/lib/api-errors";
 import { parseBigIntParam } from "@/lib/listings";
-import { updateCompanyPricingOverrides, listCompanyPricingOverrides } from "@/lib/pricing";
+import { updateCompanyPricingOverrides, getCompanyPricingOverride } from "@/lib/pricing";
 
 // System-admin-only. Sets/clears one company's per-supplier pricing overrides.
 // A field set to null reverts it to the platform default; an omitted field is
@@ -27,8 +27,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     throw error;
   }
 
-  const companies = await listCompanyPricingOverrides();
-  const updated = companies.find((c) => c.companyId === companyId.toString());
+  const updated = await getCompanyPricingOverride(companyId);
   if (!updated) return notFoundResponse("Company not found.");
   return NextResponse.json({ company: updated });
 }
