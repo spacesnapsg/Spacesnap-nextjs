@@ -10,9 +10,12 @@ import Modal from "@/components/Modal";
 import CertificateDetailModal from "@/components/CertificateDetailModal";
 import TrainingSessionDetailModal from "@/components/TrainingSessionDetailModal";
 import BuyerOrganizationCard from "@/components/BuyerOrganizationCard";
+import InternalTrainingEntryCard from "@/components/InternalTrainingEntryCard";
 import { useCurrentUser, useUpdateProfile } from "@/lib/hooks/useCurrentUser";
 import { useCertificateCatalog, type Certificate } from "@/lib/hooks/useCertificates";
-import { useCredentials, isCredentialHeld } from "@/lib/hooks/useCredentials";
+import { useCredentials, isCredentialHeld, type Credential } from "@/lib/hooks/useCredentials";
+import { PROVENANCE_LABEL, getProvenanceTooltip } from "@/lib/credential-provenance";
+import type { CredentialProvenance } from "@/app/generated/prisma/client";
 import { useTrainingSessions, type TrainingSession } from "@/lib/hooks/useTrainingSessions";
 import {
   useTrainingVideos,
@@ -305,15 +308,19 @@ function TutorialDetailModal({ videoId, onClose }: { videoId: string | null; onC
 function CertBadge({
   certificate,
   earned,
+  credential,
   highlighted,
   onSelect,
 }: {
   certificate: Certificate;
   earned: boolean;
+  credential: Credential | null;
   highlighted: boolean;
   onSelect: (certificate: Certificate) => void;
 }) {
   const highlightClass = highlighted ? "ring-2 ring-user-teal-start" : "";
+  const provenanceLabel = credential ? PROVENANCE_LABEL[credential.earnedVia as CredentialProvenance] : null;
+  const provenanceTooltip = credential ? getProvenanceTooltip(credential.earnedVia as CredentialProvenance) : null;
 
   if (!earned) {
     return (
@@ -336,6 +343,7 @@ function CertBadge({
       type="button"
       id={`cert-badge-${certificate.id}`}
       onClick={() => onSelect(certificate)}
+      title={provenanceTooltip ?? undefined}
       className={`relative text-left bg-background border border-border/60 rounded p-3 flex flex-col items-center justify-center gap-1.5 text-center hover:border-user-teal-start/50 transition-colors ${highlightClass}`}
     >
       <span className="absolute top-1.5 right-1.5 h-3 w-3 rounded-full bg-user-teal-start flex items-center justify-center">
@@ -343,6 +351,7 @@ function CertBadge({
       </span>
       <span className="text-lg">{certificate.icon}</span>
       <p className="text-xs font-semibold text-body-text leading-snug">{certificate.name}</p>
+      {provenanceLabel && <p className="text-[10px] text-muted-text truncate w-full">{provenanceLabel}</p>}
     </button>
   );
 }
@@ -541,6 +550,8 @@ export default function DigitalPassportPage() {
 
           <BuyerOrganizationCard />
 
+          <InternalTrainingEntryCard />
+
           <div className="bg-gradient-to-br from-user-teal-start to-user-teal-end rounded-card p-6 text-white flex flex-col gap-1">
             <div className="flex items-center gap-2">
               <Trophy size={18} />
@@ -569,6 +580,7 @@ export default function DigitalPassportPage() {
                   key={certificate.id}
                   certificate={certificate}
                   earned={earnedCertIds.has(certificate.id)}
+                  credential={credentials?.find((c) => c.certificateId === certificate.id) ?? null}
                   highlighted={filterCertId === certificate.id}
                   onSelect={(cert) => setSelectedCertId(cert.id)}
                 />

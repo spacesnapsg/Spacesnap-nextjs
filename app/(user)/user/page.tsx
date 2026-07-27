@@ -105,6 +105,9 @@ const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   booking_credit_granted: Wallet,
   booking_credit_redeemed: Wallet,
   booking_credit_refunded: Wallet,
+  internal_training_event_created: GraduationCap,
+  internal_training_evidence_uploaded: GraduationCap,
+  internal_training_participant_reviewed: Award,
 };
 
 // Only booking_created/confirmed/declined/completed descriptions ever

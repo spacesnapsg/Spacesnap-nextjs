@@ -2,6 +2,8 @@ import { CheckCircle2, Lock } from "lucide-react";
 import Modal from "@/components/Modal";
 import type { Certificate } from "@/lib/hooks/useCertificates";
 import type { Credential } from "@/lib/hooks/useCredentials";
+import { PROVENANCE_LABEL, getProvenanceTooltip } from "@/lib/credential-provenance";
+import type { CredentialProvenance } from "@/app/generated/prisma/client";
 
 function formatDate(dateString: string) {
   return new Date(dateString).toLocaleDateString("en-US", {
@@ -14,6 +16,8 @@ function formatDate(dateString: string) {
 const EARNING_METHOD_COPY: Record<string, string> = {
   tier1_video_quiz: "Watch the training video and pass its quiz to earn this certificate.",
   tier2a_operator_signoff: "Submit a recording (or request a live demo) for operator sign-off to earn this certificate.",
+  tier2a1_internal_company_signoff:
+    "This certificate can also be earned through an in-house training run by your organization admin — check with them for the schedule.",
   tier2b_operator_or_sme_signoff: "Enroll in a scheduled training session and get signed off by the SME to earn this certificate.",
 };
 
@@ -78,10 +82,18 @@ export default function CertificateDetailModal({
           </div>
 
           {credential && (
-            <div className="border-t border-border/40 pt-4 flex justify-between text-sm">
-              <span className="text-muted-text">Earned {formatDate(credential.earnedDate)}</span>
-              <span className={isExpired ? "text-error-red" : "text-muted-text"}>
-                {credential.expiryDate ? `${isExpired ? "Expired" : "Expires"} ${formatDate(credential.expiryDate)}` : "No expiration"}
+            <div className="border-t border-border/40 pt-4 flex flex-col gap-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-text">Earned {formatDate(credential.earnedDate)}</span>
+                <span className={isExpired ? "text-error-red" : "text-muted-text"}>
+                  {credential.expiryDate ? `${isExpired ? "Expired" : "Expires"} ${formatDate(credential.expiryDate)}` : "No expiration"}
+                </span>
+              </div>
+              <span
+                title={getProvenanceTooltip(credential.earnedVia as CredentialProvenance) ?? undefined}
+                className="self-start inline-flex items-center gap-1.5 bg-white/10 text-body-text border border-white/20 rounded-full px-2.5 py-1 text-xs font-medium"
+              >
+                {PROVENANCE_LABEL[credential.earnedVia as CredentialProvenance]}
               </span>
             </div>
           )}

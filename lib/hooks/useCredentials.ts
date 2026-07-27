@@ -7,6 +7,7 @@ export interface Credential {
   certificateId: string;
   earnedDate: string;
   expiryDate: string | null;
+  earnedVia: string;
   certificate: {
     id: string;
     name: string;

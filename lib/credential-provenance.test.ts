@@ -3,7 +3,14 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { CredentialProvenance } from "@/app/generated/prisma/client";
-import { PROVENANCE_RANK, isStrongerProvenance, resolveProvenanceOnRenewal, satisfiesListing } from "./credential-provenance";
+import {
+  PROVENANCE_RANK,
+  isStrongerProvenance,
+  resolveProvenanceOnRenewal,
+  satisfiesListing,
+  PROVENANCE_LABEL,
+  getProvenanceTooltip,
+} from "./credential-provenance";
 
 const ALL_PROVENANCES = [
   CredentialProvenance.tier1_video_quiz,
@@ -95,4 +102,25 @@ describe("satisfiesListing", () => {
       assert.equal(satisfiesListing(provenance, false), expectedWhenNotAccepting);
     });
   }
+});
+
+describe("PROVENANCE_LABEL / getProvenanceTooltip", () => {
+  test("every provenance value has a non-empty label", () => {
+    for (const provenance of ALL_PROVENANCES) {
+      assert.equal(typeof PROVENANCE_LABEL[provenance], "string");
+      assert.ok(PROVENANCE_LABEL[provenance].length > 0);
+    }
+  });
+
+  test("only internal company sign-off gets an explanatory tooltip", () => {
+    for (const provenance of ALL_PROVENANCES) {
+      const tooltip = getProvenanceTooltip(provenance);
+      if (provenance === CredentialProvenance.tier2a1_internal_company_signoff) {
+        assert.equal(typeof tooltip, "string");
+        assert.ok(tooltip && tooltip.length > 0);
+      } else {
+        assert.equal(tooltip, null);
+      }
+    }
+  });
 });

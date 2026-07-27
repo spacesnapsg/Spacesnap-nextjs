@@ -20,6 +20,8 @@ export default {
         "supplier-purple-end": "#6b21a8",
         "admin-red-start": "#ef4444",
         "admin-orange-end": "#f97316",
+        "ca-emerald-start": "#059669",
+        "ca-emerald-end": "#10b981",
         "success-green": "#22c55e",
         "error-red": "#ef4444",
         amber: "#f59e0b",

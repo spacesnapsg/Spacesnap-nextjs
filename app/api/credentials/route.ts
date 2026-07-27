@@ -31,6 +31,7 @@ export async function GET() {
       certificateId: c.certificateId.toString(),
       earnedDate: c.earnedDate.toISOString().slice(0, 10),
       expiryDate: c.expiryDate ? c.expiryDate.toISOString().slice(0, 10) : null,
+      earnedVia: c.earnedVia,
       certificate: {
         id: c.certificate.id.toString(),
         name: c.certificate.name,

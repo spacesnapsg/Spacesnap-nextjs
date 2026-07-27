@@ -1990,6 +1990,82 @@ credentials; operators opt in per listing.
     per organization, and "the CA cannot include themselves" reads most
     naturally as "whoever is doing the adding can't add themselves."
 
+## Sprint 7.16: Internal Training Sign-Off — UI (2026-07-27/28)
+
+Branch `feat/internal-training-ui`, off `feat/internal-training-signoff`
+(session 2a's own branch, tip `ae844ab`). Builds every UI screen Sprint
+7.15 left unbuilt: CA event creation, both evidence-upload entry points
+(CA and participant), the CA sign-off queue + event detail page, and a
+Digital Passport provenance badge. No schema/migration/new backend route.
+
+- [x] **CA colour/placement decision, put to the product owner**: no new
+  portal/navbar/proxy route table/`RoleGuard` variant (mirrors
+  `isCompanyAdmin`'s own precedent of no dedicated identity) — new pages
+  live inside the existing `(user)` route group, gated inline by
+  `isBuyerOrgAdmin` — but a new `ca-emerald-start`/`ca-emerald-end`
+  Tailwind pair for visual distinction on CA-only screens only.
+- [x] New pages under `app/(user)/internal-training/**`: participant "My
+  Trainings" (`/internal-training`), CA dashboard (`/internal-training/admin`),
+  CA sign-off queue (`/internal-training/admin/queue`, derived client-side
+  from the dashboard's own cache — no dedicated queue route exists), CA
+  event detail (`/internal-training/admin/[id]`).
+- [x] New components: `CreateInternalTrainingEventModal`,
+  `ParticipantPicker`, `CertificatePickerSingle`, `EvidenceUploadField`,
+  `InternalTrainingEntryCard` (Passport-page entry point). New hooks:
+  `lib/hooks/useInternalTrainingEvents.ts`, `lib/hooks/useEvidenceUpload.ts`
+  (wraps the existing R2 presigned-PUT + confirm routes, no second storage
+  path). New pure-logic module `lib/internal-training-ui.ts`
+  (`getReviewDisabledReason`, `buildSignoffQueue`).
+- [x] Passport provenance badge: `PROVENANCE_LABEL`/`getProvenanceTooltip`
+  added to the existing `lib/credential-provenance.ts`; `earnedVia` added
+  to `GET /api/credentials`'s response and `useCredentials`'s type (the
+  Prisma query already returned the column — additive to an existing
+  route, not a schema change). Same neutral pill for all 4 values, no
+  lesser styling; native `title=""` tooltip only on the internal-signoff
+  variant, matching the app's only tooltip convention (no dedicated
+  Tooltip component exists).
+- [x] Three real bugs found via manual browser verification, not by
+  inspection, and fixed:
+  1. `useAddInternalTrainingParticipant`'s stale-eventId closure bug (the
+     create flow only knows the real `eventId` after the event-creation
+     mutation resolves) — refactored to take `{eventId, userId}` as
+     mutate-time variables instead of a hook-call-time argument.
+  2. `ParticipantPicker`/`CertificatePickerSingle`'s absolutely-positioned
+     dropdown covered whatever followed it in the page (e.g. an "Add
+     Selected" button directly beneath), blocking clicks until closed —
+     added an outside-click handler to both.
+  3. The User dashboard's `ACTIVITY_ICONS` map (`app/(user)/user/page.tsx`)
+     crashed on any of this session's new activity-log writes, because
+     2a's 3 new `ActivityActionType` values were never added to
+     `lib/hooks/useActivity.ts`'s hand-maintained mirror union — a latent
+     gap from Sprint 7.15 (that file's own comment already documents this
+     exact failure mode happening once before), only surfaced now because
+     no UI existed before this session to trigger those activity types.
+     Fixed by adding all 3 to the union, `ACTIVITY_CATEGORIES.training`,
+     and `ACTIVITY_ICONS`.
+- [x] Dev DB migration `20260727091801_add_internal_training_signoff`
+  applied to `spacesnap_dev` — asked the product owner first (2a had
+  deliberately left it unapplied), got explicit yes, ran
+  `npx prisma migrate deploy`. Manual verification used a throwaway
+  `BuyerOrganization`/CA user/participant user (one-off script, deleted
+  after use; the org/users themselves left in `spacesnap_dev` as harmless
+  fixture data).
+- [x] Not built, matching the brief's own carve-outs: no "remove
+  participant" UI, no event-status transition UI (`draft` stays fully
+  inert from this UI's perspective — reported, not removed, per
+  instruction), listing toggle verified only (not rebuilt).
+- [x] Tests: 491 → 501 (+10 — 2 extending `lib/credential-provenance.test.ts`,
+  8 in new `lib/internal-training-ui.test.ts`), 0 regressions. No
+  component-render tests added — this codebase has no React
+  component-testing infrastructure at all; both required coverage items
+  (pass-disabled-without-evidence, all-4-provenance-values) were instead
+  satisfied by extracting the decision logic into pure functions and
+  unit-testing those directly. New test file registered in `package.json`.
+  `tsc --noEmit` clean. `eslint .` identical to the pre-session baseline
+  modulo one pre-existing error's line-number shift. `next build` clean,
+  all 4 new routes listed.
+- [x] Both docs updated; every judgment call flagged inline as it came up.
+
 ## Notes
 
 - This plan assumes a full-stack rewrite (frontend + backend + auth), not a frontend-only swap onto the existing Laravel API.

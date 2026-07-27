@@ -42,7 +42,10 @@ export type ActivityActionType =
   | "booking_declined_pending_resolution"
   | "booking_credit_granted"
   | "booking_credit_redeemed"
-  | "booking_credit_refunded";
+  | "booking_credit_refunded"
+  | "internal_training_event_created"
+  | "internal_training_evidence_uploaded"
+  | "internal_training_participant_reviewed";
 
 export interface ActivityEntry {
   id: string;
@@ -95,7 +98,16 @@ export const ACTIVITY_CATEGORIES: Record<ActivityCategory, { label: string; type
   check_ins: { label: "Check-ins", types: ["check_in", "check_out"] },
   training: {
     label: "Training",
-    types: ["training_enrolled", "training_waitlisted", "training_waitlist_approved", "training_session_created", "quiz_attempt_submitted"],
+    types: [
+      "training_enrolled",
+      "training_waitlisted",
+      "training_waitlist_approved",
+      "training_session_created",
+      "quiz_attempt_submitted",
+      "internal_training_event_created",
+      "internal_training_evidence_uploaded",
+      "internal_training_participant_reviewed",
+    ],
   },
   certificates: { label: "Certificates", types: ["credential_issued", "signoff_requested", "signoff_reviewed"] },
 };

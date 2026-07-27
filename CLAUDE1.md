@@ -5942,3 +5942,170 @@ manifest.
 - Both `SPRINT_PLAN_NEXTJS_REWRITE.md` and this file updated.
 - Every unspecified assumption listed above, inline, as each judgment call
   came up rather than collected as an afterthought.
+
+---
+
+## Internal Training Sign-Off — UI (2026-07-27/28)
+
+Branch `feat/internal-training-ui`, off `feat/internal-training-signoff`
+(tip `ae844ab`, confirmed via `git branch --show-current` before starting —
+that branch already contains all of session 2a). Builds the UI the 2a
+session deliberately left unbuilt: create an event, upload evidence (both
+CA and participant entry points), the CA sign-off queue + event page, and a
+provenance badge on the Digital Passport. Not merged to `main`, not pushed.
+
+- **CA colour/placement — asked, not assumed.** The only existing analogue,
+  `isCompanyAdmin` (supplier-side company admin), has no dedicated portal or
+  colour at all — it's gated actions inside the existing purple supplier
+  area. The CA's own pre-existing UI (`BuyerOrganizationCard`,
+  `ManageBuyerOrganizationModal`) already lives inside the teal `(user)`
+  Passport page, labelled "Organization Admin." Presented this precedent to
+  the product owner with two options (match precedent vs. build a fully
+  separate portal); the owner chose a middle path: **no new portal, navbar,
+  proxy route table, or `RoleGuard` variant** — new CA pages live under the
+  existing `app/(user)/` route group (already wrapped in
+  `<RoleGuard guard="user">` at `app/(user)/layout.tsx`), gated by an inline
+  `session.user.isBuyerOrgAdmin` check — but a **new `ca-emerald-start`/
+  `ca-emerald-end` colour pair** (Tailwind emerald-600/500 hex) for visual
+  distinction on CA-only screens/components, applied without any of the
+  shared-infra additions a full new portal would need. The participant-side
+  "My Trainings" page stays plain teal since it isn't CA-exclusive.
+- **Built against the real 2a routes**, read in full before writing
+  anything: `lib/internal-training-events.ts`'s exact exports/error classes,
+  all 7 routes under `app/api/internal-training-events/**` and
+  `app/api/buyer-organization/internal-training-events/**`, and
+  `lib/storage.ts`'s `buildInternalTrainingEvidenceKey`/
+  `getEvidenceUploadUrl`/`evidenceRecordingExists` (reused as-is, no second
+  upload mechanism). No mismatches found between the brief and the real
+  code — `serializeInternalTrainingParticipant` does expose only
+  `hasEvidence: boolean` (no raw key, no name/email — just `userId`) exactly
+  as the code shows, which shaped several UI decisions below.
+- **No dedicated queue backend route exists.** `listOrgEvents` already
+  embeds every participant per event; the CA sign-off queue
+  (`/internal-training/admin/queue`) is a pure client-side derivation
+  (`buildSignoffQueue` in the new `lib/internal-training-ui.ts`) over the
+  same cache entry the CA dashboard already fetches — no second network
+  call. The queue page is navigation-only (links through to the event
+  page for the actual pass/fail decision) so the disabled-reason logic
+  isn't duplicated across two surfaces.
+- **Real gap found, not routed around:** no route returns a signed view URL
+  for internal-training evidence (unlike the sibling
+  `certificate-signoff-requests` flow, which does call `getEvidenceViewUrl`).
+  The CA can see *that* evidence exists (`hasEvidence`) but can't preview
+  the file from this UI. Since a new/changed route was out of scope, this is
+  a visible limitation, not silently hidden — flagged here and left for a
+  future session.
+- **`earnedVia` exposure — a judgment call, flagged explicitly.** The
+  Digital Passport provenance-badge scope item is impossible without it, so
+  `app/api/credentials/route.ts`'s GET handler now returns `earnedVia` in
+  its JSON mapping (the Prisma `include` already returned the column at
+  runtime — this is a one-line additive change to an *existing* route's
+  response shape, not a schema change or a new route) and
+  `lib/hooks/useCredentials.ts`'s `Credential` type gained the field.
+- **Badge wording** matches the app's existing "sign-off" vocabulary
+  (`CertificateDetailModal.tsx`'s own `EARNING_METHOD_COPY` map) rather than
+  inventing "verified X" phrasing: `PROVENANCE_LABEL` (new export on the
+  existing `lib/credential-provenance.ts`, not a new file — it already owns
+  every other piece of provenance semantics) maps the 4 values to "Video &
+  Quiz" / "Operator Sign-off" / "Internal Company Sign-off" / "SME
+  Sign-off." All four render as the same neutral pill (`bg-white/10
+  text-body-text border-white/20`) — no lesser/warning styling for any.
+  `getProvenanceTooltip` returns an explanatory string only for the
+  internal-company variant, the only one whose listing-acceptance actually
+  varies (`Listing.acceptsInternalSignoff`) — via the native `title=""`
+  attribute, since no dedicated Tooltip component exists anywhere in this
+  codebase (checked). Same absence for a shared Badge component — every
+  pill in this app, mine included, is a local one-off `<span>`.
+- **Also fixed while touching `CertificateDetailModal.tsx`:** its
+  `EARNING_METHOD_COPY` map was missing an entry for
+  `tier2a1_internal_company_signoff` (fell through to generic "Contact the
+  supplier..." text) — a pre-existing gap from Sprint 7.14/7.15, not
+  introduced this session, but small enough to fix while already in the
+  file for the badge.
+- **Real bug found and fixed via manual verification, not by inspection:**
+  `useAddInternalTrainingParticipant(eventId)` originally took `eventId` as
+  a hook-call-time argument. The create-event flow only learns the real
+  `eventId` *after* `createInternalTrainingEvent`'s own mutation resolves,
+  inside the same handler — so the pre-bound hook closed over an empty
+  string, producing `POST .../internal-training-events//participants` (404
+  became a raw 405 with no eventId segment matched). Fixed by refactoring
+  the hook to take `{eventId, userId}` as mutate-time variables instead of
+  a hook-call-time argument, eliminating the stale-closure risk at any call
+  site (both the create modal and the event-detail page's own "Add
+  Participants" control were updated).
+- **Second real bug found via manual verification:** `ParticipantPicker`
+  and `CertificatePickerSingle`'s dropdown panels are absolutely
+  positioned, so while open they visually (and for clicks) covered
+  whatever came right after them in the page — e.g. the event-detail
+  page's "Add Selected" button sat directly beneath the participant
+  picker, completely unclickable until the dropdown closed. Fixed by
+  adding a `mousedown`-outside-the-container listener to both pickers that
+  closes the dropdown, rather than requiring the user to know to click the
+  trigger again. `AddEditListingModal.tsx`'s own certificate picker has
+  the identical absolutely-positioned-dropdown pattern with no
+  outside-click handler either — not touched, since fixing a pre-existing,
+  unrelated component wasn't in scope, but noted here in case it bites a
+  future session the same way.
+- **Third real bug found via manual verification, unrelated to any file
+  this session touched directly but exposed by it:** the User dashboard's
+  `ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon>` map in
+  `app/(user)/user/page.tsx` crashed with "Element type is invalid ...
+  got: undefined" the moment any of this session's new actions (create
+  event, upload evidence, review a participant) logged an activity row,
+  because `internal_training_event_created`/
+  `internal_training_evidence_uploaded`/
+  `internal_training_participant_reviewed` (added to the schema by 2a) were
+  never added to `lib/hooks/useActivity.ts`'s hand-maintained
+  `ActivityActionType` union — which that very file's own comment already
+  flags as exactly this failure mode, having happened once before
+  (2026-07-21, three unrelated values). 2a never triggered these three
+  values through any UI (no UI existed yet), so the gap was latent until
+  this session's screens made the API actually return them. Fixed: added
+  all three to the union, to `ACTIVITY_CATEGORIES.training`, and to
+  `ACTIVITY_ICONS` (`GraduationCap` for created/evidence-uploaded, `Award`
+  for participant-reviewed, matching the icons already used for
+  training/certificate-adjacent events).
+- **`draft` status finding (reported, not removed, per instruction):** this
+  session's create-flow never sets or changes `status` — every event
+  created here stays `draft` forever from the UI's perspective, since no
+  submit/complete action exists in this brief's scope (mirrors the brief's
+  own instruction not to build transition UI). `draft` is therefore fully
+  inert after this session too; a later session still needs to decide what
+  `submitted`/`completed` actually mean and build the transition actions,
+  or the column stays permanent dead weight.
+- **Dev DB migration applied, with explicit confirmation first.**
+  `spacesnap_dev` was missing `20260727091801_add_internal_training_signoff`
+  (2a deliberately left it for the product owner to apply manually,
+  confirmed via `npx prisma migrate status`). Asked before running
+  anything; the product owner said yes, so `npx prisma migrate deploy` was
+  run once against the dev DB (additive only — new tables/enum values,
+  already proven against the test DB) so the new screens could actually be
+  exercised in the browser. A throwaway `BuyerOrganization` ("QA Test
+  Org"), a CA user, and a participant user were created via a one-off
+  script (deleted after use) purely for manual verification; left in
+  `spacesnap_dev` afterward as harmless fixture data, same convention as
+  `prisma/seed.ts`'s own test users.
+- Not built, matching the brief's own scope: no "remove participant" UI
+  (`DELETE .../participants/[id]` stays unused — not among the 4 scope
+  items); no `useUpdateInternalTrainingEvent` hook (no UI needs it either).
+- No components deleted.
+- Test counts: 491 → 501 (+10: 2 provenance-label tests extending
+  `lib/credential-provenance.test.ts`, 8 in the new
+  `lib/internal-training-ui.test.ts`), 0 regressions. No component-render
+  tests were added — this codebase has no React component-testing
+  infrastructure at all (no jsdom/testing-library, checked), only
+  `node:test` + real-DB `lib/*.test.ts` files. Both required coverage
+  items (pass-disabled-without-evidence, provenance-badge-for-all-4-values)
+  were instead satisfied by extracting the underlying decision logic into
+  pure functions (`getReviewDisabledReason`, `PROVENANCE_LABEL`/
+  `getProvenanceTooltip`) and unit-testing those directly — a deliberate
+  substitution, not an omission, flagged here explicitly.
+- `lib/internal-training-ui.test.ts` appended to `package.json`'s
+  hardcoded `test` script file list (required or it silently never runs).
+- `tsc`/`eslint`/`next build` all clean; eslint diff against the baseline
+  (captured via `git status` + a direct pre-change run, since this branch
+  had no prior stash to compare against) is identical modulo one
+  pre-existing error's line-number shift in `passport/page.tsx`.
+- Both `SPRINT_PLAN_NEXTJS_REWRITE.md` and this file updated.
+- Every judgment call listed above as it came up, not collected as an
+  afterthought.
