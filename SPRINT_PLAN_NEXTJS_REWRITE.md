@@ -1850,11 +1850,145 @@ different provenances; the earlier design couldn't express that at all.
   16 warnings (unrelated: a `passport/page.tsx` effect lint, `<img>` /
   unescaped-entity / unused-var warnings, one `any` in a test file) are
   unchanged from `main`, confirmed via `git stash`.
-- [ ] **Not built, per the brief's explicit scope** — the CA batch/internal
+- [x] **Not built, per the brief's explicit scope** — the CA batch/internal
   training event model that will actually *produce* tier2a1 credentials
   (its routes, its UI), and any UI surfacing provenance at all. Both
   deferred to a later session; this session only lays the schema/gating
-  groundwork so that later work has something to write into.
+  groundwork so that later work has something to write into. **Built in
+  Sprint 7.15 below** (routes only — the CA batch UI is still deferred).
+
+## Sprint 7.15: Internal Training Sign-Off — CA Batch Backend + Listing Toggle UI (2026-07-27)
+
+Branch `feat/internal-training-signoff`, off `feat/credential-provenance`
+(not yet merged to `main` at the time this branch was cut — confirmed via
+`git merge-base --is-ancestor` before starting, per the brief). Makes the
+`tier2a1_internal_company_signoff` provenance and
+`listings.accepts_internal_signoff` toggle (both inert since Sprint 7.14)
+live: a buyer-org admin (company admin, "CA") can run in-house training for
+their own organization's staff and sign off competency, issuing real
+credentials; operators opt in per listing.
+
+- [x] **Company-admin role, found not assumed**: this codebase has two
+  distinct "company admin" roles — `Company`/`isCompanyAdmin` (supplier-
+  side, `requireCompanyAdmin()`) and `BuyerOrganization`/`isBuyerOrgAdmin`
+  (buyer-side, `requireBuyerOrgAdmin()`, `lib/buyer-org-auth.ts`). The CA in
+  this brief is the **buyer-org admin** — confirmed by tracing the schema:
+  `UserCertificate`/`Booking` are keyed by `userId` with no `Company`
+  involvement, and the whole point of credential provenance (Sprint 7.14)
+  is letting a buyer-org's own admin vouch for their own staff so a
+  supplier-owned listing can opt in via `acceptsInternalSignoff`. Matches
+  the brief's own analogue (a research company training its own scientists
+  in-house rather than sending them to the equipment operator).
+- [x] Schema (migration `20260727091801_add_internal_training_signoff`,
+  applied to `spacesnap_nextjs_test` only — **`spacesnap_dev` migration
+  still pending**, run `npx prisma migrate deploy` manually): new
+  `InternalTrainingEvent` (batch parent: `buyerOrganizationId`,
+  `createdByUserId`, `certificateId`, `title`, `trainingDate`,
+  `equipmentDetails`, `trainerName`, `status`) and
+  `InternalTrainingParticipant` (`eventId`, `userId`, `evidenceKey`,
+  `uploadedByUserId`, `status`, `reviewedAt`, `reviewNote`,
+  `@@unique(eventId, userId)`) — one row per person per event, evidence per
+  participant not per event. `CertificateSource` gained `buyer_org_created`
+  (notes WHICH ROLE submitted a certificate request; see below).
+  `ActivityActionType` gained three values for this flow's lifecycle. The
+  generated diff also re-emitted an unrelated `referral_code` DEFAULT
+  no-op (same dbgenerated() drift artifact Sprint 7.14 hit) — left out of
+  this migration for the same reason.
+- [x] `lib/internal-training-events.ts` — every business rule from the
+  brief: participants must belong to the CA's own `BuyerOrganization`
+  (`ParticipantNotInOrganizationError`); the certificate must exist and be
+  `approved` (`InternalTrainingCertificateNotFoundError` /
+  `...NotApprovedError` — CAs pick from the pool, never author
+  definitions); the CA cannot add themselves as a participant on an event
+  they add to (`SelfSignoffNotAllowedError`, checked against the acting
+  user, not `createdByUserId`); a pass is blocked while `evidenceKey` is
+  null (`EvidenceRequiredForPassError`) but a fail is allowed with or
+  without evidence; passing issues the credential through the *existing*
+  `issueCredential` helper with `tier2a1_internal_company_signoff`
+  provenance (no bespoke issuance path) — `resolveProvenanceOnRenewal`
+  applies automatically, verified by test that a user already holding a
+  cert via operator sign-off keeps that stronger provenance. Evidence
+  upload reuses the tier2a R2 presigned-PUT path (`lib/storage.ts` gained
+  `buildInternalTrainingEvidenceKey`; `getEvidenceUploadUrl`/
+  `evidenceRecordingExists`/`getEvidenceViewUrl` reused as-is) — no second
+  storage mechanism.
+- [x] `POST /api/certificates` extended: a buyer-org admin can now submit
+  into the same `system_admin` approval queue suppliers use
+  (`source: "buyer_org_created"`, `createdByCompanyId` stays null since
+  `Certificate` has no `BuyerOrganization` FK). Same queue, same
+  approve/reject routes, no parallel flow.
+- [x] Routes: CA-scoped under `/api/buyer-organization/internal-training-
+  events` (create/update event, list own org's events, add/remove
+  participant, pass/fail decision) via `requireBuyerOrgAdmin()`;
+  participant-scoped under `/api/internal-training-events` (list own
+  participations, upload own/managed evidence) — evidence upload/confirm
+  authorizes both the participant themselves and any CA of the event's org
+  via a shared pure helper, `isAuthorizedForEvidenceUpload`.
+- [x] Listing toggle UI (the only UI this session) —
+  `AddEditListingModal.tsx` gained an "Accept internally signed-off
+  credentials" toggle, default off, with the exact inline disclaimer text
+  from the brief when switched on. Wired end to end: `lib/listings.ts`
+  parse/serialize, both supplier listing routes, `useListings`/
+  `useSupplierListings` hook types.
+- [x] Untouched, exactly as instructed: `CertificateSignoffRequest` and its
+  `@@unique(userId, certificateId)`; `certificates.earning_method`; no CA
+  batch UI (event creation, participant picker, sign-off queue — next
+  session); no components deleted.
+- [x] Tests: new `lib/internal-training-events.test.ts` (15 cases,
+  real test DB) — participant outside the org rejected, CA self-add
+  rejected, duplicate participant rejected, uncertified/pending-status
+  certificate rejected, fail with no evidence, pass blocked with no
+  evidence, pass issues an internal-provenance credential, a terminal
+  (passed) participant rejects further review, provenance-not-downgraded
+  on renewal, coexistence with a pending `CertificateSignoffRequest` for
+  the same (user, certificate), and 4 pure `isAuthorizedForEvidenceUpload`
+  cases (self / org CA / wrong-org CA / non-admin non-self all covered —
+  this doubles as the "upload authorisation" coverage, since this codebase
+  doesn't unit-test Route Handlers directly; the pure decision function was
+  extracted specifically so it's testable without mocking next-auth).
+  Registered in `package.json`. `npm test`: **491/491** (476 pre-existing +
+  15 new), 0 regressions. `tsc --noEmit` clean. `eslint .` — same 4
+  pre-existing errors / 16 warnings as before this session (confirmed via
+  `git stash`). `next build` clean, all 7 new routes listed.
+- [x] Live-verified: the listing toggle end to end in the browser
+  (`ben@acmecoworking.sg`, dev DB — already had Sprint 7.14's migration
+  applied) — toggled on, disclaimer appeared verbatim, saved, `GET`
+  confirmed `acceptsInternalSignoff: true` persisted, reverted to `false`
+  to leave seed data clean. The CA/internal-training-events paths could
+  only be exercised against the **test** DB (dev correctly lacks this
+  session's migration, so a live `POST /api/certificates` as a CA against
+  dev correctly 500s on the missing `buyer_org_created` enum value —
+  confirmed this is the expected gate, not a bug, then cleaned up the
+  scratch buyer-org/user rows created for the attempt).
+- [x] Judgment calls made, not specified in the brief — flagged here per
+  the brief's own request:
+  - `InternalTrainingEvent.status` (`draft`/`submitted`/`completed`) has no
+    enforced transition machine — it's a plain settable field. The CA batch
+    UI that would drive the real create → submit → complete workflow is
+    explicitly out of scope this session, so inventing transition rules
+    now would be guessing ahead of that design.
+  - A reviewed (`passed`/`failed`) participant rejects further review
+    (`ParticipantAlreadyReviewedError`) — not specified, but mirrors
+    `CertificateSignoffRequest`'s own terminal-state protection for
+    consistency with the sibling flow.
+  - Evidence upload content type: `image/*` or `application/pdf` (not
+    tier2a's `video/*`) — the brief's own examples are a photo and a
+    printout, so both were allowlisted rather than picking one.
+  - `CertificateSource.buyer_org_created` records only WHICH ROLE
+    submitted a certificate request, not which organization —
+    `createdByCompanyId` stays null (no `BuyerOrganization` FK on
+    `Certificate` to attribute one to), matching the brief's literal ask
+    ("note which role submitted it"). The pre-existing admin-queue UI
+    (`AdminApprovals.tsx` and siblings) wasn't updated with a friendly
+    label for this new source value — the brief was explicit that the
+    listing toggle is the *only* UI this session; the raw enum string
+    displays via that UI's existing generic fallback, which is correct,
+    just not pretty.
+  - `addParticipant`'s self-signoff check compares against the **acting**
+    user (`session.user.id`, i.e. whoever calls the add-participant route),
+    not `InternalTrainingEvent.createdByUserId` — multiple CAs can exist
+    per organization, and "the CA cannot include themselves" reads most
+    naturally as "whoever is doing the adding can't add themselves."
 
 ## Notes
 

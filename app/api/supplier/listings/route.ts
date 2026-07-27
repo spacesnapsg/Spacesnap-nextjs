@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
         amenities: fields.amenities ?? [],
         isAvailable: fields.isAvailable ?? true,
         requireApproval: fields.requireApproval ?? false,
+        acceptsInternalSignoff: fields.acceptsInternalSignoff ?? false,
         priceDay: effective.priceDay,
         priceWeek: effective.priceWeek,
         priceMonth: effective.priceMonth,

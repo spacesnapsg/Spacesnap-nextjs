@@ -27,6 +27,7 @@ interface ListingFormState {
   amenities: string[];
   isAvailable: boolean;
   requireApproval: boolean;
+  acceptsInternalSignoff: boolean;
 }
 
 const EMPTY_FORM: ListingFormState = {
@@ -44,6 +45,7 @@ const EMPTY_FORM: ListingFormState = {
   amenities: [""],
   isAvailable: true,
   requireApproval: false,
+  acceptsInternalSignoff: false,
 };
 
 function buildInitialForm(listing?: Listing): ListingFormState {
@@ -64,6 +66,7 @@ function buildInitialForm(listing?: Listing): ListingFormState {
     amenities: listing.amenities.length ? listing.amenities : [""],
     isAvailable: listing.isAvailable,
     requireApproval: listing.requireApproval,
+    acceptsInternalSignoff: listing.acceptsInternalSignoff,
   };
 }
 
@@ -77,6 +80,7 @@ function toFields(form: ListingFormState): ListingFormFields {
     amenities: form.amenities.filter((a) => a.trim() !== ""),
     isAvailable: form.isAvailable,
     requireApproval: form.requireApproval,
+    acceptsInternalSignoff: form.acceptsInternalSignoff,
     priceDay: isConsumable ? null : form.priceDay ? Number(form.priceDay) : null,
     priceWeek: isConsumable ? null : form.priceWeek ? Number(form.priceWeek) : null,
     priceMonth: isConsumable ? null : form.priceMonth ? Number(form.priceMonth) : null,
@@ -533,6 +537,31 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
               />
             </button>
           </div>
+
+          <div className="flex items-center justify-between">
+            <label className="text-sm text-body-text">Accept internally signed-off credentials</label>
+            <button
+              type="button"
+              onClick={() => updateField("acceptsInternalSignoff", !form.acceptsInternalSignoff)}
+              className={`relative w-11 h-6 rounded-full transition-colors ${
+                form.acceptsInternalSignoff ? "bg-supplier-purple-start" : "bg-border"
+              }`}
+              aria-pressed={form.acceptsInternalSignoff}
+              aria-label="Toggle accept internally signed-off credentials"
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                  form.acceptsInternalSignoff ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
+          {form.acceptsInternalSignoff && (
+            <p className="text-xs text-muted-text bg-background border border-border/40 rounded px-3 py-2">
+              Enabling this means credentials signed off by a member company&apos;s own admin will satisfy this
+              listing&apos;s certificate requirements, in addition to operator- and SME-signed credentials.
+            </p>
+          )}
         </div>
 
         {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}

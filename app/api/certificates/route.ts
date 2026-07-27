@@ -15,15 +15,26 @@ export async function GET() {
   return NextResponse.json({ certificates: certificates.map(serializeCertificate) });
 }
 
-// POST: supplier submits a certificate for review (status=pending). Mirrors
-// old CertificateController::store, gated by the `supplier` middleware
-// there — same requirement enforced here via isSupplier + companyId.
+// POST: submits a certificate for review (status=pending) into the system
+// admin approval queue. Mirrors old CertificateController::store (supplier,
+// gated by isSupplier + companyId) — extended (session:
+// feat/internal-training-signoff) so a buyer-org company admin (CA) can
+// submit into the exact same queue, since CAs pick from the approved-
+// certificate pool for internal training events but never author
+// definitions themselves. `source` records WHICH ROLE submitted it;
+// createdByCompanyId stays null for a CA submission (Certificate has no
+// BuyerOrganization FK to attribute one to — see the schema comment on
+// CertificateSource.buyer_org_created). A "Both"-role account (isSupplier
+// and isBuyerOrgAdmin) submits as the supplier, matching its pre-existing
+// behavior.
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) return unauthorizedResponse();
-  if (!session.user.isSupplier) return forbiddenResponse("This action requires supplier access.");
-  if (!session.user.companyId) {
-    return forbiddenResponse("You must belong to a company to submit a certificate.");
+
+  const isSupplierSubmission = session.user.isSupplier && session.user.companyId !== null;
+  const isBuyerOrgAdminSubmission = session.user.isBuyerOrgAdmin && session.user.buyerOrganizationId !== null;
+  if (!isSupplierSubmission && !isBuyerOrgAdminSubmission) {
+    return forbiddenResponse("This action requires supplier or company admin access.");
   }
 
   const body = await request.json().catch(() => null);
@@ -39,9 +50,9 @@ export async function POST(request: NextRequest) {
         name: fields.name,
         icon: fields.icon ?? null,
         category: fields.category ?? null,
-        source: "supplier_created",
+        source: isSupplierSubmission ? "supplier_created" : "buyer_org_created",
         status: "pending",
-        createdByCompanyId: BigInt(session.user.companyId),
+        createdByCompanyId: isSupplierSubmission ? BigInt(session.user.companyId!) : null,
       },
     });
 

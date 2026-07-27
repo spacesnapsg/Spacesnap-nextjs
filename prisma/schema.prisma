@@ -26,6 +26,14 @@ enum UserStatus {
 enum CertificateSource {
   platform
   supplier_created
+  // Session: feat/internal-training-signoff. A buyer-org admin (company
+  // admin, see User.isBuyerOrgAdmin) submitting a certificate request into
+  // the same system-admin approval queue supplier_created uses — this value
+  // exists purely to note WHICH ROLE submitted the request (a judgment call,
+  // see lib/certificates.ts); createdByCompanyId stays null for these, same
+  // as `platform`, since Certificate has no BuyerOrganization FK to attribute
+  // one to.
+  buyer_org_created
 
   @@map("certificate_source")
 }
@@ -256,6 +264,15 @@ enum ActivityActionType {
   // above (that's a user spending their own personal earnedBalance).
   supplier_reward_redeemed
 
+  // Session: feat/internal-training-signoff — tier2a1_internal_company_signoff
+  // (lib/internal-training-events.ts). credential_issued (existing, above) is
+  // reused for the actual issuance via issueCredential; these three cover the
+  // rest of that flow's own lifecycle events, mirroring signoff_requested/
+  // signoff_reviewed's granularity.
+  internal_training_event_created
+  internal_training_evidence_uploaded
+  internal_training_participant_reviewed
+
   @@map("activity_action_type")
 }
 
@@ -301,6 +318,35 @@ enum SignoffRequestStatus {
   failed
 
   @@map("signoff_request_status")
+}
+
+// Session: feat/internal-training-signoff. No enforced transition machine
+// (unlike SignoffRequestStatus above) — the CA batch UI that would drive the
+// actual create → submitted → completed workflow is explicitly out of scope
+// this session (next session's item), so this is a plain settable field for
+// now. See lib/internal-training-events.ts.
+enum InternalTrainingEventStatus {
+  draft
+  submitted
+  completed
+
+  @@map("internal_training_event_status")
+}
+
+// pending_evidence -> awaiting_signoff happens automatically when evidence is
+// uploaded (lib/internal-training-events.ts's uploadParticipantEvidence).
+// awaiting_signoff/pending_evidence -> passed requires evidenceKey to already
+// be set (mandatory evidence before a pass, a product decision — see that
+// file's own comment); -> failed is allowed from either, with or without
+// evidence. passed/failed are terminal, mirroring SignoffRequestStatus's own
+// passed/failed terminality.
+enum InternalTrainingParticipantStatus {
+  pending_evidence
+  awaiting_signoff
+  passed
+  failed
+
+  @@map("internal_training_participant_status")
 }
 
 // 2026-07-21 — gigs, new minimal scope (confirmed via grep of this repo and
@@ -495,8 +541,8 @@ enum PayoutCadence {
 }
 
 model SupplierPayable {
-  id               BigInt                @id @default(autoincrement())
-  companyId        BigInt                @map("company_id")
+  id                 BigInt                @id @default(autoincrement())
+  companyId          BigInt                @map("company_id")
   // Exactly ONE of bookingId / purchaseId / bulkOrderRequestId is set — the
   // sale this payout row is for. Enforced by the
   // supplier_payables_exactly_one_source CHECK constraint (raw SQL, migration
@@ -507,10 +553,10 @@ model SupplierPayable {
   // exact same SupplierPayout flow as bookings. Each id stays @unique (Postgres
   // allows many NULLs in a unique index) so a given sale maps to at most one
   // payable. See createConsumablePayable, lib/supplier-payables.ts.
-  bookingId          BigInt? @unique @map("booking_id")
-  purchaseId         BigInt? @unique @map("purchase_id")
-  bulkOrderRequestId BigInt? @unique @map("bulk_order_request_id")
-  grossAmount      Decimal               @map("gross_amount") @db.Decimal(10, 2)
+  bookingId          BigInt?               @unique @map("booking_id")
+  purchaseId         BigInt?               @unique @map("purchase_id")
+  bulkOrderRequestId BigInt?               @unique @map("bulk_order_request_id")
+  grossAmount        Decimal               @map("gross_amount") @db.Decimal(10, 2)
   // What SpaceSnap keeps from the booking's nominal value as its platform cut
   // (sgdAmount * Booking.platformCommissionPercent, snapshotted at the same
   // time as grossAmount). Added 2026-07-24 (financial audit F2) — previously
@@ -534,23 +580,23 @@ model SupplierPayable {
   // booking time (Booking.earnedCreditsApplied) is SpaceSnap-funded and comes
   // out of this commission in actual cash — folding that into the cash view is
   // the broader end-to-end audit (Part 2 item), not this column.
-  commissionAmount Decimal               @default(0) @map("commission_amount") @db.Decimal(10, 2)
-  penaltyDeduction Decimal               @default(0) @map("penalty_deduction") @db.Decimal(10, 2)
-  netAmount        Decimal               @map("net_amount") @db.Decimal(10, 2)
-  status           SupplierPayableStatus @default(pending)
-  payoutCadence    PayoutCadence         @map("payout_cadence")
+  commissionAmount   Decimal               @default(0) @map("commission_amount") @db.Decimal(10, 2)
+  penaltyDeduction   Decimal               @default(0) @map("penalty_deduction") @db.Decimal(10, 2)
+  netAmount          Decimal               @map("net_amount") @db.Decimal(10, 2)
+  status             SupplierPayableStatus @default(pending)
+  payoutCadence      PayoutCadence         @map("payout_cadence")
   // Set once this row is swept into a SupplierPayout batch (status flips
   // pending -> scheduled at the same time, see createSupplierPayout,
   // lib/supplier-payouts.ts). Null for every row still awaiting its first
   // payout cycle.
-  payoutId         BigInt?               @map("payout_id")
-  createdAt        DateTime              @default(now()) @map("created_at")
+  payoutId           BigInt?               @map("payout_id")
+  createdAt          DateTime              @default(now()) @map("created_at")
 
-  company           Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  booking           Booking?          @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  purchase          Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
-  bulkOrderRequest  BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: Cascade)
-  payout            SupplierPayout?   @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  booking          Booking?          @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  purchase         Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  bulkOrderRequest BulkOrderRequest? @relation(fields: [bulkOrderRequestId], references: [id], onDelete: Cascade)
+  payout           SupplierPayout?   @relation(fields: [payoutId], references: [id], onDelete: SetNull)
 
   @@map("supplier_payables")
 }
@@ -1055,27 +1101,27 @@ model VerificationToken {
 // ---------------------------------------------------------------------------
 
 model Company {
-  id                   BigInt   @id @default(autoincrement())
-  name                 String
-  businessName         String?  @map("business_name")
-  businessDescription  String?  @map("business_description")
-  contactEmail         String?  @map("contact_email")
-  businessLocation     String?  @map("business_location")
-  yearsOperating       Int?     @map("years_operating")
+  id                           BigInt   @id @default(autoincrement())
+  name                         String
+  businessName                 String?  @map("business_name")
+  businessDescription          String?  @map("business_description")
+  contactEmail                 String?  @map("contact_email")
+  businessLocation             String?  @map("business_location")
+  yearsOperating               Int?     @map("years_operating")
   // Added for the supplier profile "Business Details" edit form — the
   // registration number and finance contact fields the old CODEBASE_SUMMARY.md
   // gap note said had no backing columns at all (distinct from contactEmail,
   // which is the company's general contact address, not accounts/finance).
-  registrationNumber   String?  @map("registration_number")
-  financeContactEmail  String?  @map("finance_contact_email")
-  financeContactPerson String?  @map("finance_contact_person")
+  registrationNumber           String?  @map("registration_number")
+  financeContactEmail          String?  @map("finance_contact_email")
+  financeContactPerson         String?  @map("finance_contact_person")
   // Sprint 6.12 — "ammo" a company holds, purchased in quantity
   // (purchaseBumps, lib/company-credits.ts) and spent one at a time
   // (activateBump, lib/listings.ts, resets a listing's boostedAt to now()).
   // A plain counter, not derived from a ledger — unlike credit balances,
   // there's no independent source of truth to re-derive this from (a spent
   // Bump doesn't leave its own row anywhere else to re-sum).
-  bumpsAvailable       Int      @default(0) @map("bumps_available")
+  bumpsAvailable               Int      @default(0) @map("bumps_available")
   // Per-company pricing/commission OVERRIDES (2026-07-24, financial audit F2
   // follow-on), set ONLY by a system admin (no supplier-facing editor). Each
   // is nullable: null inherits the matching PlatformPricingConfig default,
@@ -1095,8 +1141,8 @@ model Company {
   // 2026-07-22). It was a manual admin-set column/route until this session;
   // both were removed rather than left to fight the automatic calculation
   // (migration `20260722_remove_supplier_tier_column`).
-  createdAt            DateTime @default(now()) @map("created_at")
-  updatedAt            DateTime @updatedAt @map("updated_at")
+  createdAt                    DateTime @default(now()) @map("created_at")
+  updatedAt                    DateTime @updatedAt @map("updated_at")
 
   users                     User[]
   listings                  Listing[]
@@ -1167,9 +1213,11 @@ model BuyerOrganization {
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
-  users        User[]
-  joinRequests BuyerOrganizationJoinRequest[]
-  transactions Transaction[]
+  users                  User[]
+  joinRequests           BuyerOrganizationJoinRequest[]
+  transactions           Transaction[]
+  // Session: feat/internal-training-signoff.
+  internalTrainingEvents InternalTrainingEvent[]
 
   @@map("buyer_organizations")
 }
@@ -1325,6 +1373,11 @@ model User {
   supplierEdmCampaignsMade  SupplierEdmCampaign[]       @relation("SupplierEdmCampaignCreatedBy")
   adminNotifications        AdminNotification[]
 
+  // Session: feat/internal-training-signoff.
+  createdInternalTrainingEvents    InternalTrainingEvent[]       @relation("InternalTrainingEventCreator")
+  internalTrainingParticipations   InternalTrainingParticipant[] @relation("InternalTrainingParticipantUser")
+  uploadedInternalTrainingEvidence InternalTrainingParticipant[] @relation("InternalTrainingParticipantUploader")
+
   @@map("users")
 }
 
@@ -1368,15 +1421,85 @@ model Certificate {
   createdByCompany Company? @relation(fields: [createdByCompanyId], references: [id], onDelete: SetNull)
   reviewer         User?    @relation("CertificateReviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
 
-  requiredForListings ListingRequiredCertificate[]
-  userCertificates    UserCertificate[]
-  trainingVideos      TrainingVideo[]
-  trainingSessions    TrainingSession[]
-  signoffRequests     CertificateSignoffRequest[]
-  notifications       Notification[]
-  adminNotifications  AdminNotification[]
+  requiredForListings    ListingRequiredCertificate[]
+  userCertificates       UserCertificate[]
+  trainingVideos         TrainingVideo[]
+  trainingSessions       TrainingSession[]
+  signoffRequests        CertificateSignoffRequest[]
+  notifications          Notification[]
+  adminNotifications     AdminNotification[]
+  // Session: feat/internal-training-signoff. CAs select from this pool of
+  // approved certificates; they never author definitions (see the model's
+  // own comment below).
+  internalTrainingEvents InternalTrainingEvent[]
 
   @@map("certificates")
+}
+
+// The tier2a1_internal_company_signoff earning path's batch parent — a
+// company admin's (User.isBuyerOrgAdmin, see lib/buyer-org-auth.ts's
+// requireBuyerOrgAdmin) in-house training occasion for their own
+// BuyerOrganization's staff. Distinct from TrainingSession/TrainingEnrollment
+// (tier2b, supplier/SME-run, scheduled sessions members enroll into) — this
+// is the CA's own org running training internally, not enrolling into
+// someone else's. certificateId must reference an existing APPROVED
+// certificate (enforced app-layer in lib/internal-training-events.ts, same
+// "app-layer rule, not a DB constraint" idiom as Certificate's own
+// approved-only-if-referenced comment above) — CAs pick from the catalog,
+// they don't define new certificates here.
+model InternalTrainingEvent {
+  id                  BigInt                      @id @default(autoincrement())
+  buyerOrganizationId BigInt                      @map("buyer_organization_id")
+  createdByUserId     String                      @map("created_by_user_id")
+  certificateId       BigInt                      @map("certificate_id")
+  title               String
+  trainingDate        DateTime                    @map("training_date") @db.Date
+  // Model of equipment, technique, or method the training covers — free
+  // text, audit-trail material, not a structured/reusable entity.
+  equipmentDetails    String                      @map("equipment_details")
+  // The person who actually conducted and assessed the training, which is
+  // not necessarily the CA account signing off — mirrors TrainingSession's
+  // own smeName free-text field (a name, not a reusable entity).
+  trainerName         String                      @map("trainer_name")
+  status              InternalTrainingEventStatus @default(draft)
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  updatedAt           DateTime                    @updatedAt @map("updated_at")
+
+  buyerOrganization BuyerOrganization             @relation(fields: [buyerOrganizationId], references: [id], onDelete: Cascade)
+  createdByUser     User                          @relation("InternalTrainingEventCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  certificate       Certificate                   @relation(fields: [certificateId], references: [id], onDelete: Cascade)
+  participants      InternalTrainingParticipant[]
+
+  @@index([buyerOrganizationId, status])
+  @@map("internal_training_events")
+}
+
+// One row per person per event — evidence is per participant, never per
+// event (one participant, one artifact, e.g. a photo of a gravimetric check
+// or a calibration run printout). evidenceKey is an R2 object key (nullable
+// until uploaded), reusing the same private-bucket presigned-PUT path built
+// for tier2a evidence recordings (lib/storage.ts) — not a second storage
+// mechanism. uploadedByUserId records who actually uploaded it: either the
+// participant themselves or a CA of the event's organization (see
+// lib/internal-training-events.ts).
+model InternalTrainingParticipant {
+  id               BigInt                            @id @default(autoincrement())
+  eventId          BigInt                            @map("event_id")
+  userId           String                            @map("user_id")
+  evidenceKey      String?                           @map("evidence_key")
+  uploadedByUserId String?                           @map("uploaded_by_user_id")
+  status           InternalTrainingParticipantStatus @default(pending_evidence)
+  reviewedAt       DateTime?                         @map("reviewed_at")
+  reviewNote       String?                           @map("review_note")
+  createdAt        DateTime                          @default(now()) @map("created_at")
+  updatedAt        DateTime                          @updatedAt @map("updated_at")
+
+  event          InternalTrainingEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user           User                  @relation("InternalTrainingParticipantUser", fields: [userId], references: [id], onDelete: Cascade)
+  uploadedByUser User?                 @relation("InternalTrainingParticipantUploader", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, userId])
+  @@map("internal_training_participants")
 }
 
 // Pricing fields are nullable here because the day/week/month vs.
@@ -1385,22 +1508,22 @@ model Certificate {
 // migration 20260718171756_listings_pricing_check (raw SQL — Prisma can't
 // express this cross-column rule natively).
 model Listing {
-  id              BigInt      @id @default(autoincrement())
-  companyId       BigInt      @map("company_id")
-  type            ListingType
-  name            String
-  location        String?
-  description     String?
-  imageUrl        String?     @map("image_url")
-  amenities       Json?
-  isAvailable     Boolean     @default(true) @map("is_available")
-  requireApproval Boolean     @default(false) @map("require_approval")
-  priceDay        Decimal?    @map("price_day") @db.Decimal(10, 2)
-  priceWeek       Decimal?    @map("price_week") @db.Decimal(10, 2)
-  priceMonth      Decimal?    @map("price_month") @db.Decimal(10, 2)
-  pricePerUnit    Decimal?    @map("price_per_unit") @db.Decimal(10, 2)
-  stockQuantity   Int?        @map("stock_quantity")
-  packSize        String?     @map("pack_size")
+  id                     BigInt      @id @default(autoincrement())
+  companyId              BigInt      @map("company_id")
+  type                   ListingType
+  name                   String
+  location               String?
+  description            String?
+  imageUrl               String?     @map("image_url")
+  amenities              Json?
+  isAvailable            Boolean     @default(true) @map("is_available")
+  requireApproval        Boolean     @default(false) @map("require_approval")
+  priceDay               Decimal?    @map("price_day") @db.Decimal(10, 2)
+  priceWeek              Decimal?    @map("price_week") @db.Decimal(10, 2)
+  priceMonth             Decimal?    @map("price_month") @db.Decimal(10, 2)
+  pricePerUnit           Decimal?    @map("price_per_unit") @db.Decimal(10, 2)
+  stockQuantity          Int?        @map("stock_quantity")
+  packSize               String?     @map("pack_size")
   // Sprint 6.12 — the marketplace's effective "sort as new" timestamp.
   // Starts equal to createdAt (backfilled by this field's own migration for
   // pre-existing rows) and is bumped to now() whenever a Bump is spent on
@@ -1409,7 +1532,7 @@ model Listing {
   // by reading the route before assuming otherwise). A single field rather
   // than comparing createdAt/updatedAt/a bump-log table at query time — one
   // column Prisma can sort by directly, no raw SQL needed.
-  boostedAt       DateTime    @default(now()) @map("boosted_at")
+  boostedAt              DateTime    @default(now()) @map("boosted_at")
   // Sprint 6.12 — Pins. Nullable pair, null = not pinned (matching this
   // schema's existing nullable-expiry convention, e.g. RewardGrant/
   // SupplierRewardRedemption). pinnedAt orders multiple simultaneously
@@ -1420,15 +1543,15 @@ model Listing {
   // getAvailableCreditBalance's credit-hold expiry) rather than checked
   // ad hoc at every call site, so an expired pin can never sort into the
   // marketplace's Pinned tier by accident.
-  pinnedAt        DateTime?   @map("pinned_at")
-  pinnedUntil     DateTime?   @map("pinned_until")
+  pinnedAt               DateTime?   @map("pinned_at")
+  pinnedUntil            DateTime?   @map("pinned_until")
   // Credential provenance (session: feat/credential-provenance). Opt-in,
   // deliberately defaulted false — an operator must actively decide that a
   // company-admin-signed-off (tier2a1) credential satisfies their booking
   // gate; they are never opted in silently. See lib/credential-provenance.ts.
-  acceptsInternalSignoff Boolean @default(false) @map("accepts_internal_signoff")
-  createdAt       DateTime    @default(now()) @map("created_at")
-  updatedAt       DateTime    @updatedAt @map("updated_at")
+  acceptsInternalSignoff Boolean     @default(false) @map("accepts_internal_signoff")
+  createdAt              DateTime    @default(now()) @map("created_at")
+  updatedAt              DateTime    @updatedAt @map("updated_at")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -1461,19 +1584,19 @@ model ListingRequiredCertificate {
 // expiryDate nullable — renewal-by-video flow deferred, column ready (matches
 // old schema note).
 model UserCertificate {
-  id            BigInt    @id @default(autoincrement())
-  userId        String    @map("user_id")
-  certificateId BigInt    @map("certificate_id")
-  earnedDate    DateTime  @map("earned_date") @db.Date
-  expiryDate    DateTime? @map("expiry_date") @db.Date
+  id            BigInt               @id @default(autoincrement())
+  userId        String               @map("user_id")
+  certificateId BigInt               @map("certificate_id")
+  earnedDate    DateTime             @map("earned_date") @db.Date
+  expiryDate    DateTime?            @map("expiry_date") @db.Date
   // How THIS user earned THIS credential (session: feat/credential-provenance).
   // Backfilled 1:1 from certificate.earningMethod at migration time, since
   // only one earning path per certificate existed before this session — see
   // that migration's raw-SQL backfill. Not the same field as, and never
   // conflated with, Certificate.earningMethod. See lib/credential-provenance.ts.
   earnedVia     CredentialProvenance @map("earned_via")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  createdAt     DateTime             @default(now()) @map("created_at")
+  updatedAt     DateTime             @updatedAt @map("updated_at")
 
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   certificate Certificate @relation(fields: [certificateId], references: [id], onDelete: Cascade)

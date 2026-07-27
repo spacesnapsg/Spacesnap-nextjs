@@ -88,6 +88,22 @@ export function buildEvidenceRecordingKey(params: { certificateId: bigint; userI
   return `signoff-evidence/${params.certificateId}/${params.userId}/${unique}-${safeName}`;
 }
 
+// Session: feat/internal-training-signoff — internal-training-event evidence
+// (e.g. a photo of a gravimetric check, a calibration run printout), one per
+// InternalTrainingParticipant row. Same private bucket/PUT-then-HeadObject
+// pattern as buildEvidenceRecordingKey above (getEvidenceUploadUrl/
+// evidenceRecordingExists/getEvidenceViewUrl below are all generic over the
+// key and reused as-is, no second storage mechanism) — only the key
+// namespace and scoping differ (per event+participant, not per
+// certificate+user, since one event can cover many participants across
+// different underlying certificates isn't possible here but the evidence is
+// still keyed by the specific participant row, not the certificate).
+export function buildInternalTrainingEvidenceKey(params: { eventId: bigint; userId: string; filename: string }): string {
+  const safeName = params.filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `internal-training-evidence/${params.eventId}/${params.userId}/${unique}-${safeName}`;
+}
+
 // Returns a presigned PUT URL the client uploads the recording to directly.
 // The server never sees the file bytes.
 export async function getEvidenceUploadUrl(params: { key: string; contentType: string }): Promise<string> {

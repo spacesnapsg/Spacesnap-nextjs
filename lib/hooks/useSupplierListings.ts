@@ -22,6 +22,7 @@ export interface ListingFormFields {
   amenities: string[];
   isAvailable: boolean;
   requireApproval: boolean;
+  acceptsInternalSignoff: boolean;
   priceDay?: number | null;
   priceWeek?: number | null;
   priceMonth?: number | null;

@@ -87,6 +87,10 @@ export function serializeListing(
     // (a narrow race between the lazy-expiry sweep and this serialize call)
     // still reports false here, never a stale true.
     isPinned: listing.pinnedUntil !== null && listing.pinnedUntil > new Date(),
+    // Session: feat/internal-training-signoff. Opt-in, default off — see
+    // lib/credential-provenance.ts's satisfiesListing and the schema comment
+    // on Listing.acceptsInternalSignoff.
+    acceptsInternalSignoff: listing.acceptsInternalSignoff,
     requiredCertificateIds:
       "requiredCertificates" in listing
         ? listing.requiredCertificates.map((r) => r.certificateId.toString())
@@ -113,6 +117,7 @@ interface ParsedFields {
   amenities?: string[];
   isAvailable?: boolean;
   requireApproval?: boolean;
+  acceptsInternalSignoff?: boolean;
   priceDay?: number | null;
   priceWeek?: number | null;
   priceMonth?: number | null;
@@ -203,6 +208,14 @@ export function parseListingFields(body: unknown, opts: { partial: boolean }): P
       errors.requireApproval = ["requireApproval must be a boolean."];
     } else {
       result.requireApproval = b.requireApproval;
+    }
+  }
+
+  if (has("acceptsInternalSignoff")) {
+    if (typeof b.acceptsInternalSignoff !== "boolean") {
+      errors.acceptsInternalSignoff = ["acceptsInternalSignoff must be a boolean."];
+    } else {
+      result.acceptsInternalSignoff = b.acceptsInternalSignoff;
     }
   }
 

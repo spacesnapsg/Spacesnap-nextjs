@@ -17,6 +17,11 @@ export interface Listing {
   amenities: string[];
   isAvailable: boolean;
   requireApproval: boolean;
+  // Session: feat/internal-training-signoff. Opt-in, default off — when on,
+  // a member holding a credential earned via a buyer-org admin's internal
+  // sign-off (not just operator/SME) also satisfies this listing's
+  // requiredCertificates gate.
+  acceptsInternalSignoff: boolean;
   priceDay: number | null;
   priceWeek: number | null;
   priceMonth: number | null;

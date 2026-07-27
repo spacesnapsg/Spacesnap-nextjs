@@ -51,6 +51,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           ...(fields.amenities !== undefined ? { amenities: fields.amenities } : {}),
           ...(fields.isAvailable !== undefined ? { isAvailable: fields.isAvailable } : {}),
           ...(fields.requireApproval !== undefined ? { requireApproval: fields.requireApproval } : {}),
+          ...(fields.acceptsInternalSignoff !== undefined
+            ? { acceptsInternalSignoff: fields.acceptsInternalSignoff }
+            : {}),
           type: effective.type,
           priceDay: effective.priceDay,
           priceWeek: effective.priceWeek,
