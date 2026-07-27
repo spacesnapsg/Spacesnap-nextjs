@@ -18,7 +18,9 @@ export default function UserNavbar() {
   return (
     <Navbar
       logo={<LogoBox src="/logos/logo-teal.png" />}
-      notifications={<NotificationsPanel accentGradient="from-user-teal-start to-user-teal-end" />}
+      notifications={
+        <NotificationsPanel accentGradient="from-user-teal-start to-user-teal-end" notificationsHref="/notifications" />
+      }
       actions={
         <>
           {isSupplier && (

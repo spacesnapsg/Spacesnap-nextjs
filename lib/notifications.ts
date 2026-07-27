@@ -1,4 +1,4 @@
-import { type Notification, NotificationType } from "@/app/generated/prisma/client";
+import { type Notification, NotificationType, type Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 
 export function serializeNotification(notification: Notification) {
@@ -9,20 +9,49 @@ export function serializeNotification(notification: Notification) {
     type: notification.type,
     pinned: notification.pinned,
     isRead: notification.isRead,
+    isArchived: notification.isArchived,
     relatedBookingId: notification.relatedBookingId ? notification.relatedBookingId.toString() : null,
     relatedListingId: notification.relatedListingId ? notification.relatedListingId.toString() : null,
     createdAt: notification.createdAt.toISOString(),
   };
 }
 
-// Pinned first (regardless of age — see the Notification.pinned schema
-// comment), then newest first within each group. Postgres sorts booleans
-// false < true, so `pinned: "desc"` puts true rows first.
+// Feeds the navbar bell dropdown — unarchived only, no pagination (the
+// dropdown itself caps what it renders to 10 and offers "View more" through
+// to getNotificationsPage below for anything beyond that). Pinned first
+// (regardless of age — see the Notification.pinned schema comment), then
+// newest first within each group. Postgres sorts booleans false < true, so
+// `pinned: "desc"` puts true rows first.
 export async function getNotifications(userId: string): Promise<Notification[]> {
   return prisma.notification.findMany({
-    where: { userId },
+    where: { userId, isArchived: false },
     orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
   });
+}
+
+const NOTIFICATIONS_PER_PAGE = 10;
+
+// Feeds the full /notifications (and /supplier-notifications) page — same
+// Active/Archived + pagination shape as getAdminNotifications, just scoped
+// to one user's own rows instead of the shared admin feed.
+export async function getNotificationsPage(userId: string, options: { status: "active" | "archived"; page?: number }) {
+  const page = Math.max(1, options.page ?? 1);
+  const where: Prisma.NotificationWhereInput = { userId, isArchived: options.status === "archived" };
+
+  const [notifications, total] = await Promise.all([
+    prisma.notification.findMany({
+      where,
+      orderBy: [{ pinned: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      skip: (page - 1) * NOTIFICATIONS_PER_PAGE,
+      take: NOTIFICATIONS_PER_PAGE,
+    }),
+    prisma.notification.count({ where }),
+  ]);
+
+  return {
+    notifications: notifications.map(serializeNotification),
+    meta: { page, perPage: NOTIFICATIONS_PER_PAGE, total },
+  };
 }
 
 export class NotificationNotFoundError extends Error {
@@ -47,6 +76,14 @@ export async function markNotificationRead(userId: string, notificationId: bigin
 
 export async function markAllNotificationsRead(userId: string): Promise<void> {
   await prisma.notification.updateMany({ where: { userId, isRead: false }, data: { isRead: true } });
+}
+
+// Toggles both ways — the Archived view's icon un-archives (restores to
+// Active) rather than being a one-way trip, mirroring
+// setAdminNotificationArchived.
+export async function setNotificationArchived(userId: string, notificationId: bigint, isArchived: boolean): Promise<void> {
+  const result = await prisma.notification.updateMany({ where: { id: notificationId, userId }, data: { isArchived } });
+  if (result.count === 0) throw new NotificationNotFoundError();
 }
 
 // Proactive, not event-triggered — nothing "happens" when a cert is about to

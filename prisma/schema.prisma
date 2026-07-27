@@ -2129,6 +2129,7 @@ model Notification {
   // read/unread item.
   pinned               Boolean           @default(false)
   isRead               Boolean           @default(false) @map("is_read")
+  isArchived           Boolean           @default(false) @map("is_archived")
   relatedBookingId     BigInt?           @map("related_booking_id")
   relatedListingId     BigInt?           @map("related_listing_id")
   // Also used by cert_earned (no dedup needed there — re-earning/renewing a
@@ -2145,6 +2146,7 @@ model Notification {
   relatedListing     Listing?     @relation(fields: [relatedListingId], references: [id], onDelete: SetNull)
   relatedCertificate Certificate? @relation(fields: [relatedCertificateId], references: [id], onDelete: Cascade)
 
+  @@index([userId, isArchived, createdAt])
   @@map("notifications")
 }
 

@@ -19,7 +19,12 @@ export default function SupplierNavbar() {
   return (
     <Navbar
       logo={<LogoBox src="/logos/logo-purple.png" />}
-      notifications={<NotificationsPanel accentGradient="from-supplier-purple-start to-supplier-purple-end" />}
+      notifications={
+        <NotificationsPanel
+          accentGradient="from-supplier-purple-start to-supplier-purple-end"
+          notificationsHref="/supplier-notifications"
+        />
+      }
       actions={
         <>
           {isMember && (

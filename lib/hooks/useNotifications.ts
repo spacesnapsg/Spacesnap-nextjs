@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
 export interface Notification {
@@ -8,9 +8,15 @@ export interface Notification {
   type: string | null;
   pinned: boolean;
   isRead: boolean;
+  isArchived: boolean;
   relatedBookingId: string | null;
   relatedListingId: string | null;
   createdAt: string;
+}
+
+interface NotificationsPageResponse {
+  notifications: Notification[];
+  meta: { page: number; perPage: number; total: number };
 }
 
 export function useNotifications() {
@@ -26,18 +32,49 @@ export function useNotifications() {
   });
 }
 
-export function useMarkNotificationRead() {
+// Backs the full /notifications (and /supplier-notifications) page —
+// Active/Archived toggle + 10/page pagination, same shape as
+// useAdminNotifications.
+export function useNotificationsPage(status: "active" | "archived", page: number) {
+  return useQuery({
+    queryKey: ["notifications", status, page],
+    queryFn: () => apiFetch<NotificationsPageResponse>(`/api/notifications?status=${status}&page=${page}`),
+    placeholderData: keepPreviousData,
+  });
+}
+
+// Invalidating the ["notifications"] prefix catches both the dropdown query
+// (key ["notifications"]) and every paginated page query (key
+// ["notifications", status, page]) in one call.
+function useInvalidateNotifications() {
   const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: ["notifications"] });
+}
+
+export function useMarkNotificationRead() {
+  const invalidate = useInvalidateNotifications();
   return useMutation({
     mutationFn: (id: string) => apiFetch(`/api/notifications/${id}/read`, { method: "PATCH" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
+    onSuccess: invalidate,
   });
 }
 
 export function useMarkAllNotificationsRead() {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateNotifications();
   return useMutation({
     mutationFn: () => apiFetch("/api/notifications/read-all", { method: "PATCH" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useArchiveNotification() {
+  const invalidate = useInvalidateNotifications();
+  return useMutation({
+    mutationFn: ({ id, isArchived }: { id: string; isArchived: boolean }) =>
+      apiFetch<{ success: true }>(`/api/notifications/${id}/archive`, {
+        method: "PATCH",
+        body: JSON.stringify({ isArchived }),
+      }),
+    onSuccess: invalidate,
   });
 }

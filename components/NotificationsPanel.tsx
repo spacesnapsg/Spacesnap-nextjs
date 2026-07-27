@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Bell,
+  Check,
+  Archive,
   CheckCircle2,
   CalendarCheck2,
   AlertTriangle,
@@ -13,7 +16,13 @@ import {
 } from "lucide-react";
 import Card from "./Card";
 import AnnouncementModal from "./AnnouncementModal";
-import { useNotifications, useMarkNotificationRead, useMarkAllNotificationsRead, type Notification } from "@/lib/hooks/useNotifications";
+import {
+  useNotifications,
+  useMarkNotificationRead,
+  useMarkAllNotificationsRead,
+  useArchiveNotification,
+  type Notification,
+} from "@/lib/hooks/useNotifications";
 import {
   useAnnouncements,
   useMarkAnnouncementRead,
@@ -54,12 +63,16 @@ function formatRelativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
+const MAX_VISIBLE = 10;
+
 interface NotificationsPanelProps {
   /** Tailwind gradient stop classes, e.g. "from-user-teal-start to-user-teal-end" */
   accentGradient: string;
+  /** Where the "View more notifications" button sends the user — the role's full notifications page. */
+  notificationsHref: string;
 }
 
-export default function NotificationsPanel({ accentGradient }: NotificationsPanelProps) {
+export default function NotificationsPanel({ accentGradient, notificationsHref }: NotificationsPanelProps) {
   const [open, setOpen] = useState(false);
   const [openAnnouncement, setOpenAnnouncement] = useState<Announcement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -69,6 +82,7 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
   const markAllRead = useMarkAllNotificationsRead();
   const markAnnouncementRead = useMarkAnnouncementRead();
   const markAllAnnouncementsRead = useMarkAllAnnouncementsRead();
+  const archiveNotification = useArchiveNotification();
 
   const feed: FeedItem[] = [
     ...(notifications ?? []).map(
@@ -83,6 +97,8 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
   });
 
   const unreadCount = feed.filter((item) => !item.isRead).length;
+  const visibleFeed = feed.slice(0, MAX_VISIBLE);
+  const hasMore = feed.length > MAX_VISIBLE;
 
   function handleItemClick(item: FeedItem) {
     if (item.kind === "notification") {
@@ -147,7 +163,7 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
             <p className="text-sm text-muted-text text-center py-6">You&apos;re all caught up.</p>
           ) : (
             <ul className="flex flex-col gap-1 max-h-96 overflow-y-auto">
-              {feed.map((item) => {
+              {visibleFeed.map((item) => {
                 const title = item.kind === "notification" ? item.data.title : item.data.title;
                 const message = item.kind === "notification" ? item.data.message : item.data.message;
                 const meta = item.kind === "announcement" ? ANNOUNCEMENT_META : TYPE_META[item.data.type ?? ""] ?? DEFAULT_TYPE_META;
@@ -155,36 +171,75 @@ export default function NotificationsPanel({ accentGradient }: NotificationsPane
                 return (
                   <li
                     key={`${item.kind}-${item.id}`}
-                    onClick={() => handleItemClick(item)}
-                    className={`flex items-start gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-background cursor-pointer ${
+                    className={`flex items-start gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-background ${
                       item.pinned ? "bg-error-red/5 border border-error-red/20" : item.isRead ? "" : "bg-background/60"
                     }`}
                   >
-                    <Icon size={16} className={`mt-0.5 shrink-0 ${meta.color}`} />
-                    <div className="flex-1 min-w-0">
-                      {title && (
-                        <p
-                          className={`text-sm leading-snug ${
-                            item.isRead && !item.pinned ? "text-muted-text font-normal" : "text-body-text font-semibold"
-                          }`}
-                        >
-                          {title}
+                    <div
+                      onClick={() => handleItemClick(item)}
+                      className="flex items-start gap-3 flex-1 min-w-0 cursor-pointer"
+                    >
+                      <Icon size={16} className={`mt-0.5 shrink-0 ${meta.color}`} />
+                      <div className="flex-1 min-w-0">
+                        {title && (
+                          <p
+                            className={`text-sm leading-snug ${
+                              item.isRead && !item.pinned ? "text-muted-text font-normal" : "text-body-text font-semibold"
+                            }`}
+                          >
+                            {title}
+                          </p>
+                        )}
+                        <p className={`text-sm leading-snug ${item.isRead && !item.pinned ? "text-muted-text" : "text-body-text"}`}>
+                          {message}
                         </p>
-                      )}
-                      <p className={`text-sm leading-snug ${item.isRead && !item.pinned ? "text-muted-text" : "text-body-text"}`}>
-                        {message}
-                      </p>
-                      <span className="text-xs text-hint-text">
-                        {item.pinned ? "Action needed" : formatRelativeTime(item.createdAt)}
-                      </span>
+                        <span className="text-xs text-hint-text">
+                          {item.pinned ? "Action needed" : formatRelativeTime(item.createdAt)}
+                        </span>
+                      </div>
                     </div>
-                    {!item.isRead && !item.pinned && (
-                      <span className={`mt-1.5 h-2 w-2 rounded-full bg-gradient-to-r ${accentGradient} shrink-0`} />
+                    {!item.pinned && (
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        {!item.isRead && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              item.kind === "notification" ? markRead.mutate(item.id) : markAnnouncementRead.mutate(item.id)
+                            }
+                            aria-label="Mark as read"
+                            title="Mark as read"
+                            className="h-7 w-7 flex items-center justify-center rounded text-muted-text hover:text-body-text transition-colors"
+                          >
+                            <Check size={14} />
+                          </button>
+                        )}
+                        {item.kind === "notification" && (
+                          <button
+                            type="button"
+                            onClick={() => archiveNotification.mutate({ id: item.id, isArchived: true })}
+                            aria-label="Archive"
+                            title="Archive"
+                            className="h-7 w-7 flex items-center justify-center rounded text-muted-text hover:text-body-text transition-colors"
+                          >
+                            <Archive size={14} />
+                          </button>
+                        )}
+                      </div>
                     )}
                   </li>
                 );
               })}
             </ul>
+          )}
+
+          {hasMore && (
+            <Link
+              href={notificationsHref}
+              onClick={() => setOpen(false)}
+              className={`mt-3 block text-center text-xs font-medium rounded-lg py-2 bg-gradient-to-r ${accentGradient} bg-clip-text text-transparent hover:opacity-80 transition-opacity`}
+            >
+              View more notifications
+            </Link>
           )}
         </Card>
       )}
