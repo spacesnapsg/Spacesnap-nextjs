@@ -150,6 +150,7 @@ function CreditMovementCard() {
           onPresetChange={range.changePreset}
           onFromChange={range.changeFrom}
           onToChange={range.changeTo}
+          accent="supplier"
         />
       </div>
 

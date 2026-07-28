@@ -2,6 +2,8 @@
 
 import { ACTIVITY_DATE_RANGE_PRESETS, type ActivityDateRangePreset } from "@/lib/hooks/useActivity";
 
+type DateRangeAccent = "user" | "supplier";
+
 interface DateRangePickerProps {
   preset: ActivityDateRangePreset;
   from: string | null;
@@ -9,15 +11,24 @@ interface DateRangePickerProps {
   onPresetChange: (preset: ActivityDateRangePreset) => void;
   onFromChange: (value: string) => void;
   onToChange: (value: string) => void;
+  accent?: DateRangeAccent;
 }
 
 const PRESET_OPTIONS: ActivityDateRangePreset[] = ["all", "7", "30", "90"];
+
+// The selected pill follows the portal's theme colour, the same way
+// NotificationsPanel takes an accentGradient — teal was hardcoded here, which
+// left a teal pill sitting on the otherwise all-purple supplier pages.
+const ACCENT_STYLES: Record<DateRangeAccent, string> = {
+  user: "bg-user-teal-start/15 border-user-teal-start text-user-teal-end",
+  supplier: "bg-supplier-purple-start/15 border-supplier-purple-start text-supplier-purple-start",
+};
 
 // Shared preset pills + From/To date inputs — extracted 2026-07-23 so every
 // paginated audit-trail feed (Recent Activity, Credit Movement, wallet
 // Recent Transactions) gets the same control instead of a bespoke copy per
 // page. Pairs with lib/hooks/useDateRangeFilter.ts.
-export default function DateRangePicker({ preset, from, to, onPresetChange, onFromChange, onToChange }: DateRangePickerProps) {
+export default function DateRangePicker({ preset, from, to, onPresetChange, onFromChange, onToChange, accent = "user" }: DateRangePickerProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div className="flex flex-wrap gap-1.5">
@@ -28,7 +39,7 @@ export default function DateRangePicker({ preset, from, to, onPresetChange, onFr
             onClick={() => onPresetChange(option)}
             className={`h-7 px-2.5 rounded-full text-xs font-medium border transition-colors ${
               preset === option
-                ? "bg-user-teal-start/15 border-user-teal-start text-user-teal-end"
+                ? ACCENT_STYLES[accent]
                 : "bg-card border-border text-muted-text hover:text-body-text"
             }`}
           >

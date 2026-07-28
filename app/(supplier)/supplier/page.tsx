@@ -106,6 +106,7 @@ function PlatformRevenueCard() {
           onPresetChange={range.changePreset}
           onFromChange={range.changeFrom}
           onToChange={range.changeTo}
+          accent="supplier"
         />
       </div>
 
@@ -233,6 +234,7 @@ export default function SupplierAnalyticsPage() {
             onPresetChange={bookingsRange.changePreset}
             onFromChange={bookingsRange.changeFrom}
             onToChange={bookingsRange.changeTo}
+            accent="supplier"
           />
         </div>
         {bookingsLoading ? (
