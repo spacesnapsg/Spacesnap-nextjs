@@ -2066,6 +2066,52 @@ Digital Passport provenance badge. No schema/migration/new backend route.
   all 4 new routes listed.
 - [x] Both docs updated; every judgment call flagged inline as it came up.
 
+## Sprint 7.17: Enum Hygiene — ActivityActionType Exhaustiveness + Dead `draft` Removal (2026-07-28)
+
+Branch `feat/enum-hygiene`, off `feat/internal-training-ui`. Not merged, not
+pushed. Two fixes prompted by the previous session's own findings, plus a
+related pre-existing drift cleanup.
+
+- [x] `ACTIVITY_ICONS` (`app/(user)/user/page.tsx`) now typed exhaustively
+  against the real Prisma `ActivityActionType` enum — `lib/hooks/
+  useActivity.ts`'s hand-maintained mirror union is now a direct type-only
+  alias of the generated enum (`export type ActivityActionType =
+  PrismaActivityActionType`), so a future unhandled value is a compile
+  error, not the runtime crash this exact map already caused twice.
+  Turning this on immediately surfaced a **third**, previously invisible
+  drift: 4 reward-system enum values (`reward_tier_rebate_earned`,
+  `referral_bonus_earned`, `reward_redeemed`, `supplier_reward_redeemed`)
+  were never in the old hand-maintained union at all — added to
+  `ACTIVITY_ICONS` (required for `tsc` to pass).
+- [x] Grepped for every other hand-maintained union type mirroring a
+  Prisma enum across `lib/hooks/*.ts` — 15 more found (full list in
+  `CLAUDE1.md`'s session note), reported but not fixed, per instruction to
+  scope this session to `ActivityActionType` only.
+- [x] `InternalTrainingEventStatus`'s dead `draft` value removed (confirmed
+  dead — the UI session never wrote it explicitly). Postgres enum value
+  removal requires recreating the type (no `DROP VALUE`); migration
+  hand-authored following Prisma's own `migrate diff --script` output plus
+  one defensive `UPDATE` statement its diff omitted. Column default moved
+  `draft` → `submitted` (zero observable behavior change — nothing in the
+  app reads this field's value). Applied to `spacesnap_nextjs_test` only:
+  ```
+  DOTENV_CONFIG_PATH=.env.testing npx prisma migrate deploy
+  ```
+  `spacesnap_dev` untouched, exactly as instructed — still has `draft` in
+  its enum, a deliberate temporary divergence for the product owner to
+  close when ready, same convention as every prior migration on this table.
+- [x] Fixed the `referral_code` `dbgenerated()` string drift flagged (but
+  left unaddressed) in Sprint 7.14 and 7.15's own notes — schema text now
+  matches Postgres's own canonical re-rendering exactly, functionally
+  unchanged, no migration needed. `migrate diff` confirmed empty after
+  both fixes — zero remaining schema/DB drift anywhere.
+- [x] Zero behavioral changes beyond the two explicitly requested ones. No
+  components/routes added or deleted.
+- [x] Tests: 501 → 501 (no new test file — pure typing/schema hygiene, no
+  new logic to unit-test), 0 regressions against the migrated test DB.
+  `tsc`/`eslint`/`next build` all clean, eslint identical to baseline.
+- [x] Both docs updated.
+
 ## Notes
 
 - This plan assumes a full-stack rewrite (frontend + backend + auth), not a frontend-only swap onto the existing Laravel API.

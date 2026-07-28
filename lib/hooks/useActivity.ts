@@ -1,51 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
+import type { ActivityActionType as PrismaActivityActionType } from "@/app/generated/prisma/client";
 
-// Mirrors the Prisma `ActivityActionType` enum (prisma/schema.prisma) as a
-// plain string union — frontend code doesn't import the generated Prisma
-// client (see lib/hooks/useUserBookings.ts's BookingStatus for the same
-// convention), so this list has to be kept in sync by hand if the enum grows.
-// Must stay in sync with prisma/schema.prisma's ActivityActionType enum — a
-// value the API can return but this union doesn't know crashes the dashboard
-// feed (ACTIVITY_ICONS is keyed exhaustively off this union). Found the hard
-// way 2026-07-21: booking_cancelled/booking_modified/
-// bulk_order_confirmed_despite_insufficient_credit had landed in the schema
-// across three earlier backend sessions without this side being updated.
-export type ActivityActionType =
-  | "booking_created"
-  | "booking_confirmed"
-  | "booking_declined"
-  | "booking_cancelled"
-  | "booking_modified"
-  | "booking_completed"
-  | "bulk_order_created"
-  | "bulk_order_confirmed"
-  | "bulk_order_declined"
-  | "bulk_order_fulfilled"
-  | "bulk_order_cancelled"
-  | "bulk_order_cancellation_requested"
-  | "bulk_order_cancellation_approved"
-  | "bulk_order_cancellation_rejected"
-  | "wallet_topup"
-  | "check_in"
-  | "check_out"
-  | "training_enrolled"
-  | "training_waitlisted"
-  | "training_waitlist_approved"
-  | "training_session_created"
-  | "quiz_attempt_submitted"
-  | "credential_issued"
-  | "signoff_requested"
-  | "signoff_reviewed"
-  | "instant_purchase_completed"
-  | "bulk_order_confirmed_despite_insufficient_credit"
-  | "booking_declined_pending_resolution"
-  | "booking_credit_granted"
-  | "booking_credit_redeemed"
-  | "booking_credit_refunded"
-  | "internal_training_event_created"
-  | "internal_training_evidence_uploaded"
-  | "internal_training_participant_reviewed";
+// Was a hand-maintained plain string union (frontend code generally doesn't
+// import the generated Prisma client — see lib/hooks/useUserBookings.ts's
+// BookingStatus for the same convention elsewhere) until it drifted twice:
+// 2026-07-21 (booking_cancelled/booking_modified/
+// bulk_order_confirmed_despite_insufficient_credit landed in the schema
+// without this union being updated) and again 2026-07-27/28 (the three
+// internal_training_* values below). Both times the drift was invisible to
+// `tsc` and only surfaced as a runtime crash in ACTIVITY_ICONS
+// (app/(user)/user/page.tsx), which is keyed exhaustively off this type.
+// A type-only import has zero runtime cost (fully erased by tsc, same as
+// the CredentialProvenance import in lib/credential-provenance.ts and the
+// client components that consume it) — aliasing directly to the real enum
+// makes this type structurally impossible to drift again, and turns the
+// next such omission into a compile error instead of a production crash.
+export type ActivityActionType = PrismaActivityActionType;
 
 export interface ActivityEntry {
   id: string;

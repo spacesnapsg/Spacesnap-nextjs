@@ -24,7 +24,7 @@ export interface InternalTrainingEvent {
   trainingDate: string;
   equipmentDetails: string;
   trainerName: string;
-  status: "draft" | "submitted" | "completed";
+  status: "submitted" | "completed";
   participants?: InternalTrainingParticipant[];
   createdAt: string;
   updatedAt: string;

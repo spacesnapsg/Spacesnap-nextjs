@@ -325,8 +325,16 @@ enum SignoffRequestStatus {
 // actual create → submitted → completed workflow is explicitly out of scope
 // this session (next session's item), so this is a plain settable field for
 // now. See lib/internal-training-events.ts.
+//
+// `draft` removed 2026-07-28 (branch feat/enum-hygiene): confirmed dead —
+// the UI session that actually built event creation
+// (feat/internal-training-ui) never wrote it explicitly, so every created
+// event silently sat at the implicit `draft` default forever with nothing
+// in the app ever reading or transitioning that value. The column's
+// default moved to `submitted`, matching what every created event already
+// behaves like (immediately open for participants/evidence/review) — see
+// migration 20260728000000_remove_internal_training_draft_status.
 enum InternalTrainingEventStatus {
-  draft
   submitted
   completed
 
@@ -1307,7 +1315,14 @@ model User {
   // codebase (seed.ts, every lib/*.test.ts fixture) doesn't need to know
   // about this Sprint 6.5 field at all — only app/api/auth/register/route.ts
   // explicitly generates+sets one (its own collision-retry loop).
-  referralCode               String     @unique @default(dbgenerated("substr(md5(random()::text || clock_timestamp()::text), 1, 8)")) @map("referral_code")
+  // 2026-07-28 (feat/enum-hygiene): the dbgenerated() string now matches
+  // Postgres's own canonical re-rendering of the expression exactly (extra
+  // parens around each `::text` cast) — functionally identical to the
+  // previous string, but the previous, un-normalized string caused every
+  // `migrate diff`/`migrate dev` run to re-emit a no-op ALTER for this
+  // default forever, since Prisma compares dbgenerated() text verbatim
+  // against what Postgres reports back, not by evaluating equivalence.
+  referralCode               String     @unique @default(dbgenerated("substr(md5(((random())::text || (clock_timestamp())::text)), 1, 8)")) @map("referral_code")
   referredByUserId           String?    @map("referred_by_user_id")
   referralConvertedAt        DateTime?  @map("referral_converted_at")
   // Sprint 6.12 addition (2026-07-23) — real request-level activity
@@ -1461,7 +1476,7 @@ model InternalTrainingEvent {
   // not necessarily the CA account signing off — mirrors TrainingSession's
   // own smeName free-text field (a name, not a reusable entity).
   trainerName         String                      @map("trainer_name")
-  status              InternalTrainingEventStatus @default(draft)
+  status              InternalTrainingEventStatus @default(submitted)
   createdAt           DateTime                    @default(now()) @map("created_at")
   updatedAt           DateTime                    @updatedAt @map("updated_at")
 

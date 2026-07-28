@@ -73,6 +73,11 @@ function formatDateTime(dateString: string) {
   });
 }
 
+// ActivityActionType is now a direct alias of the generated Prisma enum
+// (lib/hooks/useActivity.ts) rather than a hand-maintained union, so this
+// Record is exhaustive against the real schema — tsc fails to compile if a
+// future ActivityActionType value lands without an entry here, instead of
+// this crashing at runtime the way it did for the internal_training_* values.
 const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   booking_created: CalendarCheck,
   booking_confirmed: CalendarCheck,
@@ -108,6 +113,13 @@ const ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon> = {
   internal_training_event_created: GraduationCap,
   internal_training_evidence_uploaded: GraduationCap,
   internal_training_participant_reviewed: Award,
+  // Found by this Record's own exhaustiveness check (see comment above) —
+  // these four were never in the old hand-maintained union at all, meaning
+  // the dashboard would have crashed on them too, undetected until now.
+  reward_tier_rebate_earned: Wallet,
+  referral_bonus_earned: Wallet,
+  reward_redeemed: Wallet,
+  supplier_reward_redeemed: Wallet,
 };
 
 // Only booking_created/confirmed/declined/completed descriptions ever

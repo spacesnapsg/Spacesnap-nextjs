@@ -127,7 +127,7 @@ export function parseEventFields(body: unknown, opts: { partial: boolean }): Par
 
   if (has("status")) {
     if (typeof b.status !== "string" || !EVENT_STATUSES.has(b.status)) {
-      errors.status = ["status must be one of draft, submitted, completed."];
+      errors.status = ["status must be one of submitted, completed."];
     } else {
       result.status = b.status as InternalTrainingEventStatus;
     }

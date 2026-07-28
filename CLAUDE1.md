@@ -6109,3 +6109,150 @@ provenance badge on the Digital Passport. Not merged to `main`, not pushed.
 - Both `SPRINT_PLAN_NEXTJS_REWRITE.md` and this file updated.
 - Every judgment call listed above as it came up, not collected as an
   afterthought.
+
+---
+
+## Enum Hygiene: ActivityActionType Exhaustiveness + Dead `draft` Removal (2026-07-28)
+
+Branch `feat/enum-hygiene`, off `feat/internal-training-ui`. Two independent
+fixes prompted directly by that session's own findings, plus a related
+drift cleanup. Not merged, not pushed.
+
+- **`ActivityActionType` exhaustiveness.** `app/(user)/user/page.tsx`'s
+  `ACTIVITY_ICONS: Record<ActivityActionType, LucideIcon>` was keyed off a
+  hand-maintained plain-string-union mirror of the real Prisma enum
+  (`lib/hooks/useActivity.ts`), documented in that file's own comment as
+  having already drifted once (2026-07-21) and — per the previous
+  session's note — again (2026-07-27/28, the three `internal_training_*`
+  values). Fixed by making the mirror type a direct alias of the real enum:
+  `export type ActivityActionType = PrismaActivityActionType;` with a
+  type-only import from `@/app/generated/prisma/client`. Type-only imports
+  are fully erased by `tsc` (zero runtime cost, zero bundle impact) and
+  this exact pattern already exists elsewhere in this codebase
+  (`lib/credential-provenance.ts`'s `CredentialProvenance` import, consumed
+  by "use client" components) — so this isn't a new precedent, just the
+  same one applied here. This does deviate from the *letter* of
+  `useActivity.ts`'s own documented rationale ("frontend code doesn't
+  import the generated Prisma client"), which was written with runtime
+  value-imports in mind, not type-only ones — flagging that distinction
+  explicitly since it's a real, if narrow, departure from a stated
+  convention, not an oversight.
+  - **Turning this on immediately caught a third, previously-*invisible*
+    drift**: `tsc` failed with 4 enum values that were never in the old
+    hand-maintained union at all — `reward_tier_rebate_earned`,
+    `referral_bonus_earned`, `reward_redeemed`, `supplier_reward_redeemed`
+    (all Sprint 6.5/6.10 reward-system additions). These weren't just
+    undetected by the compiler before; the dashboard would have crashed
+    exactly the same way the `internal_training_*` values did, the moment
+    any of these action types was ever logged and a user viewed their
+    activity feed. Added all 4 to `ACTIVITY_ICONS` (all `Wallet`, matching
+    the existing icon for every other earned-balance/credit action type) —
+    this is a required correctness fix, not scope creep: without it,
+    `tsc` doesn't compile. Not added to `ACTIVITY_CATEGORIES` (a separate,
+    unrelated filter-grouping concern — omission there doesn't crash
+    anything, since the "All" category sends no type filter at all and
+    these 4 render fine through the now-complete icon map regardless).
+  - **Other hand-maintained Prisma-enum mirrors found, reported per the
+    brief, not fixed this session** (all follow the same
+    `export type X = "a" | "b" | ...` pattern in `lib/hooks/*.ts`, all
+    equally capable of drifting silently the same way):
+    `SupplierPayoutStatus` (`useSupplierPayouts.ts`) mirrors
+    `SupplierPayoutStatus`; `CompanyTransactionType`
+    (`useCompanyTransactions.ts`) mirrors `CompanyTransactionType`;
+    `AdminNotificationType` (`useAdminNotifications.ts`) mirrors
+    `AdminNotificationType`; `MarketplaceEnquiryType`
+    (`useMarketplaceEnquiries.ts`) mirrors `MarketplaceEnquiryType`;
+    `SupplierRewardRedemptionStatus`
+    (`useSupplierRewardsCatalogue.ts`) mirrors
+    `SupplierRewardRedemptionStatus`; `RewardRedemptionStatus`
+    (`useRewardsCatalogue.ts`) mirrors `RewardRedemptionStatus`;
+    `CertificateStatus` (`useAdminCertificates.ts`) mirrors
+    `CertificateStatus`; `ListingType`/`BookingType`
+    (`useListings.ts`, `useSupplierBookings.ts` — `BookingType` is
+    declared independently in *both* files) mirror `ListingType`/
+    `BookingType`; `BookingStatus` (`useSupplierBookings.ts`, re-exported
+    through `useUserBookings.ts`) mirrors `BookingStatus`;
+    `BulkOrderStatus` (`useMyBulkOrders.ts` *and* `useSupplierBulkOrders.ts`
+    — declared independently in both) mirrors `BulkOrderStatus`;
+    `TrainingEnrollmentStatus` (`useTrainingSessions.ts`) mirrors
+    `TrainingEnrollmentStatus`; `SupplierRewardCategory`/
+    `SupplierReportTargetGroup` (`useAdminSupplierRewards.ts`) mirror the
+    same-named enums; `BannerPortal` (`useBanner.ts`) mirrors
+    `BannerPortal`; `AccountStatus` (`useAdminUsers.ts`) mirrors
+    `UserStatus` (renamed, values match: `active`/`suspended`);
+    `RewardDiscountAppliesTo` (`useAdminRewards.ts`) mirrors
+    `RewardDiscountAppliesTo`. Checked and excluded as *not* enum mirrors:
+    `PricingField` (`useAdminPricing.ts` — plain field-name list, no
+    backing enum), `SupplierTier` (`useAdminCompanies.ts`/
+    `useSupplierCompany.ts` — no matching Prisma enum exists at all),
+    `UserRole` (`useAdminUsers.ts` — the schema's own comment states role
+    is derived from booleans, "never a single enum column," so this is a
+    frontend-only synthetic type, not a mirror).
+- **`InternalTrainingEvent.status`'s `draft` value removed.** Confirmed
+  dead exactly as instructed: `feat/internal-training-ui`'s own create flow
+  never sets `status` explicitly, so every event just sat at the implicit
+  `draft` default forever with nothing in the app reading or transitioning
+  it (previous session's own report). Postgres has no `ALTER TYPE ... DROP
+  VALUE` — removing an enum value requires recreating the type: new type
+  with just `submitted`/`completed` → swap the column via a `USING` cast →
+  drop the old type → rename the new type into place → re-set the column
+  default (now `submitted`, since a freshly created event already behaves
+  exactly like a "submitted" one — immediately open for
+  participants/evidence/review, matching current behavior with zero
+  observable change since nothing anywhere reads `status`'s value).
+  Migration hand-authored (`prisma migrate dev` requires an interactive
+  terminal, unavailable here — used `prisma migrate diff
+  --from-config-datasource --to-schema prisma/schema.prisma --script`
+  instead to get Prisma's own proposed SQL non-interactively, then added
+  one defensive statement Prisma's own diff omitted: an `UPDATE ... SET
+  status = 'submitted' WHERE status = 'draft'` before the type swap, a
+  no-op against this migration's actual target — the test DB had 0 rows in
+  this table at the time — but keeps the migration correct if it's ever
+  replayed against a state that does have `draft` rows, since the later
+  `USING` cast would otherwise fail on them).
+  `prisma/migrations/20260728000000_remove_internal_training_draft_status/migration.sql`,
+  applied via:
+  ```
+  DOTENV_CONFIG_PATH=.env.testing npx prisma migrate deploy
+  ```
+  **Test DB only — `spacesnap_dev` was never touched**, exactly as
+  instructed (confirmed by never exporting/using its `DATABASE_URL` in any
+  command this session). `spacesnap_dev` still has `draft` in its enum and
+  still defaults new rows to it; this is an intentional, temporary
+  divergence between the two databases, same convention every prior
+  session touching this table used — the product owner applies
+  `npx prisma migrate deploy` (unprefixed, i.e. against `.env`'s
+  `DATABASE_URL`) to `spacesnap_dev` whenever ready. `npx prisma generate`
+  was run afterward so the committed, source-controlled Prisma client
+  reflects the new 2-value enum — this is a compile-time artifact only,
+  doesn't touch either database.
+- **`referral_code` default drift fixed.** Flagged as pre-existing in two
+  earlier sessions' own notes (Sprint 7.14, Sprint 7.15) but left
+  unaddressed each time. `schema.prisma`'s `dbgenerated()` string
+  (`substr(md5(random()::text || clock_timestamp()::text), 1, 8)`) never
+  matched Postgres's own canonical re-rendering of that exact same
+  expression (`substr(md5(((random())::text ||
+  (clock_timestamp())::text)), 1, 8)` — extra parens around each cast and
+  around the `||` result), so every `migrate diff`/`migrate dev` run
+  re-emitted a no-op `ALTER COLUMN ... SET DEFAULT` for this field forever.
+  Fixed by updating the schema string to match Postgres's own normalized
+  form exactly — confirmed both DBs' actual column defaults were already
+  identical to each other and functionally unchanged (checked via
+  `pg_get_expr`/`pg_attrdef` against both `spacesnap_dev` and
+  `spacesnap_nextjs_test`, read-only, before editing anything). No
+  migration needed for this half — it's a schema-text-only fix; verified
+  by re-running `migrate diff` after the enum migration was applied, which
+  came back completely empty (`-- This is an empty migration.`),
+  confirming both fixes together leave zero remaining drift anywhere in
+  the schema.
+- No components/routes deleted or added; no schema fields added beyond the
+  enum's own value removal; zero behavioral changes beyond the two
+  explicitly requested ones (the `draft`→`submitted` default, and the 4
+  newly-surfaced icon entries required for `tsc` to pass at all).
+- Tests: 501 → 501 (no new test file this session — a pure typing/schema
+  hygiene change, nothing new to unit-test), 0 regressions, run against
+  the migrated test DB.
+- `tsc`/`eslint`/`next build` all clean; eslint identical to the
+  established baseline (20 problems: 4 pre-existing errors, 16 warnings,
+  none in files this session touched).
+- Both `SPRINT_PLAN_NEXTJS_REWRITE.md` and this file updated.
