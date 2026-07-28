@@ -3,6 +3,7 @@ import { requireSystemAdmin } from "@/lib/admin-auth";
 import { ApiValidationError, notFoundResponse, validationErrorResponse } from "@/lib/api-errors";
 import { parseBigIntParam } from "@/lib/listings";
 import {
+  CertificateNotEligibleForVideoError,
   deleteTrainingVideoAsAdmin,
   parseTrainingVideoFields,
   serializeTrainingVideo,
@@ -32,6 +33,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   } catch (error) {
     if (error instanceof ApiValidationError) return validationErrorResponse(error);
     if (error instanceof TrainingVideoNotFoundError) return notFoundResponse(error.message);
+    if (error instanceof CertificateNotEligibleForVideoError) {
+      return NextResponse.json({ message: error.message }, { status: 422 });
+    }
     throw error;
   }
 }

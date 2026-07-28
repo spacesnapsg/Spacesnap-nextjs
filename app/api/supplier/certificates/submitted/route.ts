@@ -14,5 +14,5 @@ export async function GET() {
     orderBy: { createdAt: "desc" },
   });
 
-  return NextResponse.json({ certificates: certificates.map(serializeCertificate) });
+  return NextResponse.json({ certificates: certificates.map((c) => serializeCertificate(c)) });
 }

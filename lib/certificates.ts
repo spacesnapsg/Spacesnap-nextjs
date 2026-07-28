@@ -10,7 +10,10 @@ const certificateWithCompanyArgs = {
 
 export type CertificateWithCompany = Prisma.CertificateGetPayload<typeof certificateWithCompanyArgs>;
 
-export function serializeCertificate(certificate: Certificate | CertificateWithCompany) {
+export function serializeCertificate(
+  certificate: Certificate | CertificateWithCompany,
+  extras?: { requiredForListingNames?: string[] }
+) {
   return {
     id: certificate.id.toString(),
     name: certificate.name,
@@ -27,6 +30,7 @@ export function serializeCertificate(certificate: Certificate | CertificateWithC
     reviewedAt: certificate.reviewedAt ? certificate.reviewedAt.toISOString() : null,
     createdAt: certificate.createdAt.toISOString(),
     updatedAt: certificate.updatedAt.toISOString(),
+    ...(extras?.requiredForListingNames ? { requiredForListingNames: extras.requiredForListingNames } : {}),
   };
 }
 

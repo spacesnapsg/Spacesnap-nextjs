@@ -1,4 +1,11 @@
-import type { Company, Prisma, QuizAttempt, TrainingVideo } from "@/app/generated/prisma/client";
+import {
+  CertificateEarningMethod,
+  CertificateStatus,
+  type Company,
+  type Prisma,
+  type QuizAttempt,
+  type TrainingVideo,
+} from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { serializeQuizAttempt } from "@/lib/quiz-attempts";
@@ -66,6 +73,7 @@ export function deriveViewerState(
 interface ParsedTrainingVideoFields {
   title?: string;
   category?: string;
+  certificateId?: bigint;
   description?: string | null;
   durationSeconds?: number | null;
   thumbnailUrl?: string | null;
@@ -78,7 +86,10 @@ function isNullableString(value: unknown): value is string | null | undefined {
 
 // Mirrors TrainingVideoController::rules() — title/category required on
 // create, "sometimes" (present-if-given) on update; description/duration/
-// thumbnail/video are always optional+nullable.
+// thumbnail/video are always optional+nullable. certificateId is required on
+// create too (session: certificate-picker-for-training-videos) — every
+// training video must land the viewer a certificate on a passing quiz, so
+// authoring one without picking a certificate is no longer allowed.
 export function parseTrainingVideoFields(body: unknown, options: { partial: boolean }): ParsedTrainingVideoFields {
   const errors: Record<string, string[]> = {};
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
@@ -99,6 +110,17 @@ export function parseTrainingVideoFields(body: unknown, options: { partial: bool
       errors.category = ["category is required."];
     } else {
       result.category = b.category.trim();
+    }
+  }
+
+  const hasCertificateId = Object.prototype.hasOwnProperty.call(b, "certificateId");
+  if (!options.partial || hasCertificateId) {
+    const raw = b.certificateId;
+    const str = typeof raw === "number" ? String(raw) : raw;
+    if (typeof str !== "string" || !/^\d+$/.test(str)) {
+      errors.certificateId = ["certificateId is required."];
+    } else {
+      result.certificateId = BigInt(str);
     }
   }
 
@@ -156,13 +178,42 @@ export class TrainingVideoNotOwnedError extends Error {
   }
 }
 
+// Only a certificate whose earning method is actually tier1_video_quiz makes
+// sense to attach to a video's quiz — mirrors createTrainingSession's own
+// tier2b_operator_or_sme_signoff check (lib/training-sessions.ts) and
+// certificate-signoffs.ts's tier2a_operator_signoff check: each of the three
+// earning paths validates the certificate it's handed against its own method,
+// so a supplier/admin can't accidentally wire a video's quiz to a
+// certificate meant to be earned through an operator/SME session instead.
+export class CertificateNotEligibleForVideoError extends Error {
+  constructor() {
+    super(
+      "This certificate is not earned via a video quiz — only certificates with earning method " +
+        "tier1_video_quiz can be attached to a training video."
+    );
+  }
+}
+
+async function assertCertificateEligibleForVideo(certificateId: bigint): Promise<void> {
+  const certificate = await prisma.certificate.findUnique({ where: { id: certificateId } });
+  if (!certificate || certificate.status !== CertificateStatus.approved) {
+    throw new ApiValidationError({ certificateId: ["certificateId does not exist."] });
+  }
+  if (certificate.earningMethod !== CertificateEarningMethod.tier1_video_quiz) {
+    throw new CertificateNotEligibleForVideoError();
+  }
+}
+
 export async function createTrainingVideo(
-  fields: Required<Pick<ParsedTrainingVideoFields, "title" | "category">> & ParsedTrainingVideoFields,
+  fields: Required<Pick<ParsedTrainingVideoFields, "title" | "category" | "certificateId">> & ParsedTrainingVideoFields,
   companyId: bigint | null
 ): Promise<TrainingVideo> {
+  await assertCertificateEligibleForVideo(fields.certificateId);
+
   return prisma.trainingVideo.create({
     data: {
       companyId,
+      certificateId: fields.certificateId,
       title: fields.title,
       category: fields.category,
       description: fields.description ?? null,
@@ -188,11 +239,17 @@ export async function updateTrainingVideoAsSupplier(
   if (existing.companyId === null || existing.companyId !== companyId) {
     throw new TrainingVideoNotOwnedError();
   }
+  if (fields.certificateId !== undefined) {
+    await assertCertificateEligibleForVideo(fields.certificateId);
+  }
   return prisma.trainingVideo.update({ where: { id }, data: fields });
 }
 
 export async function updateTrainingVideoAsAdmin(id: bigint, fields: ParsedTrainingVideoFields): Promise<TrainingVideo> {
   await findVideoOr404(id);
+  if (fields.certificateId !== undefined) {
+    await assertCertificateEligibleForVideo(fields.certificateId);
+  }
   return prisma.trainingVideo.update({ where: { id }, data: fields });
 }
 

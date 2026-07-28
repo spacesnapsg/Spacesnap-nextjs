@@ -8,6 +8,10 @@ export interface Credential {
   earnedDate: string;
   expiryDate: string | null;
   earnedVia: string;
+  // Resolved per earning path (lib/training-credentials.ts's
+  // resolveSignedOffBy) — null for tier1_video_quiz (auto-graded, no human
+  // reviewer) or if the earning-path record couldn't be found.
+  signedOffBy: string | null;
   certificate: {
     id: string;
     name: string;

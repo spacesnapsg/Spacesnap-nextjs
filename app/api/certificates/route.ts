@@ -6,13 +6,22 @@ import { parseSubmissionFields, serializeCertificate } from "@/lib/certificates"
 
 // GET: public catalog of approved certificates (mirrors old
 // CertificateController::index, unauthenticated in routes/api.php).
+// requiredForListings is joined in so the Digital Passport's certificate
+// detail view can show "Required For" without a second round trip per cert.
 export async function GET() {
   const certificates = await prisma.certificate.findMany({
     where: { status: "approved" },
     orderBy: { id: "asc" },
+    include: { requiredForListings: { include: { listing: { select: { name: true } } } } },
   });
 
-  return NextResponse.json({ certificates: certificates.map(serializeCertificate) });
+  return NextResponse.json({
+    certificates: certificates.map((certificate) =>
+      serializeCertificate(certificate, {
+        requiredForListingNames: certificate.requiredForListings.map((r) => r.listing.name),
+      })
+    ),
+  });
 }
 
 // POST: submits a certificate for review (status=pending) into the system

@@ -5,18 +5,21 @@ import { Video, Image as ImageIcon } from "lucide-react";
 import TrainingVideoModal, { type VideoFormRenderProps } from "./TrainingVideoModal";
 import Button from "./Button";
 import Input from "./Input";
+import CertificatePickerSingle from "./CertificatePickerSingle";
 import { VIDEO_CATEGORIES, type VideoCategory, type QuizQuestion } from "@/lib/mockTutorials";
 import { useCreateTrainingVideo, useSaveTrainingVideoQuiz } from "@/lib/hooks/useSupplierTrainingVideos";
 
 interface SupplierVideoFormValues {
   title: string;
   category: VideoCategory;
+  certificateId: string | null;
   description: string;
 }
 
 const EMPTY_FORM: SupplierVideoFormValues = {
   title: "",
   category: "Safety",
+  certificateId: null,
   description: "",
 };
 
@@ -28,14 +31,30 @@ function SupplierVideoFields({
   error,
 }: VideoFormRenderProps<SupplierVideoFormValues>) {
   const [titleError, setTitleError] = useState("");
+  const [certificateError, setCertificateError] = useState("");
 
   function handleSubmit(e: FormEvent) {
+    let hasError = false;
     if (!values.title.trim()) {
-      e.preventDefault();
       setTitleError("Title is required.");
+      hasError = true;
+    } else {
+      setTitleError("");
+    }
+    // Every training video must land the viewer a certificate on a passing
+    // quiz (no more "informational only" videos authored from this form) —
+    // see the CertificateNotEligibleForVideoError comment in
+    // lib/training-videos.ts for the matching server-side rule.
+    if (!values.certificateId) {
+      setCertificateError("Select which certificate this video's quiz awards.");
+      hasError = true;
+    } else {
+      setCertificateError("");
+    }
+    if (hasError) {
+      e.preventDefault();
       return;
     }
-    setTitleError("");
     onSubmit(e);
   }
 
@@ -68,6 +87,16 @@ function SupplierVideoFields({
               </option>
             ))}
           </select>
+        </div>
+
+        <div>
+          <CertificatePickerSingle
+            value={values.certificateId}
+            onChange={(certificateId) => updateField("certificateId", certificateId)}
+            accent="supplier"
+            earningMethodFilter="tier1_video_quiz"
+          />
+          {certificateError && <p className="text-xs text-error-red mt-1">{certificateError}</p>}
         </div>
 
         <div>
@@ -135,6 +164,7 @@ export default function UploadVideoModal({ open, onClose, onCreated }: UploadVid
     const result = await createVideo.mutateAsync({
       title: values.title.trim(),
       category: values.category,
+      certificateId: values.certificateId!,
       description: values.description.trim() || null,
     });
     return { id: result.trainingVideo.id };

@@ -6,9 +6,10 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../app/generated/prisma/client";
+import { PrismaClient, CertificateEarningMethod } from "../app/generated/prisma/client";
 import { ApiValidationError } from "./api-errors";
 import {
+  CertificateNotEligibleForVideoError,
   createTrainingVideo,
   deleteTrainingVideoAsAdmin,
   deriveViewerState,
@@ -35,6 +36,16 @@ async function cleanupCompany(companyId: bigint) {
   await prisma.company.delete({ where: { id: companyId } });
 }
 
+function createCertificate(earningMethod: CertificateEarningMethod) {
+  return prisma.certificate.create({
+    data: { name: "Test Video Certificate", earningMethod, status: "approved" },
+  });
+}
+
+// Base fields shared by every test — certificateId is added per-test from a
+// real (test-DB) Certificate row, since createTrainingVideo validates it
+// against the DB (must exist, be approved, and be tier1_video_quiz — see
+// assertCertificateEligibleForVideo).
 const VALID_FIELDS = {
   title: "BSL-2 Lab Safety Basics",
   category: "Safety",
@@ -46,13 +57,14 @@ const VALID_FIELDS = {
 
 describe("parseTrainingVideoFields", () => {
   test("accepts a fully-populated valid body (non-partial)", () => {
-    const fields = parseTrainingVideoFields(VALID_FIELDS, { partial: false });
+    const fields = parseTrainingVideoFields({ ...VALID_FIELDS, certificateId: "1" }, { partial: false });
     assert.equal(fields.title, VALID_FIELDS.title);
     assert.equal(fields.category, VALID_FIELDS.category);
+    assert.equal(fields.certificateId, BigInt(1));
     assert.equal(fields.durationSeconds, 504);
   });
 
-  test("rejects a missing title/category on create", () => {
+  test("rejects a missing title/category/certificateId on create", () => {
     try {
       parseTrainingVideoFields({}, { partial: false });
       assert.fail("expected ApiValidationError");
@@ -60,6 +72,7 @@ describe("parseTrainingVideoFields", () => {
       assert.ok(error instanceof ApiValidationError);
       assert.ok(error.errors.title);
       assert.ok(error.errors.category);
+      assert.ok(error.errors.certificateId);
     }
   });
 
@@ -70,30 +83,37 @@ describe("parseTrainingVideoFields", () => {
 
   test("partial mode still validates a field if it's present", () => {
     assert.throws(() => parseTrainingVideoFields({ title: "" }, { partial: true }), ApiValidationError);
+    assert.throws(() => parseTrainingVideoFields({ certificateId: "not-an-id" }, { partial: true }), ApiValidationError);
   });
 
   test("rejects a negative durationSeconds", () => {
-    assert.throws(() => parseTrainingVideoFields({ ...VALID_FIELDS, durationSeconds: -5 }, { partial: false }), ApiValidationError);
+    assert.throws(
+      () => parseTrainingVideoFields({ ...VALID_FIELDS, certificateId: "1", durationSeconds: -5 }, { partial: false }),
+      ApiValidationError
+    );
   });
 });
 
 describe("createTrainingVideo / updateTrainingVideoAsSupplier / updateTrainingVideoAsAdmin", () => {
   test("supplier can update their own video", async () => {
     const company = await createCompany();
+    const certificate = await createCertificate(CertificateEarningMethod.tier1_video_quiz);
     try {
-      const video = await createTrainingVideo(VALID_FIELDS, company.id);
+      const video = await createTrainingVideo({ ...VALID_FIELDS, certificateId: certificate.id }, company.id);
       const updated = await updateTrainingVideoAsSupplier(video.id, company.id, { title: "New Title" });
       assert.equal(updated.title, "New Title");
     } finally {
       await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 
   test("supplier cannot update another company's video", async () => {
     const companyA = await createCompany();
     const companyB = await createCompany();
+    const certificate = await createCertificate(CertificateEarningMethod.tier1_video_quiz);
     try {
-      const video = await createTrainingVideo(VALID_FIELDS, companyB.id);
+      const video = await createTrainingVideo({ ...VALID_FIELDS, certificateId: certificate.id }, companyB.id);
       await assert.rejects(
         () => updateTrainingVideoAsSupplier(video.id, companyA.id, { title: "Hijacked" }),
         TrainingVideoNotOwnedError
@@ -101,12 +121,14 @@ describe("createTrainingVideo / updateTrainingVideoAsSupplier / updateTrainingVi
     } finally {
       await cleanupCompany(companyA.id);
       await cleanupCompany(companyB.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 
   test("supplier cannot update a platform-authored video", async () => {
     const company = await createCompany();
-    const platformVideo = await createTrainingVideo(VALID_FIELDS, null);
+    const certificate = await createCertificate(CertificateEarningMethod.tier1_video_quiz);
+    const platformVideo = await createTrainingVideo({ ...VALID_FIELDS, certificateId: certificate.id }, null);
     try {
       await assert.rejects(
         () => updateTrainingVideoAsSupplier(platformVideo.id, company.id, { title: "Hijacked" }),
@@ -115,6 +137,7 @@ describe("createTrainingVideo / updateTrainingVideoAsSupplier / updateTrainingVi
     } finally {
       await prisma.trainingVideo.delete({ where: { id: platformVideo.id } });
       await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 
@@ -132,22 +155,71 @@ describe("createTrainingVideo / updateTrainingVideoAsSupplier / updateTrainingVi
 
   test("admin can update any video regardless of company", async () => {
     const company = await createCompany();
+    const certificate = await createCertificate(CertificateEarningMethod.tier1_video_quiz);
     try {
-      const video = await createTrainingVideo(VALID_FIELDS, company.id);
+      const video = await createTrainingVideo({ ...VALID_FIELDS, certificateId: certificate.id }, company.id);
       const updated = await updateTrainingVideoAsAdmin(video.id, { title: "Admin Edit" });
       assert.equal(updated.title, "Admin Edit");
     } finally {
       await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
+    }
+  });
+
+  test("rejects creating a video against a certificate not earned via tier1_video_quiz", async () => {
+    const company = await createCompany();
+    const certificate = await createCertificate(CertificateEarningMethod.tier2b_operator_or_sme_signoff);
+    try {
+      await assert.rejects(
+        () => createTrainingVideo({ ...VALID_FIELDS, certificateId: certificate.id }, company.id),
+        CertificateNotEligibleForVideoError
+      );
+      const videos = await prisma.trainingVideo.findMany({ where: { companyId: company.id } });
+      assert.equal(videos.length, 0, "nothing should be written when the certificate is ineligible");
+    } finally {
+      await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
+    }
+  });
+
+  test("rejects creating a video against a certificateId that doesn't exist", async () => {
+    const company = await createCompany();
+    try {
+      await assert.rejects(
+        () => createTrainingVideo({ ...VALID_FIELDS, certificateId: BigInt(999999999) }, company.id),
+        ApiValidationError
+      );
+    } finally {
+      await cleanupCompany(company.id);
+    }
+  });
+
+  test("rejects re-pointing an existing video at an ineligible certificate on update", async () => {
+    const company = await createCompany();
+    const goodCertificate = await createCertificate(CertificateEarningMethod.tier1_video_quiz);
+    const badCertificate = await createCertificate(CertificateEarningMethod.tier2a_operator_signoff);
+    try {
+      const video = await createTrainingVideo({ ...VALID_FIELDS, certificateId: goodCertificate.id }, company.id);
+      await assert.rejects(
+        () => updateTrainingVideoAsSupplier(video.id, company.id, { certificateId: badCertificate.id }),
+        CertificateNotEligibleForVideoError
+      );
+    } finally {
+      await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: goodCertificate.id } });
+      await prisma.certificate.delete({ where: { id: badCertificate.id } });
     }
   });
 });
 
 describe("deleteTrainingVideoAsAdmin", () => {
   test("deletes an existing video", async () => {
-    const video = await createTrainingVideo(VALID_FIELDS, null);
+    const certificate = await createCertificate(CertificateEarningMethod.tier1_video_quiz);
+    const video = await createTrainingVideo({ ...VALID_FIELDS, certificateId: certificate.id }, null);
     await deleteTrainingVideoAsAdmin(video.id);
     const found = await prisma.trainingVideo.findUnique({ where: { id: video.id } });
     assert.equal(found, null);
+    await prisma.certificate.delete({ where: { id: certificate.id } });
   });
 
   test("rejects deleting a nonexistent video", async () => {

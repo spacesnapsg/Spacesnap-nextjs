@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { unauthorizedResponse } from "@/lib/api-errors";
+import { resolveSignedOffBy } from "@/lib/training-credentials";
 
 // "Credentials" = the earned/held record (old system's user_certificates
 // pivot: user, certificate, earned_date, expiry_date) — confirmed against
@@ -25,13 +26,18 @@ export async function GET() {
     orderBy: { earnedDate: "desc" },
   });
 
+  const signedOffByList = await Promise.all(
+    credentials.map((c) => resolveSignedOffBy(c.userId, c.certificateId, c.earnedVia))
+  );
+
   return NextResponse.json({
-    credentials: credentials.map((c) => ({
+    credentials: credentials.map((c, i) => ({
       id: c.id.toString(),
       certificateId: c.certificateId.toString(),
       earnedDate: c.earnedDate.toISOString().slice(0, 10),
       expiryDate: c.expiryDate ? c.expiryDate.toISOString().slice(0, 10) : null,
       earnedVia: c.earnedVia,
+      signedOffBy: signedOffByList[i],
       certificate: {
         id: c.certificate.id.toString(),
         name: c.certificate.name,

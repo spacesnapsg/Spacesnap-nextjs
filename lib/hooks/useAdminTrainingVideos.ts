@@ -6,6 +6,7 @@ export interface AdminTrainingVideo {
   id: string;
   companyId: string | null;
   companyName?: string | null;
+  certificateId: string | null;
   title: string;
   category: string | null;
   description: string | null;

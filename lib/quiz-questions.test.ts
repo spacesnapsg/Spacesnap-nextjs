@@ -7,7 +7,7 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../app/generated/prisma/client";
+import { PrismaClient, CertificateEarningMethod } from "../app/generated/prisma/client";
 import { ApiValidationError } from "./api-errors";
 import { MIN_QUIZ_QUESTIONS, parseQuizQuestionsSubmission, saveQuizQuestionsAsAdmin, saveQuizQuestionsAsSupplier } from "./quiz-questions";
 import { createTrainingVideo, TrainingVideoNotFoundError, TrainingVideoNotOwnedError } from "./training-videos";
@@ -26,6 +26,17 @@ async function createCompany() {
 async function cleanupCompany(companyId: bigint) {
   await prisma.trainingVideo.deleteMany({ where: { companyId } });
   await prisma.company.delete({ where: { id: companyId } });
+}
+
+// createTrainingVideo now requires a real, approved tier1_video_quiz
+// certificate (session: certificate-picker-for-training-videos) — this
+// module's tests only care about quiz-question CRUD, not certificate
+// gating (already covered by training-videos.test.ts), so one disposable
+// certificate per test is enough.
+function createCertificate() {
+  return prisma.certificate.create({
+    data: { name: "Test Quiz Certificate", earningMethod: CertificateEarningMethod.tier1_video_quiz, status: "approved" },
+  });
 }
 
 function validQuestions(count = MIN_QUIZ_QUESTIONS) {
@@ -68,8 +79,9 @@ describe("parseQuizQuestionsSubmission", () => {
 describe("saveQuizQuestionsAsSupplier / saveQuizQuestionsAsAdmin", () => {
   test("supplier can save a valid quiz for their own video, marking exactly one answer correct per question", async () => {
     const company = await createCompany();
+    const certificate = await createCertificate();
     try {
-      const video = await createTrainingVideo({ title: "T", category: "Safety" }, company.id);
+      const video = await createTrainingVideo({ title: "T", category: "Safety", certificateId: certificate.id }, company.id);
       const saved = await saveQuizQuestionsAsSupplier(video.id, company.id, parseQuizQuestionsSubmission({ questions: validQuestions() }));
 
       assert.equal(saved.length, MIN_QUIZ_QUESTIONS);
@@ -84,14 +96,16 @@ describe("saveQuizQuestionsAsSupplier / saveQuizQuestionsAsAdmin", () => {
       }
     } finally {
       await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 
   test("supplier cannot save a quiz for another company's video", async () => {
     const companyA = await createCompany();
     const companyB = await createCompany();
+    const certificate = await createCertificate();
     try {
-      const video = await createTrainingVideo({ title: "T", category: "Safety" }, companyB.id);
+      const video = await createTrainingVideo({ title: "T", category: "Safety", certificateId: certificate.id }, companyB.id);
       await assert.rejects(
         () => saveQuizQuestionsAsSupplier(video.id, companyA.id, parseQuizQuestionsSubmission({ questions: validQuestions() })),
         TrainingVideoNotOwnedError
@@ -99,12 +113,14 @@ describe("saveQuizQuestionsAsSupplier / saveQuizQuestionsAsAdmin", () => {
     } finally {
       await cleanupCompany(companyA.id);
       await cleanupCompany(companyB.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 
   test("supplier cannot save a quiz for a platform-authored video", async () => {
     const company = await createCompany();
-    const platformVideo = await createTrainingVideo({ title: "T", category: "Safety" }, null);
+    const certificate = await createCertificate();
+    const platformVideo = await createTrainingVideo({ title: "T", category: "Safety", certificateId: certificate.id }, null);
     try {
       await assert.rejects(
         () => saveQuizQuestionsAsSupplier(platformVideo.id, company.id, parseQuizQuestionsSubmission({ questions: validQuestions() })),
@@ -113,6 +129,7 @@ describe("saveQuizQuestionsAsSupplier / saveQuizQuestionsAsAdmin", () => {
     } finally {
       await prisma.trainingVideo.delete({ where: { id: platformVideo.id } });
       await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 
@@ -130,19 +147,22 @@ describe("saveQuizQuestionsAsSupplier / saveQuizQuestionsAsAdmin", () => {
 
   test("admin can save a quiz for any video", async () => {
     const company = await createCompany();
+    const certificate = await createCertificate();
     try {
-      const video = await createTrainingVideo({ title: "T", category: "Safety" }, company.id);
+      const video = await createTrainingVideo({ title: "T", category: "Safety", certificateId: certificate.id }, company.id);
       const saved = await saveQuizQuestionsAsAdmin(video.id, parseQuizQuestionsSubmission({ questions: validQuestions() }));
       assert.equal(saved.length, MIN_QUIZ_QUESTIONS);
     } finally {
       await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 
   test("resaving a quiz replaces the previous question set entirely", async () => {
     const company = await createCompany();
+    const certificate = await createCertificate();
     try {
-      const video = await createTrainingVideo({ title: "T", category: "Safety" }, company.id);
+      const video = await createTrainingVideo({ title: "T", category: "Safety", certificateId: certificate.id }, company.id);
       await saveQuizQuestionsAsSupplier(video.id, company.id, parseQuizQuestionsSubmission({ questions: validQuestions() }));
 
       const replacement = validQuestions(MIN_QUIZ_QUESTIONS + 1);
@@ -155,6 +175,7 @@ describe("saveQuizQuestionsAsSupplier / saveQuizQuestionsAsAdmin", () => {
       assert.ok(replaced);
     } finally {
       await cleanupCompany(company.id);
+      await prisma.certificate.delete({ where: { id: certificate.id } });
     }
   });
 });

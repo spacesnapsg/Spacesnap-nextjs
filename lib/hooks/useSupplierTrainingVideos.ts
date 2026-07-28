@@ -5,6 +5,7 @@ import type { TrainingVideo } from "@/lib/hooks/useTrainingVideos";
 export interface TrainingVideoInput {
   title: string;
   category: string;
+  certificateId: string;
   description?: string | null;
   durationSeconds?: number | null;
   thumbnailUrl?: string | null;

@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSupplier } from "@/lib/supplier-auth";
 import { ApiValidationError, validationErrorResponse } from "@/lib/api-errors";
-import { createTrainingVideo, parseTrainingVideoFields, serializeTrainingVideo } from "@/lib/training-videos";
+import {
+  CertificateNotEligibleForVideoError,
+  createTrainingVideo,
+  parseTrainingVideoFields,
+  serializeTrainingVideo,
+} from "@/lib/training-videos";
 
 // POST: supplier uploads a video scoped to their own company. Mirrors old
 // TrainingVideoController::supplierStore (403 if the caller has no company —
@@ -18,12 +23,15 @@ export async function POST(request: NextRequest) {
   try {
     const fields = parseTrainingVideoFields(body, { partial: false });
     const video = await createTrainingVideo(
-      { title: fields.title!, category: fields.category!, ...fields },
+      { title: fields.title!, category: fields.category!, certificateId: fields.certificateId!, ...fields },
       auth.companyId
     );
     return NextResponse.json({ trainingVideo: serializeTrainingVideo(video) }, { status: 201 });
   } catch (error) {
     if (error instanceof ApiValidationError) return validationErrorResponse(error);
+    if (error instanceof CertificateNotEligibleForVideoError) {
+      return NextResponse.json({ message: error.message }, { status: 422 });
+    }
     throw error;
   }
 }

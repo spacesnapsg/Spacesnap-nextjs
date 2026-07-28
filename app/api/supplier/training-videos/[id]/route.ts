@@ -3,6 +3,7 @@ import { requireSupplier } from "@/lib/supplier-auth";
 import { ApiValidationError, forbiddenResponse, notFoundResponse, validationErrorResponse } from "@/lib/api-errors";
 import { parseBigIntParam } from "@/lib/listings";
 import {
+  CertificateNotEligibleForVideoError,
   parseTrainingVideoFields,
   serializeTrainingVideo,
   TrainingVideoNotFoundError,
@@ -34,6 +35,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (error instanceof ApiValidationError) return validationErrorResponse(error);
     if (error instanceof TrainingVideoNotFoundError) return notFoundResponse(error.message);
     if (error instanceof TrainingVideoNotOwnedError) return forbiddenResponse(error.message);
+    if (error instanceof CertificateNotEligibleForVideoError) {
+      return NextResponse.json({ message: error.message }, { status: 422 });
+    }
     throw error;
   }
 }

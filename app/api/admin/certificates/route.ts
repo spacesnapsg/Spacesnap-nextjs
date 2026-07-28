@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
   ]);
 
   return NextResponse.json({
-    certificates: certificates.map(serializeCertificate),
+    certificates: certificates.map((c) => serializeCertificate(c)),
     meta: { page, perPage: PER_PAGE, total },
   });
 }

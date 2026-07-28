@@ -7,6 +7,7 @@ import Button from "@/components/Button";
 import Input from "@/components/Input";
 import Modal from "@/components/Modal";
 import TrainingVideoModal, { type VideoFormRenderProps } from "@/components/TrainingVideoModal";
+import CertificatePickerSingle from "@/components/CertificatePickerSingle";
 import { VIDEO_CATEGORIES, type VideoCategory, type QuizQuestion } from "@/lib/mockTutorials";
 import {
   useAdminCertificates,
@@ -314,6 +315,7 @@ function CertificatesTab() {
 interface AdminVideoFormValues {
   title: string;
   category: VideoCategory;
+  certificateId: string | null;
   duration: string;
   thumbnailUrl: string;
   videoUrl: string;
@@ -323,6 +325,7 @@ interface AdminVideoFormValues {
 const EMPTY_ADMIN_VIDEO_FORM: AdminVideoFormValues = {
   title: "",
   category: VIDEO_CATEGORIES[0],
+  certificateId: null,
   duration: "",
   thumbnailUrl: "",
   videoUrl: "",
@@ -330,10 +333,25 @@ const EMPTY_ADMIN_VIDEO_FORM: AdminVideoFormValues = {
 };
 
 function AdminVideoFields({ values, updateField, onSubmit, saving, error, isEdit }: VideoFormRenderProps<AdminVideoFormValues>) {
+  const [certificateError, setCertificateError] = useState("");
+
+  function handleSubmit(e: FormEvent) {
+    // Every training video must land the viewer a certificate on a passing
+    // quiz — see the CertificateNotEligibleForVideoError comment in
+    // lib/training-videos.ts for the matching server-side rule.
+    if (!values.certificateId) {
+      e.preventDefault();
+      setCertificateError("Select which certificate this video's quiz awards.");
+      return;
+    }
+    setCertificateError("");
+    onSubmit(e);
+  }
+
   return (
     <>
       <h2 className="text-xl font-semibold text-body-text mb-6">{isEdit ? "Edit Training Video" : "Add Training Video"}</h2>
-      <form onSubmit={onSubmit} className="flex flex-col gap-4">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div>
           <label className="text-xs font-medium text-muted-text mb-1.5 block">Title</label>
           <Input value={values.title} onChange={(e) => updateField("title", e.target.value)} required className="w-full focus:!border-admin-red-start" />
@@ -351,6 +369,15 @@ function AdminVideoFields({ values, updateField, onSubmit, saving, error, isEdit
               </option>
             ))}
           </select>
+        </div>
+        <div>
+          <CertificatePickerSingle
+            value={values.certificateId}
+            onChange={(certificateId) => updateField("certificateId", certificateId)}
+            accent="admin"
+            earningMethodFilter="tier1_video_quiz"
+          />
+          {certificateError && <p className="text-xs text-error-red mt-1">{certificateError}</p>}
         </div>
         <div>
           <label className="text-xs font-medium text-muted-text mb-1.5 block">Duration</label>
@@ -420,6 +447,7 @@ function VideoModal({
     ? {
         title: initialVideo.title,
         category: (initialVideo.category as VideoCategory) ?? VIDEO_CATEGORIES[0],
+        certificateId: initialVideo.certificateId,
         duration: formatSecondsToDuration(initialVideo.durationSeconds),
         thumbnailUrl: initialVideo.thumbnailUrl ?? "",
         videoUrl: initialVideo.videoUrl ?? "",
@@ -431,6 +459,7 @@ function VideoModal({
     const input = {
       title: values.title.trim(),
       category: values.category,
+      certificateId: values.certificateId!,
       description: values.description.trim() || null,
       durationSeconds: parseDurationToSeconds(values.duration),
       thumbnailUrl: values.thumbnailUrl.trim() || null,

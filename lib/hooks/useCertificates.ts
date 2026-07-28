@@ -9,6 +9,10 @@ export interface Certificate {
   earningMethod: string;
   status: string;
   createdAt: string;
+  // Only populated by GET /api/certificates (the public catalog) — see that
+  // route's requiredForListings join. Other callers of serializeCertificate
+  // (admin certs list, etc.) leave this undefined.
+  requiredForListingNames?: string[];
 }
 
 export function useCertificateCatalog() {

@@ -1,10 +1,13 @@
 import {
   ActivityActionType,
   AdminNotificationType,
-  type CredentialProvenance,
+  CredentialProvenance,
+  InternalTrainingParticipantStatus,
+  TrainingEnrollmentStatus,
   type Prisma,
   type UserCertificate,
 } from "@/app/generated/prisma/client";
+import { prisma } from "@/lib/prisma";
 import { createAdminNotification } from "@/lib/admin-notifications";
 import { resolveProvenanceOnRenewal } from "@/lib/credential-provenance";
 
@@ -90,4 +93,52 @@ export async function issueCredential(
   });
 
   return credential;
+}
+
+// Digital Passport's certificate detail view (session:
+// certificate-detail-fields) needs to show who signed a held credential off,
+// but "who" lives on a different table per earning path — there's no single
+// FK for it on UserCertificate itself. tier1_video_quiz is auto-graded (no
+// human reviewer, see QuizAttempt's own comment), so it resolves to null;
+// the other three each look up their own earning path's record:
+//   - tier2a_operator_signoff: CertificateSignoffRequest.reviewedBy
+//   - tier2a1_internal_company_signoff: InternalTrainingEvent.trainerName
+//     (the person who actually ran the training — see that model's own
+//     comment on why this isn't necessarily the CA doing the signing-off;
+//     there's no separate "reviewedBy" column on the participant row)
+//   - tier2b_operator_or_sme_signoff: TrainingSession.smeName
+// Read-only lookups, not part of the issuance transaction above — this is
+// display-time resolution, called from GET /api/credentials.
+export async function resolveSignedOffBy(
+  userId: string,
+  certificateId: bigint,
+  earnedVia: CredentialProvenance
+): Promise<string | null> {
+  switch (earnedVia) {
+    case CredentialProvenance.tier2a_operator_signoff: {
+      const request = await prisma.certificateSignoffRequest.findUnique({
+        where: { userId_certificateId: { userId, certificateId } },
+        include: { reviewer: { select: { name: true } } },
+      });
+      return request?.reviewer?.name ?? null;
+    }
+    case CredentialProvenance.tier2a1_internal_company_signoff: {
+      const participant = await prisma.internalTrainingParticipant.findFirst({
+        where: { userId, status: InternalTrainingParticipantStatus.passed, event: { certificateId } },
+        include: { event: { select: { trainerName: true } } },
+        orderBy: { reviewedAt: "desc" },
+      });
+      return participant?.event.trainerName ?? null;
+    }
+    case CredentialProvenance.tier2b_operator_or_sme_signoff: {
+      const enrollment = await prisma.trainingEnrollment.findFirst({
+        where: { userId, status: TrainingEnrollmentStatus.completed, trainingSession: { certificateId } },
+        include: { trainingSession: { select: { smeName: true } } },
+        orderBy: { updatedAt: "desc" },
+      });
+      return enrollment?.trainingSession.smeName ?? null;
+    }
+    default:
+      return null;
+  }
 }

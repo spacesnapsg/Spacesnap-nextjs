@@ -68,27 +68,48 @@ export default function CertificateDetailModal({
             <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <div>
                 <p className="text-muted-text text-xs">Certificate ID</p>
-                <p className="text-body-text mt-0.5">CERT-{certificate.id.padStart(6, "0")}</p>
+                {/* Unique to THIS holder's earned credential (UserCertificate.id) —
+                    not the shared Certificate definition id, which every holder of
+                    this certificate would otherwise see the same value for. */}
+                <p className="text-body-text mt-0.5">
+                  {credential ? `CRED-${credential.id.padStart(8, "0")}` : "Not yet issued"}
+                </p>
               </div>
               <div>
                 <p className="text-muted-text text-xs">Required For</p>
-                <p className="text-body-text mt-0.5">{certificate.category ?? "—"}</p>
+                <p className="text-body-text mt-0.5">
+                  {certificate.requiredForListingNames && certificate.requiredForListingNames.length > 0
+                    ? certificate.requiredForListingNames.join(", ")
+                    : "Not required for any current listings"}
+                </p>
               </div>
               <div>
                 <p className="text-muted-text text-xs">Earning Method</p>
-                <p className="text-body-text mt-0.5">{certificate.earningMethod}</p>
+                <p className="text-body-text mt-0.5">
+                  {PROVENANCE_LABEL[certificate.earningMethod as CredentialProvenance] ?? certificate.earningMethod}
+                </p>
+              </div>
+              {credential && credential.earnedVia !== "tier1_video_quiz" && (
+                <div>
+                  <p className="text-muted-text text-xs">Signed Off By</p>
+                  <p className="text-body-text mt-0.5">{credential.signedOffBy ?? "—"}</p>
+                </div>
+              )}
+              <div>
+                <p className="text-muted-text text-xs">Date of Issuance</p>
+                <p className="text-body-text mt-0.5">{credential ? formatDate(credential.earnedDate) : "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-text text-xs">Expiry Date</p>
+                <p className={`mt-0.5 ${isExpired ? "text-error-red" : "text-body-text"}`}>
+                  {credential ? (credential.expiryDate ? formatDate(credential.expiryDate) : "No expiration") : "—"}
+                </p>
               </div>
             </div>
           </div>
 
           {credential && (
-            <div className="border-t border-border/40 pt-4 flex flex-col gap-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-text">Earned {formatDate(credential.earnedDate)}</span>
-                <span className={isExpired ? "text-error-red" : "text-muted-text"}>
-                  {credential.expiryDate ? `${isExpired ? "Expired" : "Expires"} ${formatDate(credential.expiryDate)}` : "No expiration"}
-                </span>
-              </div>
+            <div className="border-t border-border/40 pt-4">
               <span
                 title={getProvenanceTooltip(credential.earnedVia as CredentialProvenance) ?? undefined}
                 className="self-start inline-flex items-center gap-1.5 bg-white/10 text-body-text border border-white/20 rounded-full px-2.5 py-1 text-xs font-medium"
