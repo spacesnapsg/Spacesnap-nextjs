@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Building2 } from "lucide-react";
+import { Building2, Coins } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import OrgSearchInput from "@/components/OrgSearchInput";
 import ManageBuyerOrganizationModal from "@/components/ManageBuyerOrganizationModal";
+import TopUpOrgPoolModal from "@/components/TopUpOrgPoolModal";
 import { ApiRequestError } from "@/lib/api-client";
 import {
   useBuyerOrganization,
@@ -27,6 +28,7 @@ export default function BuyerOrganizationCard() {
   const joinOrg = useJoinBuyerOrganization();
   const requestPromotion = useRequestBuyerOrgPromotion();
   const [manageOpen, setManageOpen] = useState(false);
+  const [topUpOpen, setTopUpOpen] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ status: "joined" | "pending"; name: string } | null>(null);
@@ -112,6 +114,19 @@ export default function BuyerOrganizationCard() {
         )}
       </div>
 
+      <div className="mt-4 pt-4 border-t border-border/40 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Coins size={16} className="text-user-teal-end" />
+          <div>
+            <p className="text-xs text-muted-text">Shared Pool Balance</p>
+            <p className="text-body-text font-semibold">{organization.poolBalance} credits</p>
+          </div>
+        </div>
+        <Button variant="ghost" onClick={() => setTopUpOpen(true)} className="h-9 px-4 text-sm">
+          Top Up Pool
+        </Button>
+      </div>
+
       {!organization.isAdmin && (
         <div className="mt-4 pt-4 border-t border-border/40">
           {organization.adminName ? (
@@ -145,6 +160,7 @@ export default function BuyerOrganizationCard() {
       )}
 
       <ManageBuyerOrganizationModal open={manageOpen} onClose={() => setManageOpen(false)} />
+      <TopUpOrgPoolModal open={topUpOpen} onClose={() => setTopUpOpen(false)} organizationName={organization.name} />
     </Card>
   );
 }

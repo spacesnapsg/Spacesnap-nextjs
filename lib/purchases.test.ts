@@ -16,7 +16,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, TransactionType, RewardGrantType } from "../app/generated/prisma/client";
-import { getPurchasedBalance, InsufficientCreditBalanceError } from "./credits";
+import { getPurchasedBalance, getBuyerOrgPoolBalance, InsufficientCreditBalanceError } from "./credits";
 import { createPurchaseWithDebit, InsufficientStockError, RewardGrantNotRedeemableError } from "./purchases";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
@@ -190,6 +190,81 @@ describe("createPurchaseWithDebit (Buy Now)", () => {
       assert.equal(stockAfter!.stockQuantity, 0);
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// 2026-07-28 "Buyer Org pool — delegated spend": buyerOrganizationId debits
+// the org's shared pool instead of the buyer's own purchasedBalance.
+describe("createPurchaseWithDebit — Buyer Org pool spend (2026-07-28)", () => {
+  test("debits the org's pool, leaves the member's own purchasedBalance untouched", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const org = await prisma.buyerOrganization.create({ data: { name: `Purchase Test Org ${Date.now()}` } });
+    try {
+      const listing = await createConsumablesListing(company.id, 10); // pricePerUnit 18.50
+      const cost = listing.pricePerUnit!.mul(2); // 37.00
+      await prisma.transaction.create({
+        data: { userId: user.id, buyerOrganizationId: org.id, type: TransactionType.purchased_topup, amount: "100.00" },
+      });
+
+      const purchase = await createPurchaseWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        quantity: 2,
+        cost,
+        unitPrice: listing.pricePerUnit!,
+        buyerOrganizationId: org.id,
+      });
+
+      assert.equal(purchase.userId, user.id);
+
+      const transactions = await prisma.transaction.findMany({ where: { purchaseId: purchase.id } });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].type, TransactionType.purchased_spend);
+      assert.equal(transactions[0].amount.toString(), "-37");
+      assert.equal(transactions[0].buyerOrganizationId?.toString(), org.id.toString());
+
+      const poolBalance = await getBuyerOrgPoolBalance(org.id);
+      assert.equal(poolBalance.toString(), "63"); // 100 - 37
+
+      const personalPurchasedBalance = await getPurchasedBalance(user.id);
+      assert.equal(personalPurchasedBalance.toString(), "0");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+      await prisma.buyerOrganization.delete({ where: { id: org.id } }).catch(() => {});
+    }
+  });
+
+  test("rejects with InsufficientCreditBalanceError when the pool (not the member's own purchasedBalance) is short", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const org = await prisma.buyerOrganization.create({ data: { name: `Purchase Test Org ${Date.now()}` } });
+    try {
+      const listing = await createConsumablesListing(company.id, 10);
+      // The member's OWN personal balance is well-funded, but the pool has nothing.
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.purchased_topup, amount: "1000.00" },
+      });
+
+      await assert.rejects(
+        () =>
+          createPurchaseWithDebit({
+            userId: user.id,
+            listingId: listing.id,
+            quantity: 1,
+            cost: listing.pricePerUnit!,
+            unitPrice: listing.pricePerUnit!,
+            buyerOrganizationId: org.id,
+          }),
+        InsufficientCreditBalanceError
+      );
+
+      const purchases = await prisma.purchase.findMany({ where: { userId: user.id } });
+      assert.equal(purchases.length, 0);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+      await prisma.buyerOrganization.delete({ where: { id: org.id } }).catch(() => {});
     }
   });
 });

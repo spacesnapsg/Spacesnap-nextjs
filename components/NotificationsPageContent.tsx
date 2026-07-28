@@ -11,6 +11,7 @@ import {
   CheckCheck,
   Archive,
   ArchiveRestore,
+  Building2,
   type LucideIcon,
 } from "lucide-react";
 import Card from "@/components/Card";
@@ -29,6 +30,7 @@ const TYPE_META: Record<string, { icon: LucideIcon; color: string }> = {
   booking_confirmed: { icon: CalendarCheck2, color: "text-success-green" },
   credit_topup: { icon: Wallet, color: "text-success-green" },
   booking_credit_pending: { icon: AlertTriangle, color: "text-error-red" },
+  buyer_org_spend_request: { icon: Building2, color: "text-user-teal-end" },
 };
 const DEFAULT_TYPE_META = { icon: Info, color: "text-muted-text" };
 

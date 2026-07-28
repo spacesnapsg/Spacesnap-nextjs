@@ -1,7 +1,7 @@
 import { TransactionType, ActivityActionType, RewardGrantType, AdminNotificationType, type Purchase, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
-import { assertSufficientPurchasedBalance } from "@/lib/credits";
+import { assertSufficientPurchasedBalance, assertSufficientBuyerOrgPoolBalance } from "@/lib/credits";
 import { resolveRewardGrantDiscount, redeemRewardGrant, RewardGrantNotRedeemableError } from "@/lib/reward-grants";
 import { sgdToCredits } from "@/lib/credit-units";
 import { createConsumablePayable } from "@/lib/supplier-payables";
@@ -25,6 +25,11 @@ interface ParsedPurchaseFields {
   listingId: bigint;
   quantity: number;
   rewardGrantId?: bigint;
+  // 2026-07-28 (Buyer Org pool spend) — same meaning as
+  // ParsedBookingFields.fundingSource (lib/bookings.ts): "organization"
+  // funds this Buy Now purchase from the caller's buyer org pool instead of
+  // purchasedBalance. Defaults to "personal".
+  fundingSource: "personal" | "organization";
 }
 
 // Same shape as parseBulkOrderCreateFields (lib/bulk-orders.ts) — "Buy Now"
@@ -43,6 +48,15 @@ export function parsePurchaseCreateFields(body: unknown): ParsedPurchaseFields {
 
   if (typeof b.quantity !== "number" || !Number.isInteger(b.quantity) || b.quantity < 1) {
     errors.quantity = ["quantity must be an integer of at least 1."];
+  }
+
+  let fundingSource: "personal" | "organization" = "personal";
+  if (b.fundingSource !== undefined) {
+    if (b.fundingSource !== "personal" && b.fundingSource !== "organization") {
+      errors.fundingSource = ["fundingSource must be one of personal, organization."];
+    } else {
+      fundingSource = b.fundingSource;
+    }
   }
 
   // 2026-07-21: optional discount, resolved server-side against a specific
@@ -65,6 +79,7 @@ export function parsePurchaseCreateFields(body: unknown): ParsedPurchaseFields {
     listingId: listingId!,
     quantity: b.quantity as number,
     rewardGrantId,
+    fundingSource,
   };
 }
 
@@ -85,6 +100,13 @@ interface CreatePurchaseWithDebitParams {
   cost: Prisma.Decimal;
   unitPrice: Prisma.Decimal;
   rewardGrantId?: bigint;
+  // 2026-07-28 (Buyer Org pool spend) — when set, this "Buy Now" purchase is
+  // debited from the org's shared pool instead of the buyer's own
+  // purchasedBalance. Same shape as createBookingWithDebit's own
+  // buyerOrganizationId param (lib/bookings.ts) — the purchase still belongs
+  // to params.userId, never whoever (if anyone) fulfilled a
+  // BuyerOrgSpendRequest on their behalf.
+  buyerOrganizationId?: bigint;
 }
 
 // "Buy Now" — an immediate, completed sale, deliberately not a
@@ -137,7 +159,11 @@ export async function createPurchaseWithDebit(params: CreatePurchaseWithDebitPar
       throw new InsufficientStockError(params.quantity);
     }
 
-    await assertSufficientPurchasedBalance(tx, params.userId, chargeAmount);
+    if (params.buyerOrganizationId !== undefined) {
+      await assertSufficientBuyerOrgPoolBalance(tx, params.buyerOrganizationId, chargeAmount);
+    } else {
+      await assertSufficientPurchasedBalance(tx, params.userId, chargeAmount);
+    }
 
     const purchase = await tx.purchase.create({
       data: {
@@ -166,10 +192,14 @@ export async function createPurchaseWithDebit(params: CreatePurchaseWithDebitPar
     await tx.transaction.create({
       data: {
         userId: params.userId,
+        buyerOrganizationId: params.buyerOrganizationId,
         purchaseId: purchase.id,
         type: TransactionType.purchased_spend,
         amount: chargeAmount.negated(),
-        description: `Purchase #${purchase.id} — ${chargeAmount} SGD debited from purchasedBalance.`,
+        description:
+          params.buyerOrganizationId !== undefined
+            ? `Purchase #${purchase.id} — ${chargeAmount} SGD debited from the organization's shared pool.`
+            : `Purchase #${purchase.id} — ${chargeAmount} SGD debited from purchasedBalance.`,
       },
     });
 

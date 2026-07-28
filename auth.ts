@@ -45,6 +45,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           companyId: user.companyId ? user.companyId.toString() : null,
           isBuyerOrgAdmin: user.isBuyerOrgAdmin,
           buyerOrganizationId: user.buyerOrganizationId ? user.buyerOrganizationId.toString() : null,
+          buyerOrgCanBook: user.buyerOrgCanBook,
+          buyerOrgCanPurchase: user.buyerOrgCanPurchase,
         };
       },
     }),
@@ -62,6 +64,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.companyId = user.companyId;
         token.isBuyerOrgAdmin = user.isBuyerOrgAdmin;
         token.buyerOrganizationId = user.buyerOrganizationId;
+        token.buyerOrgCanBook = user.buyerOrgCanBook;
+        token.buyerOrgCanPurchase = user.buyerOrgCanPurchase;
         // Sprint 6.12 — stamp real request-level activity for the EDM
         // popup's 6-hour trigger (lib/edm-campaigns.ts). Fire-and-forget is
         // deliberately not used here: this is the first-sign-in branch, so
@@ -95,6 +99,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             companyId: true,
             isBuyerOrgAdmin: true,
             buyerOrganizationId: true,
+            buyerOrgCanBook: true,
+            buyerOrgCanPurchase: true,
           },
         });
       } catch {
@@ -112,6 +118,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       token.companyId = current.companyId ? current.companyId.toString() : null;
       token.isBuyerOrgAdmin = current.isBuyerOrgAdmin;
       token.buyerOrganizationId = current.buyerOrganizationId ? current.buyerOrganizationId.toString() : null;
+      token.buyerOrgCanBook = current.buyerOrgCanBook;
+      token.buyerOrgCanPurchase = current.buyerOrgCanPurchase;
 
       return token;
     },
@@ -124,6 +132,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       session.user.companyId = token.companyId;
       session.user.isBuyerOrgAdmin = token.isBuyerOrgAdmin;
       session.user.buyerOrganizationId = token.buyerOrganizationId;
+      session.user.buyerOrgCanBook = token.buyerOrgCanBook;
+      session.user.buyerOrgCanPurchase = token.buyerOrgCanPurchase;
       return session;
     },
   },

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { unauthorizedResponse } from "@/lib/api-errors";
 import { prisma } from "@/lib/prisma";
+import { getBuyerOrgPoolBalance } from "@/lib/credits";
+import { sgdToCredits } from "@/lib/credit-units";
 
 // The caller's own organization + role, or null if they aren't in one yet —
 // the user Financials page reads this to decide between the join prompt and
@@ -22,7 +24,7 @@ export async function GET() {
   }
 
   const buyerOrganizationId = BigInt(session.user.buyerOrganizationId);
-  const [org, existingAdmin, currentUser] = await Promise.all([
+  const [org, existingAdmin, currentUser, poolBalance] = await Promise.all([
     prisma.buyerOrganization.findUnique({ where: { id: buyerOrganizationId } }),
     prisma.user.findFirst({
       where: { buyerOrganizationId, isBuyerOrgAdmin: true },
@@ -32,6 +34,7 @@ export async function GET() {
       where: { id: session.user.id },
       select: { buyerOrgPromotionRequested: true },
     }),
+    getBuyerOrgPoolBalance(buyerOrganizationId),
   ]);
   if (!org) return NextResponse.json({ organization: null });
 
@@ -42,6 +45,11 @@ export async function GET() {
       isAdmin: session.user.isBuyerOrgAdmin,
       adminName: existingAdmin?.name ?? null,
       promotionRequested: currentUser.buyerOrgPromotionRequested,
+      // Delegated pool-spend rights (2026-07-28) — an admin always has both
+      // implicitly, regardless of these two flags' own DB value.
+      canBook: session.user.isBuyerOrgAdmin || session.user.buyerOrgCanBook,
+      canPurchase: session.user.isBuyerOrgAdmin || session.user.buyerOrgCanPurchase,
+      poolBalance: sgdToCredits(Number(poolBalance)),
     },
   });
 }

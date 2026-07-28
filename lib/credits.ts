@@ -19,12 +19,46 @@ export class InsufficientCreditBalanceError extends Error {
 // in schema.prisma) — it's always the live SUM of the user's ledger rows.
 // Accepts a $transaction callback's tx client so the read can happen inside
 // the same transaction as the debit write in assertSufficientBalance below.
+//
+// 2026-07-28 (Buyer Org pool spend): explicitly excludes buyerOrganizationId
+// rows — a member's org-pool top-up/spend is money that belongs to the
+// org's shared pool (see getBuyerOrgPoolBalance below), not this member's
+// own personal balance, even though userId still names them as the acting
+// member on that row (same "who did it vs. whose pool it drew from"
+// distinction as Transaction.buyerOrganizationId's own schema comment).
+// Without this filter a member funding/spending the org pool would see
+// their own personal balance move too, double-representing the same money.
 export async function getCreditBalance(
   userId: string,
   client: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Prisma.Decimal> {
   const result = await client.transaction.aggregate({
-    where: { userId },
+    where: { userId, buyerOrganizationId: null },
+    _sum: { amount: true },
+  });
+  return result._sum.amount ?? new Prisma.Decimal(0);
+}
+
+// The Buyer Organization's own shared pool balance — the counterpart to
+// getCreditBalance above, summed across every member's org-attributed rows
+// (buyerOrganizationId set) rather than a single user's personal ledger.
+// Deliberately no `type` filter (same "blind SUM" idiom as getCreditBalance
+// before the purchased/earned split existed) — buyerOrganizationId is NEVER
+// set on any Transaction row except the pool's own: a top-up
+// (purchased_topup, createTopUp/lib/wallet.ts), a Buy-Now debit
+// (purchased_spend, createPurchaseWithDebit/lib/purchases.ts), AND a
+// booking debit (booking_payment, createBookingWithDebit/lib/bookings.ts —
+// this one is NOT purchased_spend, unlike a personal Buy Now, so filtering
+// to just purchased_topup/purchased_spend would silently exclude every
+// org-funded booking's own debit). If a future write path ever needs to
+// exclude a specific type from the pool sum, add the filter back deliberately
+// then — don't reintroduce it speculatively.
+export async function getBuyerOrgPoolBalance(
+  buyerOrganizationId: bigint,
+  client: Prisma.TransactionClient | typeof prisma = prisma
+): Promise<Prisma.Decimal> {
+  const result = await client.transaction.aggregate({
+    where: { buyerOrganizationId },
     _sum: { amount: true },
   });
   return result._sum.amount ?? new Prisma.Decimal(0);
@@ -50,12 +84,15 @@ export async function getCreditBalance(
 // (e.g. `{ type: "booking_discount_pct", value: 10 }`), never a bare
 // `{ balance: <this number> }`. lib/earned-balance-guard.test.ts statically
 // checks that no existing API route response does this.
+// buyerOrganizationId: null for the same reason as getCreditBalance above —
+// a member's own org-pool top-up/spend rows must not inflate/deflate their
+// personal purchasedBalance.
 export async function getPurchasedBalance(
   userId: string,
   client: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Prisma.Decimal> {
   const result = await client.transaction.aggregate({
-    where: { userId, type: { in: [TransactionType.purchased_topup, TransactionType.purchased_spend] } },
+    where: { userId, buyerOrganizationId: null, type: { in: [TransactionType.purchased_topup, TransactionType.purchased_spend] } },
     _sum: { amount: true },
   });
   return result._sum.amount ?? new Prisma.Decimal(0);
@@ -66,7 +103,7 @@ export async function getEarnedBalance(
   client: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Prisma.Decimal> {
   const result = await client.transaction.aggregate({
-    where: { userId, type: { in: [TransactionType.earned_grant, TransactionType.earned_spend] } },
+    where: { userId, buyerOrganizationId: null, type: { in: [TransactionType.earned_grant, TransactionType.earned_spend] } },
     _sum: { amount: true },
   });
   return result._sum.amount ?? new Prisma.Decimal(0);
@@ -104,6 +141,22 @@ export async function assertSufficientPurchasedBalance(
   cost: Prisma.Decimal
 ): Promise<void> {
   const balance = await getPurchasedBalance(userId, tx);
+  if (balance.lt(cost)) {
+    throw new InsufficientCreditBalanceError(balance, cost);
+  }
+}
+
+// getBuyerOrgPoolBalance counterpart, same shape as
+// assertSufficientPurchasedBalance above — the org-funded booking/Buy Now
+// paths (createBookingWithDebit/createPurchaseWithDebit) call this instead
+// of assertSufficient(Purchased)Balance when a buyerOrganizationId is
+// supplied.
+export async function assertSufficientBuyerOrgPoolBalance(
+  tx: Prisma.TransactionClient,
+  buyerOrganizationId: bigint,
+  cost: Prisma.Decimal
+): Promise<void> {
+  const balance = await getBuyerOrgPoolBalance(buyerOrganizationId, tx);
   if (balance.lt(cost)) {
     throw new InsufficientCreditBalanceError(balance, cost);
   }

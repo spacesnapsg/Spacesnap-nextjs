@@ -17,6 +17,7 @@ import {
 } from "@/lib/bookings";
 import { ListingNotFoundError } from "@/lib/listings";
 import { getEffectiveCompanyPricing, markupPercentForBookingType, applyMarkup } from "@/lib/pricing";
+import { InsufficientCreditBalanceError } from "@/lib/credits";
 
 const PRICE_FIELD = { daily: "priceDay", weekly: "priceWeek", monthly: "priceMonth" } as const;
 const BOOKING_STATUSES = new Set<string>(Object.values(BookingStatus));
@@ -122,6 +123,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message: BOOKING_OVERLAP_MESSAGE }, { status: 409 });
   }
 
+  // 2026-07-28 (Buyer Org pool spend) — fundingSource: "organization" is
+  // never trusted from the client alone: the caller must actually belong to
+  // an org AND (be its admin OR hold buyerOrgCanBook). A member without
+  // permission gets a clean 403 here — the frontend should route them to
+  // POST /api/buyer-organization/spend-requests instead, which queues a
+  // request for their admin rather than booking directly.
+  let buyerOrganizationId: bigint | undefined;
+  if (fields.fundingSource === "organization") {
+    if (!session.user.buyerOrganizationId || !(session.user.isBuyerOrgAdmin || session.user.buyerOrgCanBook)) {
+      return NextResponse.json(
+        { message: "You don't have permission to book from your organization's pool. Submit a request instead." },
+        { status: 403 }
+      );
+    }
+    buyerOrganizationId = BigInt(session.user.buyerOrganizationId);
+  }
+
   try {
     const booking = await createBookingWithDebit({
       userId: session.user.id,
@@ -136,6 +154,7 @@ export async function POST(request: NextRequest) {
       rewardGrantId: fields.rewardGrantId,
       bookingCreditId: fields.bookingCreditId,
       requireApproval: listing.requireApproval,
+      buyerOrganizationId,
     });
 
     return NextResponse.json({ booking: serializeBooking(booking) }, { status: 201 });
@@ -151,6 +170,9 @@ export async function POST(request: NextRequest) {
     }
     if (error instanceof StripeRefundFailedError) {
       return NextResponse.json({ message: error.message }, { status: 502 });
+    }
+    if (error instanceof InsufficientCreditBalanceError) {
+      return validationErrorResponse(new ApiValidationError({ fundingSource: ["Your organization's pool doesn't have enough credits for this booking."] }));
     }
     // Race window between the app-layer check above and this insert: the DB
     // constraint (bookings_no_overlap) is the actual source of truth and

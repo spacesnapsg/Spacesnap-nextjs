@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { UserMinus, ShieldCheck, Check, X as XIcon, CalendarClock, Activity, Coins } from "lucide-react";
+import { UserMinus, ShieldCheck, Check, X as XIcon, CalendarClock, Activity, Coins, CalendarPlus, Package } from "lucide-react";
 import Modal from "@/components/Modal";
 import Button from "@/components/Button";
 import Pagination from "@/components/Pagination";
@@ -16,10 +16,14 @@ import {
   useBuyerOrgStats,
   useBuyerOrgActivity,
   useBuyerOrgTransactions,
+  useSetMemberPermissions,
+  useBuyerOrgSpendRequests,
+  useFulfillBuyerOrgSpendRequest,
+  useDeclineBuyerOrgSpendRequest,
 } from "@/lib/hooks/useBuyerOrganization";
 import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
 
-type Tab = "overview" | "members" | "requests";
+type Tab = "overview" | "members" | "requests" | "spend";
 
 interface ManageBuyerOrganizationModalProps {
   open: boolean;
@@ -88,6 +92,10 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
   const promoteMember = usePromoteBuyerOrgMember();
   const { data: requests } = useBuyerOrgJoinRequests();
   const resolveRequest = useResolveBuyerOrgJoinRequest();
+  const setPermissions = useSetMemberPermissions();
+  const { data: spendRequests } = useBuyerOrgSpendRequests(open, "pending");
+  const fulfillSpendRequest = useFulfillBuyerOrgSpendRequest();
+  const declineSpendRequest = useDeclineBuyerOrgSpendRequest();
 
   const activityRange = useDateRangeFilter("all");
   const { data: activityData, isLoading: activityLoading } = useBuyerOrgActivity(
@@ -141,6 +149,20 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
           {requests && requests.length > 0 && (
             <span className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-user-teal-end text-white text-[10px] font-semibold">
               {requests.length}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("spend")}
+          className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+            tab === "spend" ? "border-user-teal-end text-body-text" : "border-transparent text-muted-text"
+          }`}
+        >
+          Spend Requests
+          {spendRequests && spendRequests.length > 0 && (
+            <span className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-user-teal-end text-white text-[10px] font-semibold">
+              {spendRequests.length}
             </span>
           )}
         </button>
@@ -301,7 +323,39 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
                   <p className="text-xs text-muted-text">{member.email}</p>
                 </div>
                 {!member.isBuyerOrgAdmin && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 text-xs text-muted-text cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={member.buyerOrgCanBook}
+                        disabled={setPermissions.isPending}
+                        onChange={(e) => {
+                          setError(null);
+                          setPermissions.mutate(
+                            { userId: member.id, canBook: e.target.checked },
+                            { onError: handleError }
+                          );
+                        }}
+                        className="accent-user-teal-start"
+                      />
+                      Can book
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-muted-text cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={member.buyerOrgCanPurchase}
+                        disabled={setPermissions.isPending}
+                        onChange={(e) => {
+                          setError(null);
+                          setPermissions.mutate(
+                            { userId: member.id, canPurchase: e.target.checked },
+                            { onError: handleError }
+                          );
+                        }}
+                        className="accent-user-teal-start"
+                      />
+                      Can buy consumables
+                    </label>
                     <button
                       type="button"
                       title="Promote to admin"
@@ -368,6 +422,54 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
                         { id: request.id, status: "rejected" },
                         { onError: handleError }
                       );
+                    }}
+                    className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
+                  >
+                    <XIcon size={16} />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {tab === "spend" && (
+        <div className="flex flex-col gap-3">
+          {!spendRequests || spendRequests.length === 0 ? (
+            <p className="text-sm text-muted-text text-center py-8">No pending pool-spend requests.</p>
+          ) : (
+            spendRequests.map((request) => (
+              <div key={request.id} className="flex items-center justify-between border border-border rounded p-3 gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-body-text flex items-center gap-1.5">
+                    {request.type === "booking" ? <CalendarPlus size={14} /> : <Package size={14} />}
+                    {request.requestedBy.name}
+                  </p>
+                  <p className="text-xs text-muted-text truncate">
+                    {request.type === "booking"
+                      ? `Book "${request.listingName}" (${request.bookingType}, ${request.startDate} – ${request.endDate})`
+                      : `Buy ${request.quantity}x "${request.listingName}"`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    disabled={fulfillSpendRequest.isPending}
+                    onClick={() => {
+                      setError(null);
+                      fulfillSpendRequest.mutate(request.id, { onError: handleError });
+                    }}
+                    className="h-8 px-3 text-xs gap-1"
+                  >
+                    <Check size={14} /> Approve
+                  </Button>
+                  <button
+                    type="button"
+                    title="Decline"
+                    disabled={declineSpendRequest.isPending}
+                    onClick={() => {
+                      setError(null);
+                      declineSpendRequest.mutate({ id: request.id }, { onError: handleError });
                     }}
                     className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
                   >

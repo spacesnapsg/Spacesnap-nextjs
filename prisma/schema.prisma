@@ -179,6 +179,21 @@ enum CreditHoldStatus {
 // choosing direct SGD instead of earned credit is money leaving SpaceSnap
 // to a member, which nothing existing represents (booking_payment is money
 // coming in) — that's the only addition below.
+enum BuyerOrgSpendRequestType {
+  booking
+  consumable_purchase
+
+  @@map("buyer_org_spend_request_type")
+}
+
+enum BuyerOrgSpendRequestStatus {
+  pending
+  fulfilled
+  declined
+
+  @@map("buyer_org_spend_request_status")
+}
+
 enum TransactionType {
   topup
   booking
@@ -1226,8 +1241,53 @@ model BuyerOrganization {
   transactions           Transaction[]
   // Session: feat/internal-training-signoff.
   internalTrainingEvents InternalTrainingEvent[]
+  // 2026-07-28 — delegated pool-spend requests, see BuyerOrgSpendRequest's
+  // own comment.
+  spendRequests          BuyerOrgSpendRequest[]
 
   @@map("buyer_organizations")
+}
+
+// A member without buyerOrgCanBook/buyerOrgCanPurchase can still ask to fund
+// a booking or Buy Now purchase from their org's shared pool — this row
+// captures that intent (same shape as parseBookingCreateFields/
+// parsePurchaseCreateFields' relevant fields, not the full checkout form:
+// no paymentMethodId/rewardGrantId/bookingCreditId, since a pool-funded
+// request never touches Stripe or the requester's own personal reward
+// grants) and notifies the org admin. The admin reviews it (Manage
+// Organization modal) and either fulfills it — actually creates the
+// booking/purchase, funded by the pool, under the REQUESTING member's own
+// account (never the admin's) — or declines it. Mirrors
+// BuyerOrganizationJoinRequest's lifecycle shape.
+model BuyerOrgSpendRequest {
+  id                  BigInt                     @id @default(autoincrement())
+  buyerOrganizationId BigInt                     @map("buyer_organization_id")
+  requestedByUserId   String                     @map("requested_by_user_id")
+  type                BuyerOrgSpendRequestType
+  listingId           BigInt                     @map("listing_id")
+  // Booking-only (type: booking).
+  bookingType         BookingType?               @map("booking_type")
+  startDate           DateTime?                  @map("start_date") @db.Date
+  endDate             DateTime?                  @map("end_date") @db.Date
+  // Purchase-only (type: consumable_purchase).
+  quantity            Int?
+  status              BuyerOrgSpendRequestStatus @default(pending)
+  declineReason       String?                    @map("decline_reason")
+  resultingBookingId  BigInt?                    @unique @map("resulting_booking_id")
+  resultingPurchaseId BigInt?                    @unique @map("resulting_purchase_id")
+  resolvedByUserId    String?                    @map("resolved_by_user_id")
+  resolvedAt          DateTime?                  @map("resolved_at")
+  createdAt           DateTime                   @default(now()) @map("created_at")
+
+  buyerOrganization BuyerOrganization @relation(fields: [buyerOrganizationId], references: [id], onDelete: Cascade)
+  requestedBy       User              @relation("BuyerOrgSpendRequestRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy        User?             @relation("BuyerOrgSpendRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  listing           Listing           @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  resultingBooking  Booking?          @relation(fields: [resultingBookingId], references: [id], onDelete: SetNull)
+  resultingPurchase Purchase?         @relation(fields: [resultingPurchaseId], references: [id], onDelete: SetNull)
+
+  @@index([buyerOrganizationId, status])
+  @@map("buyer_org_spend_requests")
 }
 
 // Mirrors CompanyJoinRequest exactly, scoped to BuyerOrganization instead —
@@ -1296,6 +1356,21 @@ model User {
   buyerOrganizationId        BigInt?    @map("buyer_organization_id")
   isBuyerOrgAdmin            Boolean    @default(false) @map("is_buyer_org_admin")
   buyerOrgPromotionRequested Boolean    @default(false) @map("buyer_org_promotion_requested")
+  // Delegated pool-spend rights (2026-07-28) — set by the org admin per
+  // member (lib/buyer-organizations.ts's setMemberBookingPermission/
+  // setMemberPurchasePermission), independent booleans since an admin can
+  // grant one without the other ("who can book" vs. "who can buy
+  // consumables" are separate product asks). The org admin implicitly has
+  // both regardless of these flags — checked as `isBuyerOrgAdmin ||
+  // buyerOrgCan*` everywhere this gates a write path, never read alone.
+  // Meaningless without buyerOrganizationId set, same as isBuyerOrgAdmin,
+  // but no CHECK constraint added for these two (unlike isBuyerOrgAdmin) —
+  // removing a member from an org already clears both admin flags in
+  // removeBuyerOrgMember; these follow the same manual-clear discipline
+  // rather than a DB-enforced one, since a stray true with no org is inert
+  // (every call site scopes by buyerOrganizationId first).
+  buyerOrgCanBook            Boolean    @default(false) @map("buyer_org_can_book")
+  buyerOrgCanPurchase        Boolean    @default(false) @map("buyer_org_can_purchase")
   stripeCustomerId           String?    @map("stripe_customer_id")
   stripeConnectAccountId     String?    @map("stripe_connect_account_id")
   status                     UserStatus @default(active)
@@ -1347,12 +1422,14 @@ model User {
   referredBy        User?              @relation("UserReferrals", fields: [referredByUserId], references: [id], onDelete: SetNull)
   referredUsers     User[]             @relation("UserReferrals")
 
-  companyJoinRequestsMade      CompanyJoinRequest[]           @relation("CompanyJoinRequestRequester")
-  companyJoinRequestsResolved  CompanyJoinRequest[]           @relation("CompanyJoinRequestResolver")
-  buyerOrgJoinRequestsMade     BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestRequester")
-  buyerOrgJoinRequestsResolved BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestResolver")
-  marketplaceEnquiriesMade     MarketplaceEnquiry[]           @relation("MarketplaceEnquiryRequester")
-  marketplaceEnquiriesResolved MarketplaceEnquiry[]           @relation("MarketplaceEnquiryResolver")
+  companyJoinRequestsMade       CompanyJoinRequest[]           @relation("CompanyJoinRequestRequester")
+  companyJoinRequestsResolved   CompanyJoinRequest[]           @relation("CompanyJoinRequestResolver")
+  buyerOrgJoinRequestsMade      BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestRequester")
+  buyerOrgJoinRequestsResolved  BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestResolver")
+  buyerOrgSpendRequestsMade     BuyerOrgSpendRequest[]         @relation("BuyerOrgSpendRequestRequester")
+  buyerOrgSpendRequestsResolved BuyerOrgSpendRequest[]         @relation("BuyerOrgSpendRequestResolver")
+  marketplaceEnquiriesMade      MarketplaceEnquiry[]           @relation("MarketplaceEnquiryRequester")
+  marketplaceEnquiriesResolved  MarketplaceEnquiry[]           @relation("MarketplaceEnquiryResolver")
 
   accounts Account[]
   sessions Session[]
@@ -1570,14 +1647,15 @@ model Listing {
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  requiredCertificates ListingRequiredCertificate[]
-  bookings             Booking[]
-  bulkOrderRequests    BulkOrderRequest[]
-  purchases            Purchase[]
-  checkIns             CheckIn[]
-  activityLogs         ActivityLog[]
-  ratings              Rating[]
-  notifications        Notification[]
+  requiredCertificates  ListingRequiredCertificate[]
+  bookings              Booking[]
+  bulkOrderRequests     BulkOrderRequest[]
+  purchases             Purchase[]
+  checkIns              CheckIn[]
+  activityLogs          ActivityLog[]
+  ratings               Rating[]
+  notifications         Notification[]
+  buyerOrgSpendRequests BuyerOrgSpendRequest[]
 
   @@map("listings")
 }
@@ -1839,12 +1917,13 @@ model Booking {
   transactions         Transaction[]
   checkIns             CheckIn[]
   rating               Rating?
-  bookingCreditsIssued BookingCredit[]      @relation("BookingCreditSource")
-  bookingCreditsSpent  BookingCredit[]      @relation("BookingCreditAppliedTo")
+  bookingCreditsIssued BookingCredit[]       @relation("BookingCreditSource")
+  bookingCreditsSpent  BookingCredit[]       @relation("BookingCreditAppliedTo")
   supplierPayable      SupplierPayable?
   notifications        Notification[]
   companyTransactions  CompanyTransaction[]
   adminNotifications   AdminNotification[]
+  buyerOrgSpendRequest BuyerOrgSpendRequest?
 
   @@map("bookings")
 }
@@ -2007,8 +2086,9 @@ model Purchase {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   listing Listing @relation(fields: [listingId], references: [id], onDelete: Cascade)
 
-  transactions    Transaction[]
-  supplierPayable SupplierPayable?
+  transactions         Transaction[]
+  supplierPayable      SupplierPayable?
+  buyerOrgSpendRequest BuyerOrgSpendRequest?
 
   @@map("purchases")
 }
@@ -2277,6 +2357,10 @@ enum NotificationType {
   // a real refund unresolved; deleted the moment that resolves (rebooked or
   // refunded), never just marked read. lib/bookings.ts is what writes these.
   booking_credit_pending
+  // 2026-07-28 — sent to a buyer org admin when a member without
+  // buyerOrgCanBook/buyerOrgCanPurchase submits a BuyerOrgSpendRequest. See
+  // that model's own comment.
+  buyer_org_spend_request
 
   @@map("notification_type")
 }

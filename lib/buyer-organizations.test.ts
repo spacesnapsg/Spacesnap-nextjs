@@ -17,6 +17,8 @@ import {
   requestBuyerOrgPromotion,
   approveBuyerOrgPromotion,
   promoteBuyerOrgMemberDirectly,
+  setMemberBookingPermission,
+  setMemberPurchasePermission,
   getBuyerOrgStats,
   getBuyerOrgActivity,
   getBuyerOrgTransactions,
@@ -373,6 +375,75 @@ describe("promoteBuyerOrgMemberDirectly — admin-driven, no system-admin round 
       await assert.rejects(() => promoteBuyerOrgMemberDirectly(admin.id, otherAdmin.id), AlreadyBuyerOrgAdminError);
     } finally {
       await cleanupUsers([admin.id, otherAdmin.id]);
+      await cleanupOrgs([org.id]);
+    }
+  });
+});
+
+describe("setMemberBookingPermission / setMemberPurchasePermission — delegated pool-spend rights (2026-07-28)", () => {
+  test("admin grants and revokes a member's buyerOrgCanBook independently of buyerOrgCanPurchase", async () => {
+    const org = await prisma.buyerOrganization.create({ data: { name: `Permissions Org ${Date.now()}` } });
+    const admin = await createUser({ buyerOrganizationId: org.id, isBuyerOrgAdmin: true });
+    const member = await createUser({ buyerOrganizationId: org.id });
+    try {
+      const granted = await setMemberBookingPermission(admin.id, member.id, true);
+      assert.equal(granted.buyerOrgCanBook, true);
+      assert.equal(granted.buyerOrgCanPurchase, false);
+
+      const grantedPurchase = await setMemberPurchasePermission(admin.id, member.id, true);
+      assert.equal(grantedPurchase.buyerOrgCanBook, true);
+      assert.equal(grantedPurchase.buyerOrgCanPurchase, true);
+
+      const revoked = await setMemberBookingPermission(admin.id, member.id, false);
+      assert.equal(revoked.buyerOrgCanBook, false);
+      assert.equal(revoked.buyerOrgCanPurchase, true, "revoking book must not touch purchase");
+    } finally {
+      await cleanupUsers([admin.id, member.id]);
+      await cleanupOrgs([org.id]);
+    }
+  });
+
+  test("a non-admin caller cannot set anyone's permissions", async () => {
+    const org = await prisma.buyerOrganization.create({ data: { name: `Permissions Org ${Date.now()}` } });
+    const plain = await createUser({ buyerOrganizationId: org.id });
+    const member = await createUser({ buyerOrganizationId: org.id });
+    try {
+      await assert.rejects(() => setMemberBookingPermission(plain.id, member.id, true), NotBuyerOrgAdminError);
+      await assert.rejects(() => setMemberPurchasePermission(plain.id, member.id, true), NotBuyerOrgAdminError);
+    } finally {
+      await cleanupUsers([plain.id, member.id]);
+      await cleanupOrgs([org.id]);
+    }
+  });
+
+  test("cannot set permissions for a member of a different organization", async () => {
+    const orgA = await prisma.buyerOrganization.create({ data: { name: `Permissions Org A ${Date.now()}` } });
+    const orgB = await prisma.buyerOrganization.create({ data: { name: `Permissions Org B ${Date.now()}` } });
+    const admin = await createUser({ buyerOrganizationId: orgA.id, isBuyerOrgAdmin: true });
+    const otherOrgMember = await createUser({ buyerOrganizationId: orgB.id });
+    try {
+      await assert.rejects(() => setMemberBookingPermission(admin.id, otherOrgMember.id, true), NotInSameOrgError);
+    } finally {
+      await cleanupUsers([admin.id, otherOrgMember.id]);
+      await cleanupOrgs([orgA.id, orgB.id]);
+    }
+  });
+
+  test("removeBuyerOrgMember clears both delegated permissions along with org membership", async () => {
+    const org = await prisma.buyerOrganization.create({ data: { name: `Permissions Org ${Date.now()}` } });
+    const admin = await createUser({ buyerOrganizationId: org.id, isBuyerOrgAdmin: true });
+    const member = await createUser({ buyerOrganizationId: org.id });
+    try {
+      await setMemberBookingPermission(admin.id, member.id, true);
+      await setMemberPurchasePermission(admin.id, member.id, true);
+
+      await removeBuyerOrgMember(admin.id, member.id);
+
+      const removed = await prisma.user.findUniqueOrThrow({ where: { id: member.id } });
+      assert.equal(removed.buyerOrgCanBook, false);
+      assert.equal(removed.buyerOrgCanPurchase, false);
+    } finally {
+      await cleanupUsers([admin.id, member.id]);
       await cleanupOrgs([org.id]);
     }
   });

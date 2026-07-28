@@ -16,6 +16,7 @@ import { ApiValidationError } from "@/lib/api-errors";
 import { getMissingCertificates } from "@/lib/certificate-gating";
 import { ListingNotFoundError } from "@/lib/listings";
 import { stripe, toStripeCents, StripeChargeFailedError, StripeRefundFailedError } from "@/lib/stripe";
+import { assertSufficientBuyerOrgPoolBalance } from "@/lib/credits";
 
 // Re-exported for the several booking routes that import these from here
 // (app/api/bookings/**). The definitions moved to lib/stripe.ts 2026-07-25 when
@@ -213,9 +214,18 @@ interface ParsedBookingFields {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
-  paymentMethodId: string;
+  // Present only for a personally-funded booking — absent when
+  // fundingSource is "organization" (see below).
+  paymentMethodId?: string;
   rewardGrantId?: bigint;
   bookingCreditId?: bigint;
+  // 2026-07-28 (Buyer Org pool spend) — "organization" tells the route to
+  // fund this booking from the caller's buyer org pool instead of charging
+  // Stripe (createBookingWithDebit's buyerOrganizationId param); the route
+  // still re-checks the caller actually has permission before honoring
+  // this, never trusting the client's say-so alone. Defaults to "personal",
+  // unchanged behavior for every existing caller.
+  fundingSource: "personal" | "organization";
 }
 
 function isDateString(value: unknown): value is string {
@@ -249,12 +259,22 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
     errors.endDate = ["endDate must be on or after startDate."];
   }
 
+  let fundingSource: "personal" | "organization" = "personal";
+  if (b.fundingSource !== undefined) {
+    if (b.fundingSource !== "personal" && b.fundingSource !== "organization") {
+      errors.fundingSource = ["fundingSource must be one of personal, organization."];
+    } else {
+      fundingSource = b.fundingSource;
+    }
+  }
+
   // 2026-07-21: booking creation charges real-time SGD via Stripe (see
   // createBookingWithDebit, lib/bookings.ts) — a Stripe PaymentMethod id is
-  // now required on every request. This session's flow is server-side test
-  // tokens only (no Stripe Elements client), so no card-collection UI is
-  // implied by this field.
-  if (typeof b.paymentMethodId !== "string" || b.paymentMethodId.length === 0) {
+  // required on every personally-funded request. This session's flow is
+  // server-side test tokens only (no Stripe Elements client), so no
+  // card-collection UI is implied by this field. Not required when
+  // fundingSource is "organization" — that path never touches Stripe.
+  if (fundingSource === "personal" && (typeof b.paymentMethodId !== "string" || b.paymentMethodId.length === 0)) {
     errors.paymentMethodId = ["paymentMethodId is required."];
   }
 
@@ -290,9 +310,10 @@ export function parseBookingCreateFields(body: unknown): ParsedBookingFields {
     bookingType: b.bookingType as BookingType,
     startDate: b.startDate as string,
     endDate: b.endDate as string,
-    paymentMethodId: b.paymentMethodId as string,
+    paymentMethodId: fundingSource === "personal" ? (b.paymentMethodId as string) : undefined,
     rewardGrantId,
     bookingCreditId,
+    fundingSource,
   };
 }
 
@@ -417,7 +438,11 @@ interface CreateBookingWithDebitParams {
   // The effective per-company booking commission %, snapshotted as
   // Booking.platformCommissionPercent. Defaults to the platform's own default.
   commissionPercent?: Prisma.Decimal;
-  paymentMethodId: string;
+  // Required unless buyerOrganizationId is set (a personally-funded booking
+  // always charges a card) — not typed as conditionally-required since
+  // TypeScript can't express that against a plain interface; enforced at
+  // runtime instead, see the guard where this is read below.
+  paymentMethodId?: string;
   rewardGrantId?: bigint;
   // Redeems an available BookingCredit as a discount on this booking — see
   // the redemption math below. Always fully consumed in one shot: if this
@@ -432,6 +457,18 @@ interface CreateBookingWithDebitParams {
   // into `confirmed`. Defaults to true (the safer, pre-existing behavior) so
   // every other caller — including tests — is unaffected.
   requireApproval?: boolean;
+  // 2026-07-28 (Buyer Org pool spend) — when set, this booking is funded
+  // from the org's shared pool instead of a fresh Stripe charge: no
+  // PaymentIntent is created at all (paymentMethodId is ignored), the
+  // remaining chargeAmount after any reward/credit discount is debited from
+  // the pool (assertSufficientBuyerOrgPoolBalance, inside the same DB
+  // transaction as the Booking insert — unlike Stripe, this can be checked
+  // and rolled back atomically, no compensating-refund dance needed), and
+  // the debit Transaction carries this id so getBuyerOrgPoolBalance sees it.
+  // The booking itself still belongs to params.userId (the beneficiary
+  // member), never the admin who may have fulfilled a BuyerOrgSpendRequest
+  // on their behalf — see lib/buyer-organizations.ts.
+  buyerOrganizationId?: bigint;
 }
 
 // 2026-07-21 write-path session: replaces the old combined-wallet debit with
@@ -528,8 +565,17 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
   // for audit parity with every other booking, same "audit row, no ledger
   // movement" idiom confirmBookingWithAudit already uses elsewhere in this
   // file.
+  //
+  // Buyer Org pool spend: an org-funded booking never charges Stripe at
+  // all — paymentIntentId stays null and the pool debit happens inside the
+  // DB transaction below (assertSufficientBuyerOrgPoolBalance), same
+  // "check-then-debit atomically" pattern createPurchaseWithDebit already
+  // uses for purchasedBalance (lib/purchases.ts).
   let paymentIntentId: string | null = null;
-  if (finalChargeAmount.gt(0)) {
+  if (params.buyerOrganizationId === undefined && finalChargeAmount.gt(0)) {
+    if (!params.paymentMethodId) {
+      throw new Error("paymentMethodId is required for a personally-funded booking.");
+    }
     // Deliberately not attaching `customer: user.stripeCustomerId` — the
     // seeded values there (e.g. "cus_test_ethan001") are placeholder
     // strings from prisma/seed.ts, not real Stripe Customer objects, so
@@ -583,6 +629,14 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
 
   try {
     return await prisma.$transaction(async (tx) => {
+      // Buyer Org pool spend: checked inside the transaction (unlike the
+      // Stripe charge above, this CAN be rolled back atomically alongside
+      // the booking/debit writes below) — same ordering as
+      // createPurchaseWithDebit's stock-then-balance checks.
+      if (params.buyerOrganizationId !== undefined) {
+        await assertSufficientBuyerOrgPoolBalance(tx, params.buyerOrganizationId, finalChargeAmount);
+      }
+
       // Sprint 6.5 — User Reward Tier: snapshot the rebate % this user's
       // CURRENT tier earns, read inside this same transaction (not before it
       // opens) so the snapshot can't race a concurrent booking-completion
@@ -623,17 +677,20 @@ export async function createBookingWithDebit(params: CreateBookingWithDebitParam
       await tx.transaction.create({
         data: {
           userId: params.userId,
+          buyerOrganizationId: params.buyerOrganizationId,
           bookingId: booking.id,
           bookingCreditId: creditToApply?.id ?? null,
           type: TransactionType.booking_payment,
           amount: finalChargeAmount.negated(),
           stripePaymentIntentId: paymentIntentId,
           description:
-            paymentIntentId !== null
-              ? `Booking #${booking.id} — ${finalChargeAmount} SGD charged via Stripe${creditAppliedAmount.gt(0) ? ` (${creditAppliedAmount} SGD covered by booking credit #${creditToApply?.id})` : ""}.`
-              : creditAppliedAmount.gt(0)
-                ? `Booking #${booking.id} — fully covered by booking credit #${creditToApply?.id}, no Stripe charge needed.`
-                : `Booking #${booking.id} — fully covered by a reward discount, no Stripe charge needed.`,
+            params.buyerOrganizationId !== undefined
+              ? `Booking #${booking.id} — ${finalChargeAmount} SGD debited from the organization's shared pool${creditAppliedAmount.gt(0) ? ` (${creditAppliedAmount} SGD covered by booking credit #${creditToApply?.id})` : ""}.`
+              : paymentIntentId !== null
+                ? `Booking #${booking.id} — ${finalChargeAmount} SGD charged via Stripe${creditAppliedAmount.gt(0) ? ` (${creditAppliedAmount} SGD covered by booking credit #${creditToApply?.id})` : ""}.`
+                : creditAppliedAmount.gt(0)
+                  ? `Booking #${booking.id} — fully covered by booking credit #${creditToApply?.id}, no Stripe charge needed.`
+                  : `Booking #${booking.id} — fully covered by a reward discount, no Stripe charge needed.`,
         },
       });
 

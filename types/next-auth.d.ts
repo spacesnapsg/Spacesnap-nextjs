@@ -12,6 +12,8 @@ declare module "next-auth" {
     companyId: string | null;
     isBuyerOrgAdmin: boolean;
     buyerOrganizationId: string | null;
+    buyerOrgCanBook: boolean;
+    buyerOrgCanPurchase: boolean;
   }
 
   interface Session {
@@ -41,5 +43,7 @@ declare module "@auth/core/jwt" {
     companyId: string | null;
     isBuyerOrgAdmin: boolean;
     buyerOrganizationId: string | null;
+    buyerOrgCanBook: boolean;
+    buyerOrgCanPurchase: boolean;
   }
 }

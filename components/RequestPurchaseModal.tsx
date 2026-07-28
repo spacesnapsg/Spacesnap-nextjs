@@ -5,6 +5,8 @@ import { CheckCircle2, Minus, Plus } from "lucide-react";
 import Modal from "@/components/Modal";
 import Button from "@/components/Button";
 import { useCreateBulkOrder, useCreatePurchase, type Listing } from "@/lib/hooks/useListings";
+import { useBuyerOrganization, useCreateBuyerOrgSpendRequest } from "@/lib/hooks/useBuyerOrganization";
+import FundingSourceSelector, { type FundingSource } from "@/components/FundingSourceSelector";
 import { ApiRequestError } from "@/lib/api-client";
 
 interface RequestPurchaseModalProps {
@@ -27,16 +29,23 @@ export default function RequestPurchaseModal({
   mode = "bulk",
 }: RequestPurchaseModalProps) {
   const [quantity, setQuantity] = useState(1);
+  const [fundingSource, setFundingSource] = useState<FundingSource>("personal");
   const isQuick = mode === "quick";
 
   const createPurchase = useCreatePurchase();
   const createBulkOrder = useCreateBulkOrder();
-  const mutation = isQuick ? createPurchase : createBulkOrder;
+  const createSpendRequest = useCreateBuyerOrgSpendRequest();
+  const { data: buyerOrgData } = useBuyerOrganization();
+  const canPurchaseFromOrg = buyerOrgData?.organization?.canPurchase ?? false;
+  const isOrgRequest = isQuick && fundingSource === "organization" && !canPurchaseFromOrg;
+  const mutation = isOrgRequest ? createSpendRequest : isQuick ? createPurchase : createBulkOrder;
 
   function handleClose() {
     setQuantity(1);
+    setFundingSource("personal");
     createPurchase.reset();
     createBulkOrder.reset();
+    createSpendRequest.reset();
     onClose();
   }
 
@@ -54,7 +63,15 @@ export default function RequestPurchaseModal({
 
   function handleSubmit() {
     if (!listing) return;
-    mutation.mutate({ listingId: listing.id, quantity: effectiveQuantity });
+    if (isOrgRequest) {
+      createSpendRequest.mutate({ type: "consumable_purchase", listingId: listing.id, quantity: effectiveQuantity });
+      return;
+    }
+    if (isQuick) {
+      createPurchase.mutate({ listingId: listing.id, quantity: effectiveQuantity, fundingSource });
+      return;
+    }
+    createBulkOrder.mutate({ listingId: listing.id, quantity: effectiveQuantity });
   }
 
   return (
@@ -65,12 +82,14 @@ export default function RequestPurchaseModal({
             <CheckCircle2 size={22} className="text-user-teal-end" />
           </span>
           <h3 className="font-semibold text-body-text text-lg">
-            {isQuick ? "Purchase Complete" : "Order Submitted"}
+            {isOrgRequest ? "Request Sent" : isQuick ? "Purchase Complete" : "Order Submitted"}
           </h3>
           <p className="text-sm text-muted-text">
-            {isQuick
-              ? `You bought ${effectiveQuantity} unit${effectiveQuantity === 1 ? "" : "s"} of ${listing.name}. ${cost} credits were charged.`
-              : `Your request for ${listing.name} has been sent to the supplier. They'll follow up to arrange the order directly — no credits are charged on the platform.`}
+            {isOrgRequest
+              ? `Your request to buy ${effectiveQuantity} unit${effectiveQuantity === 1 ? "" : "s"} of ${listing.name} from your organization's pool has been sent to your admin for approval.`
+              : isQuick
+                ? `You bought ${effectiveQuantity} unit${effectiveQuantity === 1 ? "" : "s"} of ${listing.name}. ${cost} credits were charged.`
+                : `Your request for ${listing.name} has been sent to the supplier. They'll follow up to arrange the order directly — no credits are charged on the platform.`}
           </p>
           <Button type="button" className="w-full mt-2" onClick={handleClose}>
             Done
@@ -95,10 +114,13 @@ export default function RequestPurchaseModal({
           </div>
 
           {isQuick ? (
-            <div className="border-t border-border/40 pt-4">
-              <p className="text-muted-text text-xs">Quantity</p>
-              <p className="text-body-text font-medium">1 unit</p>
-              <p className="text-body-text font-medium mt-2">{cost} credits</p>
+            <div className="border-t border-border/40 pt-4 flex flex-col gap-4">
+              <div>
+                <p className="text-muted-text text-xs">Quantity</p>
+                <p className="text-body-text font-medium">1 unit</p>
+                <p className="text-body-text font-medium mt-2">{cost} credits</p>
+              </div>
+              <FundingSourceSelector value={fundingSource} onChange={setFundingSource} permission="purchase" />
             </div>
           ) : (
             <div className="border-t border-border/40 pt-4 flex flex-col gap-1.5">
@@ -138,7 +160,13 @@ export default function RequestPurchaseModal({
             disabled={mutation.isPending}
             onClick={handleSubmit}
           >
-            {mutation.isPending ? "Submitting…" : isQuick ? "Confirm Purchase" : "Submit Order"}
+            {mutation.isPending
+              ? "Submitting…"
+              : isOrgRequest
+                ? "Request Purchase"
+                : isQuick
+                  ? "Confirm Purchase"
+                  : "Submit Order"}
           </Button>
         </div>
       )}

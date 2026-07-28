@@ -13,6 +13,8 @@ import {
 } from "@/components/StripeCardField";
 import { useCreateBooking, type BookingType, type Listing } from "@/lib/hooks/useListings";
 import { useMyRewardGrants } from "@/lib/hooks/useRewardsCatalogue";
+import { useBuyerOrganization, useCreateBuyerOrgSpendRequest } from "@/lib/hooks/useBuyerOrganization";
+import FundingSourceSelector, { type FundingSource } from "@/components/FundingSourceSelector";
 import { ApiRequestError } from "@/lib/api-client";
 
 const TYPE_BADGE_STYLES: Record<Listing["type"], string> = {
@@ -62,9 +64,19 @@ function BookingModalContent({
   const [cardError, setCardError] = useState<string | null>(null);
   const [isCollectingCard, setIsCollectingCard] = useState(false);
   const [selectedGrantId, setSelectedGrantId] = useState<string>("");
+  const [fundingSource, setFundingSource] = useState<FundingSource>("personal");
   const createBooking = useCreateBooking();
+  const createSpendRequest = useCreateBuyerOrgSpendRequest();
   const createCardPaymentMethod = useCreateCardPaymentMethod();
   const { data: rewardGrants } = useMyRewardGrants();
+  const { data: buyerOrgData } = useBuyerOrganization();
+  const canBookFromOrg = buyerOrgData?.organization?.canBook ?? false;
+  // A BookingCredit redemption is a personal mechanic tied to a specific
+  // past booking of THIS member's own — doesn't make sense funded from a
+  // shared pool, so the funding choice is hidden (forced personal) whenever
+  // one is being applied.
+  const showFundingSelector = !appliedCredit;
+  const isOrgRequest = fundingSource === "organization" && !canBookFromOrg;
 
   // Only booking_discount_pct grants apply here — free_consumable_unit is
   // the purchase-flow counterpart (lib/purchases.ts), a different
@@ -91,34 +103,58 @@ function BookingModalContent({
   const creditLeftover = appliedCredit ? Math.max(appliedCredit.amount - priceAfterVoucher, 0) : 0;
   const amountDue = Math.max(priceAfterVoucher - creditApplied, 0);
 
-  const isSubmitting = isCollectingCard || createBooking.isPending;
+  const isSubmitting = isCollectingCard || createBooking.isPending || createSpendRequest.isPending;
 
   async function handleConfirm() {
     if (!selectedDate) return;
     setCardError(null);
 
-    // Card details go straight from the Stripe iframe to Stripe here — the
-    // server routes only ever see the resulting pm_... id (replaces the old
-    // hardcoded pm_card_visa test token; server wiring unchanged).
-    let paymentMethodId: string;
-    setIsCollectingCard(true);
-    try {
-      paymentMethodId = await createCardPaymentMethod();
-    } catch (error) {
-      setCardError(error instanceof Error ? error.message : "Your card could not be processed.");
+    const endDate = addDays(selectedDate, activeDuration.days - 1);
+
+    // A member without buyerOrgCanBook picking "organization" doesn't book
+    // directly — it queues a BuyerOrgSpendRequest for their admin instead
+    // (never touches Stripe or this member's own reward mechanics).
+    if (isOrgRequest) {
+      createSpendRequest.mutate(
+        {
+          type: "booking",
+          listingId: listing.id,
+          bookingType: duration as BookingType,
+          startDate: toDateString(selectedDate),
+          endDate: toDateString(endDate),
+        },
+        { onSuccess: onClose }
+      );
       return;
-    } finally {
-      setIsCollectingCard(false);
     }
 
-    const endDate = addDays(selectedDate, activeDuration.days - 1);
+    // Card details go straight from the Stripe iframe to Stripe here — the
+    // server routes only ever see the resulting pm_... id (replaces the old
+    // hardcoded pm_card_visa test token; server wiring unchanged). Skipped
+    // entirely for an org-funded booking — that path debits the pool, no
+    // Stripe charge involved (createBookingWithDebit's buyerOrganizationId
+    // param, lib/bookings.ts).
+    let paymentMethodId: string | undefined;
+    if (fundingSource === "personal") {
+      setIsCollectingCard(true);
+      try {
+        paymentMethodId = await createCardPaymentMethod();
+      } catch (error) {
+        setCardError(error instanceof Error ? error.message : "Your card could not be processed.");
+        return;
+      } finally {
+        setIsCollectingCard(false);
+      }
+    }
+
     createBooking.mutate(
       {
         listingId: listing.id,
         bookingType: duration as BookingType,
         startDate: toDateString(selectedDate),
         endDate: toDateString(endDate),
-        paymentMethodId,
+        ...(paymentMethodId ? { paymentMethodId } : {}),
+        fundingSource,
         ...(appliedCredit ? { bookingCreditId: appliedCredit.id } : {}),
         ...(selectedVoucher ? { rewardGrantId: selectedVoucher.id } : {}),
       },
@@ -128,6 +164,11 @@ function BookingModalContent({
 
   const errorMessage =
     cardError ??
+    (createSpendRequest.error instanceof ApiRequestError
+      ? createSpendRequest.error.message
+      : createSpendRequest.error
+        ? "Something went wrong."
+        : null) ??
     (createBooking.error instanceof ApiRequestError
       ? createBooking.error.message
       : createBooking.error
@@ -227,20 +268,34 @@ function BookingModalContent({
           onSelectDate={setSelectedDate}
         />
 
-        <div className="border-t border-border/40 pt-4">
-          <CardEntryField />
-        </div>
+        {showFundingSelector && (
+          <div className="border-t border-border/40 pt-4">
+            <FundingSourceSelector value={fundingSource} onChange={setFundingSource} permission="book" />
+          </div>
+        )}
+
+        {fundingSource === "personal" && (
+          <div className="border-t border-border/40 pt-4">
+            <CardEntryField />
+          </div>
+        )}
 
         {errorMessage && <p className="text-sm text-error-red">{errorMessage}</p>}
 
-        <Button
-          variant="primary"
-          disabled={!selectedDate || isSubmitting || !stripeConfigured}
-          onClick={handleConfirm}
-          className={`w-full ${!selectedDate || isSubmitting || !stripeConfigured ? "opacity-50 cursor-not-allowed" : ""}`}
-        >
-          {isSubmitting ? "Confirming…" : "Confirm Booking"}
-        </Button>
+        {(() => {
+          const blocked =
+            !selectedDate || isSubmitting || (fundingSource === "personal" && !stripeConfigured);
+          return (
+            <Button
+              variant="primary"
+              disabled={blocked}
+              onClick={handleConfirm}
+              className={`w-full ${blocked ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              {isSubmitting ? (isOrgRequest ? "Submitting…" : "Confirming…") : isOrgRequest ? "Request Booking" : "Confirm Booking"}
+            </Button>
+          );
+        })()}
       </div>
     </Modal>
   );

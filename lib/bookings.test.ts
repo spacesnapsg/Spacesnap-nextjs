@@ -14,7 +14,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, BookingType, TransactionType, RewardGrantType, Prisma } from "../app/generated/prisma/client";
-import { getCreditBalance } from "./credits";
+import { getCreditBalance, getBuyerOrgPoolBalance, InsufficientCreditBalanceError } from "./credits";
 import { ListingNotFoundError } from "./listings";
 import {
   hasOverlappingBooking,
@@ -440,6 +440,87 @@ describe("createBookingWithDebit (2026-07-21, Stripe charge + RewardGrant discou
       assert.equal(booking.status, "pending");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+// 2026-07-28 "Buyer Org pool — delegated spend": buyerOrganizationId debits
+// the org's shared pool instead of charging Stripe. Same createCompany/
+// createUser fixtures, plus a BuyerOrganization funded directly via a
+// purchased_topup Transaction (bypassing createTopUp/Stripe — this suite
+// tests the debit side, not the top-up side, which lib/wallet.test.ts and
+// lib/credits.test.ts already cover).
+describe("createBookingWithDebit — Buyer Org pool spend (2026-07-28)", () => {
+  test("debits the org's pool, writes no PaymentIntent, and leaves the member's own personal balance untouched", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const org = await prisma.buyerOrganization.create({ data: { name: `Bookings Test Org ${Date.now()}` } });
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      await prisma.transaction.create({
+        data: { userId: user.id, buyerOrganizationId: org.id, type: TransactionType.purchased_topup, amount: "50.00" },
+      });
+
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: "2027-10-01",
+        endDate: "2027-10-01",
+        cost: listing.priceDay!,
+        buyerOrganizationId: org.id,
+      });
+
+      assert.equal(booking.userId, user.id); // belongs to the member, never an admin acting on their behalf
+
+      const transactions = await prisma.transaction.findMany({ where: { bookingId: booking.id } });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].type, TransactionType.booking_payment);
+      assert.equal(transactions[0].amount.toString(), "-10");
+      assert.equal(transactions[0].stripePaymentIntentId, null);
+      assert.equal(transactions[0].buyerOrganizationId?.toString(), org.id.toString());
+
+      const poolBalance = await getBuyerOrgPoolBalance(org.id);
+      assert.equal(poolBalance.toString(), "40"); // 50 - 10
+
+      const personalBalance = await getCreditBalance(user.id);
+      assert.equal(personalBalance.toString(), "0"); // the org spend must not touch this
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+      await prisma.buyerOrganization.delete({ where: { id: org.id } }).catch(() => {});
+    }
+  });
+
+  test("rejects with InsufficientCreditBalanceError when the pool is short, writing no booking", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    const org = await prisma.buyerOrganization.create({ data: { name: `Bookings Test Org ${Date.now()}` } });
+    try {
+      const listing = await createSpaceListing(company.id); // priceDay 10.00
+      // Pool has 5, booking costs 10.
+      await prisma.transaction.create({
+        data: { userId: user.id, buyerOrganizationId: org.id, type: TransactionType.purchased_topup, amount: "5.00" },
+      });
+
+      await assert.rejects(
+        () =>
+          createBookingWithDebit({
+            userId: user.id,
+            listingId: listing.id,
+            bookingType: BookingType.daily,
+            startDate: "2027-10-02",
+            endDate: "2027-10-02",
+            cost: listing.priceDay!,
+            buyerOrganizationId: org.id,
+          }),
+        InsufficientCreditBalanceError
+      );
+
+      const bookings = await prisma.booking.findMany({ where: { listingId: listing.id } });
+      assert.equal(bookings.length, 0);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+      await prisma.buyerOrganization.delete({ where: { id: org.id } }).catch(() => {});
     }
   });
 });

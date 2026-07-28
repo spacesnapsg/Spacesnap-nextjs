@@ -49,6 +49,20 @@ export async function POST(request: NextRequest) {
 
   const cost = listing.pricePerUnit.mul(fields.quantity);
 
+  // 2026-07-28 (Buyer Org pool spend) — mirrors POST /api/bookings' own
+  // fundingSource guard (see that route's comment): never trust the client's
+  // claim alone.
+  let buyerOrganizationId: bigint | undefined;
+  if (fields.fundingSource === "organization") {
+    if (!session.user.buyerOrganizationId || !(session.user.isBuyerOrgAdmin || session.user.buyerOrgCanPurchase)) {
+      return NextResponse.json(
+        { message: "You don't have permission to buy from your organization's pool. Submit a request instead." },
+        { status: 403 }
+      );
+    }
+    buyerOrganizationId = BigInt(session.user.buyerOrganizationId);
+  }
+
   try {
     const purchase = await createPurchaseWithDebit({
       userId: session.user.id,
@@ -57,6 +71,7 @@ export async function POST(request: NextRequest) {
       cost,
       unitPrice: listing.pricePerUnit,
       rewardGrantId: fields.rewardGrantId,
+      buyerOrganizationId,
     });
 
     return NextResponse.json({ purchase: serializePurchase(purchase) }, { status: 201 });

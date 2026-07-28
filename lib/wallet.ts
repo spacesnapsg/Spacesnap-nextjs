@@ -1,7 +1,7 @@
 import { TransactionType, ActivityActionType, AdminNotificationType, type Transaction, Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
-import { getCreditBalance } from "@/lib/credits";
+import { getCreditBalance, getBuyerOrgPoolBalance } from "@/lib/credits";
 import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 import { stripe, toStripeCents, StripeChargeFailedError } from "@/lib/stripe";
 import { createAdminNotification } from "@/lib/admin-notifications";
@@ -70,7 +70,22 @@ interface TopUpResult {
   balance: Prisma.Decimal;
 }
 
-export async function createTopUp(userId: string, amount: Prisma.Decimal, paymentMethodId: string): Promise<TopUpResult> {
+// 2026-07-28 (Buyer Org pool spend) — `buyerOrganizationId` funds the caller's
+// org's shared pool instead of their own personal wallet: same Stripe charge
+// (still the acting member's own card — "any member tops up the pool" per
+// the product owner), but the resulting Transaction is stamped with
+// buyerOrganizationId so getBuyerOrgPoolBalance (lib/credits.ts) sees it and
+// getCreditBalance/getPurchasedBalance (scoped to buyerOrganizationId: null)
+// don't. Membership (the caller actually belongs to this org) is the
+// caller's responsibility to check first — see requireBuyerOrgMember,
+// lib/buyer-org-auth.ts, same "route owns auth, lib owns the write" split as
+// every other write path in this file.
+export async function createTopUp(
+  userId: string,
+  amount: Prisma.Decimal,
+  paymentMethodId: string,
+  buyerOrganizationId?: bigint
+): Promise<TopUpResult> {
   // Charge the card first, outside the DB transaction — a Stripe call can't be
   // rolled back by Prisma, so the same discipline as createBookingWithDebit
   // (lib/bookings.ts) applies: charge, verify success, then write the ledger
@@ -83,7 +98,7 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal, paymen
       payment_method: paymentMethodId,
       payment_method_types: ["card"],
       confirm: true,
-      description: "SpaceSnap wallet top-up",
+      description: buyerOrganizationId !== undefined ? "SpaceSnap organization pool top-up" : "SpaceSnap wallet top-up",
     });
   } catch (error) {
     throw new StripeChargeFailedError(error);
@@ -100,10 +115,11 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal, paymen
       const transaction = await tx.transaction.create({
         data: {
           userId,
+          buyerOrganizationId,
           type: TransactionType.purchased_topup,
           amount,
           stripePaymentIntentId: paymentIntentId,
-          description: "Wallet top-up",
+          description: buyerOrganizationId !== undefined ? "Organization pool top-up" : "Wallet top-up",
         },
       });
 
@@ -111,7 +127,10 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal, paymen
         data: {
           userId,
           actionType: ActivityActionType.wallet_topup,
-          description: `Wallet topped up with ${amount} credits.`,
+          description:
+            buyerOrganizationId !== undefined
+              ? `Topped up the organization's shared pool with ${amount} credits.`
+              : `Wallet topped up with ${amount} credits.`,
         },
       });
 
@@ -119,20 +138,29 @@ export async function createTopUp(userId: string, amount: Prisma.Decimal, paymen
         data: {
           userId,
           type: "credit_topup",
-          title: "Credit top-up received",
-          message: `${sgdToCredits(Number(amount))} credits were added to your credit wallet.`,
+          title: buyerOrganizationId !== undefined ? "Organization pool top-up received" : "Credit top-up received",
+          message:
+            buyerOrganizationId !== undefined
+              ? `${sgdToCredits(Number(amount))} credits were added to your organization's shared pool.`
+              : `${sgdToCredits(Number(amount))} credits were added to your credit wallet.`,
         },
       });
 
       const topupUser = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { name: true } });
       await createAdminNotification(tx, {
         type: AdminNotificationType.wallet_topup,
-        title: "Wallet top-up",
-        message: `${topupUser.name} topped up their wallet with ${sgdToCredits(Number(amount))} credits.`,
+        title: buyerOrganizationId !== undefined ? "Organization pool top-up" : "Wallet top-up",
+        message:
+          buyerOrganizationId !== undefined
+            ? `${topupUser.name} topped up their organization's pool with ${sgdToCredits(Number(amount))} credits.`
+            : `${topupUser.name} topped up their wallet with ${sgdToCredits(Number(amount))} credits.`,
         relatedUserId: userId,
       });
 
-      const balance = await getCreditBalance(userId, tx);
+      const balance =
+        buyerOrganizationId !== undefined
+          ? await getBuyerOrgPoolBalance(buyerOrganizationId, tx)
+          : await getCreditBalance(userId, tx);
 
       return { transaction, balance };
     });

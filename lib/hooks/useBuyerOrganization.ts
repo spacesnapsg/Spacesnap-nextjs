@@ -7,6 +7,11 @@ export interface BuyerOrganization {
   isAdmin: boolean;
   adminName: string | null;
   promotionRequested: boolean;
+  // Delegated pool-spend rights (2026-07-28) — the caller's own effective
+  // permission (already folds in "admins always have both").
+  canBook: boolean;
+  canPurchase: boolean;
+  poolBalance: number;
 }
 
 export interface BuyerOrgMember {
@@ -14,6 +19,23 @@ export interface BuyerOrgMember {
   name: string;
   email: string;
   isBuyerOrgAdmin: boolean;
+  buyerOrgCanBook: boolean;
+  buyerOrgCanPurchase: boolean;
+}
+
+export interface BuyerOrgSpendRequest {
+  id: string;
+  type: "booking" | "consumable_purchase";
+  status: "pending" | "fulfilled" | "declined";
+  requestedBy: { id: string; name: string; email: string };
+  listingId: string;
+  listingName: string;
+  bookingType: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  quantity: number | null;
+  declineReason: string | null;
+  createdAt: string;
 }
 
 export interface BuyerOrgJoinRequest {
@@ -87,6 +109,7 @@ function useInvalidateBuyerOrganization() {
     queryClient.invalidateQueries({ queryKey: ["buyer-organization-stats"] });
     queryClient.invalidateQueries({ queryKey: ["buyer-organization-activity"] });
     queryClient.invalidateQueries({ queryKey: ["buyer-organization-transactions"] });
+    queryClient.invalidateQueries({ queryKey: ["buyer-organization-spend-requests"] });
     queryClient.invalidateQueries({ queryKey: ["me"] });
   };
 }
@@ -200,6 +223,87 @@ export function useRequestBuyerOrgPromotion() {
     mutationFn: () => apiFetch<{ promotionRequested: boolean }>("/api/buyer-organization/promotion-request", {
       method: "POST",
     }),
+    onSuccess: invalidate,
+  });
+}
+
+// 2026-07-28 "Buyer Org pool — delegated spend" additions below.
+
+export function useTopUpBuyerOrgPool() {
+  const invalidate = useInvalidateBuyerOrganization();
+  return useMutation({
+    mutationFn: ({ amount, paymentMethodId }: { amount: number; paymentMethodId: string }) =>
+      apiFetch("/api/buyer-organization/topup", { method: "POST", body: JSON.stringify({ amount, paymentMethodId }) }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetMemberPermissions() {
+  const invalidate = useInvalidateBuyerOrganization();
+  return useMutation({
+    mutationFn: ({ userId, canBook, canPurchase }: { userId: string; canBook?: boolean; canPurchase?: boolean }) =>
+      apiFetch(`/api/buyer-organization/members/${userId}/permissions`, {
+        method: "PATCH",
+        body: JSON.stringify({ canBook, canPurchase }),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useBuyerOrgSpendRequests(enabled: boolean, status?: string) {
+  const params = status ? `?status=${status}` : "";
+  return useQuery({
+    queryKey: ["buyer-organization-spend-requests", status],
+    queryFn: () =>
+      apiFetch<{ requests: BuyerOrgSpendRequest[] }>(`/api/buyer-organization/spend-requests${params}`),
+    select: (data) => data.requests,
+    enabled,
+  });
+}
+
+export interface CreateSpendRequestBookingInput {
+  type: "booking";
+  listingId: string;
+  bookingType: "daily" | "weekly" | "monthly";
+  startDate: string;
+  endDate: string;
+}
+
+export interface CreateSpendRequestPurchaseInput {
+  type: "consumable_purchase";
+  listingId: string;
+  quantity: number;
+}
+
+export function useCreateBuyerOrgSpendRequest() {
+  const invalidate = useInvalidateBuyerOrganization();
+  return useMutation({
+    mutationFn: (input: CreateSpendRequestBookingInput | CreateSpendRequestPurchaseInput) =>
+      apiFetch<{ request: BuyerOrgSpendRequest }>("/api/buyer-organization/spend-requests", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useFulfillBuyerOrgSpendRequest() {
+  const invalidate = useInvalidateBuyerOrganization();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch(`/api/buyer-organization/spend-requests/${id}/fulfill`, { method: "POST" }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeclineBuyerOrgSpendRequest() {
+  const invalidate = useInvalidateBuyerOrganization();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      apiFetch(`/api/buyer-organization/spend-requests/${id}/decline`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      }),
     onSuccess: invalidate,
   });
 }

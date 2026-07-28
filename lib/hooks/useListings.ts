@@ -64,9 +64,13 @@ interface CreateBookingInput {
   bookingType: BookingType;
   startDate: string;
   endDate: string;
-  paymentMethodId: string;
+  // Absent when fundingSource is "organization" — that path never charges
+  // Stripe (see createBookingWithDebit's own buyerOrganizationId param,
+  // lib/bookings.ts).
+  paymentMethodId?: string;
   rewardGrantId?: string;
   bookingCreditId?: string;
+  fundingSource?: "personal" | "organization";
 }
 
 export function useCreateBooking() {
@@ -102,6 +106,7 @@ export function useCreateBulkOrder() {
 interface CreatePurchaseInput {
   listingId: string;
   quantity: number;
+  fundingSource?: "personal" | "organization";
 }
 
 // "Buy Now" — POST /api/purchases, an immediate completed sale (stock +

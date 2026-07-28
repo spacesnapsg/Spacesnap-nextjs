@@ -151,9 +151,35 @@ export async function resolveBuyerOrgMembership(
 export async function getBuyerOrgMembers(buyerOrganizationId: bigint) {
   return prisma.user.findMany({
     where: { buyerOrganizationId },
-    select: { id: true, name: true, email: true, isBuyerOrgAdmin: true },
+    select: { id: true, name: true, email: true, isBuyerOrgAdmin: true, buyerOrgCanBook: true, buyerOrgCanPurchase: true },
     orderBy: [{ isBuyerOrgAdmin: "desc" }, { name: "asc" }],
   });
+}
+
+// 2026-07-28 "Buyer Org pool — delegated spend": the admin grants/revokes a
+// member's own buyerOrgCanBook/buyerOrgCanPurchase flags directly, no
+// system-admin round trip — same admin-driven, no-queue shape as
+// promoteBuyerOrgMemberDirectly above. Two separate setters (not one
+// combined toggle) since the product ask was explicitly "who can book" and
+// "who can buy consumables" as independent permissions.
+export async function setMemberBookingPermission(actingAdminUserId: string, targetUserId: string, canBook: boolean) {
+  const actingAdmin = await prisma.user.findUniqueOrThrow({ where: { id: actingAdminUserId } });
+  if (!actingAdmin.isBuyerOrgAdmin || !actingAdmin.buyerOrganizationId) throw new NotBuyerOrgAdminError();
+
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: targetUserId } });
+  if (target.buyerOrganizationId !== actingAdmin.buyerOrganizationId) throw new NotInSameOrgError();
+
+  return prisma.user.update({ where: { id: targetUserId }, data: { buyerOrgCanBook: canBook } });
+}
+
+export async function setMemberPurchasePermission(actingAdminUserId: string, targetUserId: string, canPurchase: boolean) {
+  const actingAdmin = await prisma.user.findUniqueOrThrow({ where: { id: actingAdminUserId } });
+  if (!actingAdmin.isBuyerOrgAdmin || !actingAdmin.buyerOrganizationId) throw new NotBuyerOrgAdminError();
+
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: targetUserId } });
+  if (target.buyerOrganizationId !== actingAdmin.buyerOrganizationId) throw new NotInSameOrgError();
+
+  return prisma.user.update({ where: { id: targetUserId }, data: { buyerOrgCanPurchase: canPurchase } });
 }
 
 export async function removeBuyerOrgMember(actingAdminUserId: string, targetUserId: string) {
@@ -166,7 +192,13 @@ export async function removeBuyerOrgMember(actingAdminUserId: string, targetUser
 
   return prisma.user.update({
     where: { id: targetUserId },
-    data: { buyerOrganizationId: null, isBuyerOrgAdmin: false, buyerOrgPromotionRequested: false },
+    data: {
+      buyerOrganizationId: null,
+      isBuyerOrgAdmin: false,
+      buyerOrgPromotionRequested: false,
+      buyerOrgCanBook: false,
+      buyerOrgCanPurchase: false,
+    },
   });
 }
 
