@@ -43,6 +43,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           isCompanyAdmin: user.isCompanyAdmin,
           isSystemAdmin: user.isSystemAdmin,
           companyId: user.companyId ? user.companyId.toString() : null,
+          companyCanPurchaseBoosts: user.companyCanPurchaseBoosts,
           isBuyerOrgAdmin: user.isBuyerOrgAdmin,
           buyerOrganizationId: user.buyerOrganizationId ? user.buyerOrganizationId.toString() : null,
           buyerOrgCanBook: user.buyerOrgCanBook,
@@ -62,6 +63,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.isCompanyAdmin = user.isCompanyAdmin;
         token.isSystemAdmin = user.isSystemAdmin;
         token.companyId = user.companyId;
+        token.companyCanPurchaseBoosts = user.companyCanPurchaseBoosts;
         token.isBuyerOrgAdmin = user.isBuyerOrgAdmin;
         token.buyerOrganizationId = user.buyerOrganizationId;
         token.buyerOrgCanBook = user.buyerOrgCanBook;
@@ -97,6 +99,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             isCompanyAdmin: true,
             isSystemAdmin: true,
             companyId: true,
+            companyCanPurchaseBoosts: true,
             isBuyerOrgAdmin: true,
             buyerOrganizationId: true,
             buyerOrgCanBook: true,
@@ -116,6 +119,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       token.isCompanyAdmin = current.isCompanyAdmin;
       token.isSystemAdmin = current.isSystemAdmin;
       token.companyId = current.companyId ? current.companyId.toString() : null;
+      token.companyCanPurchaseBoosts = current.companyCanPurchaseBoosts;
       token.isBuyerOrgAdmin = current.isBuyerOrgAdmin;
       token.buyerOrganizationId = current.buyerOrganizationId ? current.buyerOrganizationId.toString() : null;
       token.buyerOrgCanBook = current.buyerOrgCanBook;
@@ -130,6 +134,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       session.user.isCompanyAdmin = token.isCompanyAdmin;
       session.user.isSystemAdmin = token.isSystemAdmin;
       session.user.companyId = token.companyId;
+      session.user.companyCanPurchaseBoosts = token.companyCanPurchaseBoosts;
       session.user.isBuyerOrgAdmin = token.isBuyerOrgAdmin;
       session.user.buyerOrganizationId = token.buyerOrganizationId;
       session.user.buyerOrgCanBook = token.buyerOrgCanBook;

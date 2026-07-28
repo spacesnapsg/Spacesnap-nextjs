@@ -15,7 +15,13 @@ import {
   usePromoteCompanyMember,
   useCompanyJoinRequests,
   useResolveCompanyJoinRequest,
+  useSetMemberBoostPermission,
 } from "@/lib/hooks/useCompanyMembers";
+import {
+  useCompanyBoostRequests,
+  useFulfillCompanyBoostRequest,
+  useDeclineCompanyBoostRequest,
+} from "@/lib/hooks/useCompanyBoostRequests";
 import { ApiRequestError } from "@/lib/api-client";
 import SupplierEdmCard from "@/components/SupplierEdmCard";
 import ListingBoostCatalogueCard from "@/components/ListingBoostCatalogueCard";
@@ -114,11 +120,16 @@ function TeamMembersCard() {
   const { data: members } = useCompanyMembers();
   const removeMember = useRemoveCompanyMember();
   const promoteMember = usePromoteCompanyMember();
+  const setBoostPermission = useSetMemberBoostPermission();
   const { data: requests } = useCompanyJoinRequests();
   const resolveRequest = useResolveCompanyJoinRequest();
   const [error, setError] = useState<string | null>(null);
 
   const isAdmin = Boolean(session?.user?.isCompanyAdmin);
+
+  const { data: boostRequests } = useCompanyBoostRequests(isAdmin, "pending");
+  const fulfillBoostRequest = useFulfillCompanyBoostRequest();
+  const declineBoostRequest = useDeclineCompanyBoostRequest();
 
   function handleError(err: unknown) {
     setError(err instanceof ApiRequestError ? err.message : "Something went wrong.");
@@ -146,7 +157,23 @@ function TeamMembersCard() {
                 <p className="text-xs text-muted-text">{member.email}</p>
               </div>
               {isAdmin && !member.isCompanyAdmin && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1.5 text-xs text-muted-text cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={member.companyCanPurchaseBoosts}
+                      disabled={setBoostPermission.isPending}
+                      onChange={(e) => {
+                        setError(null);
+                        setBoostPermission.mutate(
+                          { userId: member.id, canPurchaseBoosts: e.target.checked },
+                          { onError: handleError }
+                        );
+                      }}
+                      className="accent-supplier-purple-start"
+                    />
+                    Can purchase Boosts
+                  </label>
                   <button
                     type="button"
                     title="Promote to admin"
@@ -215,6 +242,61 @@ function TeamMembersCard() {
                       onClick={() => {
                         setError(null);
                         resolveRequest.mutate({ id: request.id, status: "rejected" }, { onError: handleError });
+                      }}
+                      className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
+                    >
+                      <XIcon size={16} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="mt-6">
+          <h4 className="text-sm font-semibold text-body-text mb-3">
+            Pending Boost Requests
+            {boostRequests && boostRequests.length > 0 && (
+              <span className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-supplier-purple-end text-white text-[10px] font-semibold">
+                {boostRequests.length}
+              </span>
+            )}
+          </h4>
+          {!boostRequests || boostRequests.length === 0 ? (
+            <p className="text-sm text-muted-text">No pending boost requests.</p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {boostRequests.map((request) => (
+                <div key={request.id} className="flex items-center justify-between border border-border/40 rounded p-3 gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-body-text">{request.requestedBy.name}</p>
+                    <p className="text-xs text-muted-text truncate">
+                      {request.type === "bump"
+                        ? `Buy ${request.quantity} Bump${request.quantity === 1 ? "" : "s"}`
+                        : `Pin "${request.listingName}" for ${request.durationDays} days`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      disabled={fulfillBoostRequest.isPending}
+                      onClick={() => {
+                        setError(null);
+                        fulfillBoostRequest.mutate(request.id, { onError: handleError });
+                      }}
+                      className="!bg-gradient-to-r !from-supplier-purple-start !to-supplier-purple-end h-8 px-3 text-xs gap-1"
+                    >
+                      <Check size={14} /> Approve
+                    </Button>
+                    <button
+                      type="button"
+                      title="Decline"
+                      disabled={declineBoostRequest.isPending}
+                      onClick={() => {
+                        setError(null);
+                        declineBoostRequest.mutate({ id: request.id }, { onError: handleError });
                       }}
                       className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
                     >

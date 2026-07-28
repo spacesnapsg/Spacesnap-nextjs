@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCompanyAdmin } from "@/lib/supplier-auth";
+import { requireCompanyBoostPurchasePermission } from "@/lib/supplier-auth";
 import { validationErrorResponse, ApiValidationError, notFoundResponse } from "@/lib/api-errors";
 import { parseBigIntParam, serializeListing, purchaseAndApplyPin, ListingNotFoundError, ListingNotAvailableError } from "@/lib/listings";
 import { InsufficientCompanyPurchasedBalanceError } from "@/lib/company-credits";
 
-// Spending shared company funds — gated to requireCompanyAdmin, same
-// reasoning as the Bumps purchase route. Purchase and application are one
-// combined action (see purchaseAndApplyPin's own comment).
+// Spending shared company funds — gated to admin OR a member with delegated
+// companyCanPurchaseBoosts, same reasoning as the Bumps purchase route.
+// Purchase and application are one combined action (see purchaseAndApplyPin's
+// own comment).
 export async function POST(request: NextRequest) {
-  const auth = await requireCompanyAdmin();
+  const auth = await requireCompanyBoostPurchasePermission();
   if ("error" in auth) return auth.error;
 
   const body = await request.json().catch(() => null);

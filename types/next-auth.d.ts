@@ -10,6 +10,7 @@ declare module "next-auth" {
     isCompanyAdmin: boolean;
     isSystemAdmin: boolean;
     companyId: string | null;
+    companyCanPurchaseBoosts: boolean;
     isBuyerOrgAdmin: boolean;
     buyerOrganizationId: string | null;
     buyerOrgCanBook: boolean;
@@ -24,8 +25,11 @@ declare module "next-auth" {
       isCompanyAdmin: boolean;
       isSystemAdmin: boolean;
       companyId: string | null;
+      companyCanPurchaseBoosts: boolean;
       isBuyerOrgAdmin: boolean;
       buyerOrganizationId: string | null;
+      buyerOrgCanBook: boolean;
+      buyerOrgCanPurchase: boolean;
     } & DefaultSession["user"];
   }
 }
@@ -41,6 +45,7 @@ declare module "@auth/core/jwt" {
     isCompanyAdmin: boolean;
     isSystemAdmin: boolean;
     companyId: string | null;
+    companyCanPurchaseBoosts: boolean;
     isBuyerOrgAdmin: boolean;
     buyerOrganizationId: string | null;
     buyerOrgCanBook: boolean;

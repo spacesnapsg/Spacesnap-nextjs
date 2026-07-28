@@ -134,7 +134,7 @@ export async function resolveCompanyMembership(
 export async function getCompanyMembers(companyId: bigint) {
   return prisma.user.findMany({
     where: { companyId },
-    select: { id: true, name: true, email: true, isCompanyAdmin: true },
+    select: { id: true, name: true, email: true, isCompanyAdmin: true, companyCanPurchaseBoosts: true },
     orderBy: [{ isCompanyAdmin: "desc" }, { name: "asc" }],
   });
 }
@@ -149,8 +149,30 @@ export async function removeCompanyMember(actingAdminUserId: string, targetUserI
 
   return prisma.user.update({
     where: { id: targetUserId },
-    data: { companyId: null, isCompanyAdmin: false, isSupplier: false, promotionRequested: false },
+    data: {
+      companyId: null,
+      isCompanyAdmin: false,
+      isSupplier: false,
+      promotionRequested: false,
+      companyCanPurchaseBoosts: false,
+    },
   });
+}
+
+// Delegated Boost-catalogue spend permission — see User.companyCanPurchaseBoosts's
+// own schema comment for why this is one flag, not one per product.
+export async function setMemberBoostPermission(
+  actingAdminUserId: string,
+  targetUserId: string,
+  canPurchaseBoosts: boolean
+) {
+  const admin = await prisma.user.findUniqueOrThrow({ where: { id: actingAdminUserId } });
+  if (!admin.isCompanyAdmin || !admin.companyId) throw new NotCompanyAdminError();
+
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: targetUserId } });
+  if (target.companyId !== admin.companyId) throw new NotInSameCompanyError();
+
+  return prisma.user.update({ where: { id: targetUserId }, data: { companyCanPurchaseBoosts: canPurchaseBoosts } });
 }
 
 export async function getPendingCompanyJoinRequests(companyId: bigint) {

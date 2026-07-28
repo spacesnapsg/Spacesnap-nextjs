@@ -6,6 +6,7 @@ export interface CompanyMember {
   name: string;
   email: string;
   isCompanyAdmin: boolean;
+  companyCanPurchaseBoosts: boolean;
 }
 
 export interface CompanyJoinRequest {
@@ -44,6 +45,18 @@ export function usePromoteCompanyMember() {
   return useMutation({
     mutationFn: (userId: string) =>
       apiFetch(`/api/supplier/company/members/${userId}/promote`, { method: "POST" }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetMemberBoostPermission() {
+  const invalidate = useInvalidateCompanyMembers();
+  return useMutation({
+    mutationFn: ({ userId, canPurchaseBoosts }: { userId: string; canPurchaseBoosts: boolean }) =>
+      apiFetch(`/api/supplier/company/members/${userId}/permissions`, {
+        method: "PATCH",
+        body: JSON.stringify({ canPurchaseBoosts }),
+      }),
     onSuccess: invalidate,
   });
 }

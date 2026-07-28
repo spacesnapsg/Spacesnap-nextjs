@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCompanyAdmin } from "@/lib/supplier-auth";
+import { requireCompanyBoostPurchasePermission } from "@/lib/supplier-auth";
 import { validationErrorResponse, ApiValidationError } from "@/lib/api-errors";
 import { purchaseBumps, InsufficientCompanyPurchasedBalanceError } from "@/lib/company-credits";
 
-// Spending shared company funds — gated to requireCompanyAdmin, stricter
-// than purchased_topup's "any member" gate, same reasoning as the Pin
-// purchase route.
+// Spending shared company funds — gated to admin OR a member with delegated
+// companyCanPurchaseBoosts (requireCompanyBoostPurchasePermission), same
+// reasoning as the Pin purchase route. A non-permitted member is routed to
+// POST /api/supplier/company/boost-requests instead (frontend concern).
 export async function POST(request: NextRequest) {
-  const auth = await requireCompanyAdmin();
+  const auth = await requireCompanyBoostPurchasePermission();
   if ("error" in auth) return auth.error;
 
   const body = await request.json().catch(() => null);

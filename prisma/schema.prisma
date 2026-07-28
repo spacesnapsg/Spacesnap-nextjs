@@ -1177,6 +1177,7 @@ model Company {
   companyTransactions       CompanyTransaction[]
   supplierRewardRedemptions SupplierRewardRedemption[]
   joinRequests              CompanyJoinRequest[]
+  boostRequests             CompanyBoostRequest[]
   supplierEdmCampaign       SupplierEdmCampaign?
   adminNotifications        AdminNotification[]
 
@@ -1212,6 +1213,60 @@ model CompanyJoinRequest {
 
   @@index([companyId, status])
   @@map("company_join_requests")
+}
+
+enum CompanyBoostRequestType {
+  bump
+  pin
+
+  @@map("company_boost_request_type")
+}
+
+enum CompanyBoostRequestStatus {
+  pending
+  fulfilled
+  declined
+
+  @@map("company_boost_request_status")
+}
+
+// A member without companyCanPurchaseBoosts can still ask to spend the
+// shared company purchasedBalance on the "Boost Your Listings" catalogue
+// (see User.companyCanPurchaseBoosts's own comment for why this is one
+// generic request type, not one model per catalogue product) — this row
+// captures that intent (Bumps: quantity only; Pin: listingId + durationDays
+// only) and notifies the company admin. The admin reviews it (supplier
+// profile's Pending Boost Requests section) and either fulfills it — calls
+// the exact same purchaseBumps/purchaseAndApplyPin (lib/company-credits.ts /
+// lib/listings.ts) the direct-purchase routes already call, attributed to
+// the REQUESTING member's own userId on the CompanyTransaction row, never
+// the admin's — or declines it. Mirrors BuyerOrgSpendRequest's lifecycle
+// shape (nullable type-specific columns in one table, not a JSON payload —
+// same rationale: a few concrete request shapes sharing one lifecycle, not
+// an unbounded schema).
+model CompanyBoostRequest {
+  id                BigInt                    @id @default(autoincrement())
+  companyId         BigInt                    @map("company_id")
+  requestedByUserId String                    @map("requested_by_user_id")
+  type              CompanyBoostRequestType
+  // Bump-only (type: bump).
+  quantity          Int?
+  // Pin-only (type: pin).
+  listingId         BigInt?                   @map("listing_id")
+  durationDays      Int?                      @map("duration_days")
+  status            CompanyBoostRequestStatus @default(pending)
+  declineReason     String?                   @map("decline_reason")
+  resolvedByUserId  String?                   @map("resolved_by_user_id")
+  resolvedAt        DateTime?                 @map("resolved_at")
+  createdAt         DateTime                  @default(now()) @map("created_at")
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requestedBy User     @relation("CompanyBoostRequestRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy  User?    @relation("CompanyBoostRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  listing     Listing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@map("company_boost_requests")
 }
 
 // Buyer-side counterpart to Company — a corporate customer account for a
@@ -1345,6 +1400,21 @@ model User {
   isSystemAdmin              Boolean    @default(false) @map("is_system_admin")
   companyId                  BigInt?    @map("company_id")
   promotionRequested         Boolean    @default(false) @map("promotion_requested")
+  // Delegated company-purchased-credit spend rights (2026-07-28) — set by the
+  // company admin per member (lib/company-membership.ts's
+  // setMemberBoostPermission). Deliberately ONE flag covering the whole
+  // "Boost Your Listings" catalogue (Bumps/Pin today, whatever's added to
+  // that same card later — Lab Digest/Ads/Newsletter placeholders already
+  // exist in ListingBoostCatalogueCard.tsx) rather than a boolean per
+  // product, so a new catalogue product never needs a new permission column
+  // — see CompanyBoostRequest's own comment for the rest of that design.
+  // The company admin implicitly has this regardless of the flag — checked
+  // as `isCompanyAdmin || companyCanPurchaseBoosts` everywhere this gates a
+  // write path, never read alone. Meaningless without companyId set, same
+  // as isCompanyAdmin; cleared manually in removeCompanyMember (same
+  // discipline as buyerOrgCanBook/buyerOrgCanPurchase below, not a DB
+  // CHECK).
+  companyCanPurchaseBoosts   Boolean    @default(false) @map("company_can_purchase_boosts")
   // Sprint 6.10 follow-on (2026-07-23) — Buyer Organization membership,
   // mirrors companyId/isCompanyAdmin/promotionRequested exactly but for the
   // buyer-side BuyerOrganization model instead of the supplier-side Company.
@@ -1424,6 +1494,8 @@ model User {
 
   companyJoinRequestsMade       CompanyJoinRequest[]           @relation("CompanyJoinRequestRequester")
   companyJoinRequestsResolved   CompanyJoinRequest[]           @relation("CompanyJoinRequestResolver")
+  companyBoostRequestsMade      CompanyBoostRequest[]          @relation("CompanyBoostRequestRequester")
+  companyBoostRequestsResolved  CompanyBoostRequest[]          @relation("CompanyBoostRequestResolver")
   buyerOrgJoinRequestsMade      BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestRequester")
   buyerOrgJoinRequestsResolved  BuyerOrganizationJoinRequest[] @relation("BuyerOrgJoinRequestResolver")
   buyerOrgSpendRequestsMade     BuyerOrgSpendRequest[]         @relation("BuyerOrgSpendRequestRequester")
@@ -1656,6 +1728,7 @@ model Listing {
   ratings               Rating[]
   notifications         Notification[]
   buyerOrgSpendRequests BuyerOrgSpendRequest[]
+  companyBoostRequests  CompanyBoostRequest[]
 
   @@map("listings")
 }
@@ -2361,6 +2434,10 @@ enum NotificationType {
   // buyerOrgCanBook/buyerOrgCanPurchase submits a BuyerOrgSpendRequest. See
   // that model's own comment.
   buyer_org_spend_request
+  // 2026-07-28 — sent to a company admin when a member without
+  // companyCanPurchaseBoosts submits a CompanyBoostRequest. See that
+  // model's own comment.
+  company_boost_request
 
   @@map("notification_type")
 }

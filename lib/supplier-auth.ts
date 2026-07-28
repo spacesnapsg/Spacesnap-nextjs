@@ -39,3 +39,30 @@ export async function requireCompanyAdmin() {
 
   return { companyId: BigInt(session.user.companyId), userId: session.user.id } as const;
 }
+
+// Spending the shared company purchasedBalance on the "Boost Your Listings"
+// catalogue (Bumps/Pin today, whatever else lands on that card later) —
+// admin OR a member the admin has delegated companyCanPurchaseBoosts to
+// (see User.companyCanPurchaseBoosts's own schema comment). A member who
+// fails this check should be routed to POST
+// /api/supplier/company/boost-requests instead, which queues a request for
+// their admin rather than spending directly — same shape as the buyer-org
+// pool's fundingSource="organization" gate (app/api/bookings/route.ts).
+export async function requireCompanyBoostPurchasePermission() {
+  const session = await auth();
+  if (!session?.user) {
+    return { error: unauthorizedResponse() } as const;
+  }
+  if (!session.user.companyId) {
+    return { error: forbiddenResponse("Your account is not associated with a company.") } as const;
+  }
+  if (!session.user.isCompanyAdmin && !session.user.companyCanPurchaseBoosts) {
+    return {
+      error: forbiddenResponse(
+        "You don't have permission to spend your company's funds on this. Submit a request instead."
+      ),
+    } as const;
+  }
+
+  return { companyId: BigInt(session.user.companyId), userId: session.user.id } as const;
+}
