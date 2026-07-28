@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useSearchParams } from "next/navigation";
-import { Award, Calendar, Camera, Check, CheckCircle2, Lock, Mail, MapPin, PlayCircle, Trophy, User, Users } from "lucide-react";
+import { Award, Calendar, Camera, Check, CheckCircle2, HelpCircle, Lock, Mail, MapPin, PlayCircle, Trophy, User, Users } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
 import Modal from "@/components/Modal";
 import CertificateDetailModal from "@/components/CertificateDetailModal";
+import HowCertificatesAreEarnedModal from "@/components/HowCertificatesAreEarnedModal";
 import TrainingSessionDetailModal from "@/components/TrainingSessionDetailModal";
 import BuyerOrganizationCard from "@/components/BuyerOrganizationCard";
 import InternalTrainingEntryCard from "@/components/InternalTrainingEntryCard";
@@ -364,6 +365,7 @@ export default function DigitalPassportPage() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [showEarningInfo, setShowEarningInfo] = useState(false);
 
   const { data: user, isLoading: userLoading } = useCurrentUser();
   const { data: catalog, isLoading: catalogLoading } = useCertificateCatalog();
@@ -454,10 +456,20 @@ export default function DigitalPassportPage() {
         <h1 className="text-3xl font-extrabold bg-gradient-to-r from-user-teal-start to-user-teal-end bg-clip-text text-transparent">
           Digital Passport
         </h1>
-        <p className="text-muted-text mt-1">
-          Your certifications, training, and credentials in one place
-        </p>
+        <div className="flex flex-wrap items-center gap-3 mt-1">
+          <p className="text-muted-text">Your certifications, training, and credentials in one place</p>
+          <button
+            type="button"
+            onClick={() => setShowEarningInfo(true)}
+            className="inline-flex items-center gap-1.5 bg-user-teal-start/15 text-user-teal-end border border-user-teal-start/30 rounded-full px-3 py-1 text-xs font-medium hover:bg-user-teal-start/25 transition-colors"
+          >
+            <HelpCircle size={12} />
+            See how certificates are earned!
+          </button>
+        </div>
       </div>
+
+      <HowCertificatesAreEarnedModal open={showEarningInfo} onClose={() => setShowEarningInfo(false)} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start mb-8">
         <div className="flex flex-col gap-6">

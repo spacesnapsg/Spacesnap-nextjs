@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, PlayCircle, Users, Calendar, MapPin, X } from "lucide-react";
+import { Plus, PlayCircle, Users, Calendar, MapPin, X, HelpCircle } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import UploadVideoModal from "@/components/UploadVideoModal";
 import CreateSessionModal from "@/components/CreateSessionModal";
 import ViewNamelistModal from "@/components/ViewNamelistModal";
+import HowSupplierTrainingWorksModal from "@/components/HowSupplierTrainingWorksModal";
 import { VIDEO_CATEGORIES, type VideoCategory } from "@/lib/mockTutorials";
 import { useSupplierTrainingSessions, type SupplierTrainingSession } from "@/lib/hooks/useSupplierTrainingSessions";
 import { useTrainingVideos, type TrainingVideo } from "@/lib/hooks/useTrainingVideos";
@@ -136,6 +137,7 @@ export default function SupplierTutorialsPage() {
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
   const [namelistSessionId, setNamelistSessionId] = useState<string | null>(null);
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
 
   const { data: sessions } = useSupplierTrainingSessions();
   const namelistSession = sessions?.find((s) => s.id === namelistSessionId) ?? null;
@@ -149,8 +151,20 @@ export default function SupplierTutorialsPage() {
         <h1 className="text-3xl font-extrabold bg-gradient-to-r from-supplier-purple-start to-supplier-purple-end bg-clip-text text-transparent">
           Training Management
         </h1>
-        <p className="text-muted-text mt-1">Manage video tutorials and onsite training sessions</p>
+        <div className="flex flex-wrap items-center gap-3 mt-1">
+          <p className="text-muted-text">Manage video tutorials and onsite training sessions</p>
+          <button
+            type="button"
+            onClick={() => setShowHowItWorks(true)}
+            className="inline-flex items-center gap-1.5 bg-supplier-purple-start/15 text-supplier-purple-end border border-supplier-purple-start/30 rounded-full px-3 py-1 text-xs font-medium hover:bg-supplier-purple-start/25 transition-colors"
+          >
+            <HelpCircle size={12} />
+            See how it works!
+          </button>
+        </div>
       </div>
+
+      <HowSupplierTrainingWorksModal open={showHowItWorks} onClose={() => setShowHowItWorks(false)} />
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
         <div className="inline-flex bg-card border border-border rounded-full p-1 gap-1 w-fit">
