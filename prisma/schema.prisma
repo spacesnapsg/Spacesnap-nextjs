@@ -1218,6 +1218,10 @@ model CompanyJoinRequest {
 enum CompanyBoostRequestType {
   bump
   pin
+  // A BoostProduct row with builtinEffect "none" — an admin-authored
+  // catalogue product with no dedicated purchase mechanic of its own, see
+  // BoostProduct's own comment.
+  product
 
   @@map("company_boost_request_type")
 }
@@ -1249,24 +1253,73 @@ model CompanyBoostRequest {
   companyId         BigInt                    @map("company_id")
   requestedByUserId String                    @map("requested_by_user_id")
   type              CompanyBoostRequestType
-  // Bump-only (type: bump).
+  // Bump-only (type: bump) and product-only (type: product).
   quantity          Int?
   // Pin-only (type: pin).
   listingId         BigInt?                   @map("listing_id")
   durationDays      Int?                      @map("duration_days")
+  // Product-only (type: product) — which BoostProduct (builtinEffect: none)
+  // is being requested. SetNull (not Cascade) so deleting the product later
+  // doesn't erase the historical request record, just its live link.
+  boostProductId    BigInt?                   @map("boost_product_id")
   status            CompanyBoostRequestStatus @default(pending)
   declineReason     String?                   @map("decline_reason")
   resolvedByUserId  String?                   @map("resolved_by_user_id")
   resolvedAt        DateTime?                 @map("resolved_at")
   createdAt         DateTime                  @default(now()) @map("created_at")
 
-  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  requestedBy User     @relation("CompanyBoostRequestRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
-  resolvedBy  User?    @relation("CompanyBoostRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
-  listing     Listing? @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requestedBy User          @relation("CompanyBoostRequestRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  resolvedBy  User?         @relation("CompanyBoostRequestResolver", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  listing     Listing?      @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  boostProduct BoostProduct? @relation(fields: [boostProductId], references: [id], onDelete: SetNull)
 
   @@index([companyId, status])
   @@map("company_boost_requests")
+}
+
+enum BoostProductBuiltinEffect {
+  bump
+  pin
+  none
+
+  @@map("boost_product_builtin_effect")
+}
+
+// The "Boost Your Listings" catalogue shown on Supplier Profile
+// (components/ListingBoostCatalogueCard.tsx) — fully data-driven, one card
+// per active row here (admin panel: /admin-boost-products). builtinEffect
+// "bump"/"pin" are the two seeded, non-deletable rows whose purchase actually
+// does something specific (Company.bumpsAvailable counter / a Listing's pin
+// duration — see purchaseBumps/purchaseAndApplyPin); admin can edit their
+// name/description/price and flip them Inactive (hides them from suppliers)
+// but never delete them, since that mechanic-specific purchase code assumes
+// exactly one row of each exists. builtinEffect "none" rows are entirely
+// admin-authored — freely addable/editable/deletable — and purchasing one
+// (purchaseBoostProduct, lib/boost-products.ts) is just a generic per-unit
+// credit deduction with no automated inventory effect; the resulting
+// CompanyTransaction row IS the sale record, no admin fulfillment step.
+model BoostProduct {
+  id            BigInt                     @id @default(autoincrement())
+  builtinEffect BoostProductBuiltinEffect  @default(none) @map("builtin_effect")
+  name          String
+  description   String
+  iconName      String                     @default("star") @map("icon_name")
+  active        Boolean                    @default(true)
+  sortOrder     Int                        @default(0) @map("sort_order")
+
+  // builtinEffect "bump" and "none": per-unit price.
+  priceCredits      Int? @map("price_credits")
+  // builtinEffect "pin" only: the two duration tiers.
+  pin7PriceCredits  Int? @map("pin_7_price_credits")
+  pin30PriceCredits Int? @map("pin_30_price_credits")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  companyBoostRequests CompanyBoostRequest[]
+
+  @@map("boost_products")
 }
 
 // Buyer-side counterpart to Company — a corporate customer account for a

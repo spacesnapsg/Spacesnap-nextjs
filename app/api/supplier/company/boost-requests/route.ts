@@ -10,6 +10,7 @@ import {
   serializeCompanyBoostRequest,
   ListingNotFoundError,
 } from "@/lib/company-boost-requests";
+import { BoostProductNotFoundError, BoostProductInactiveError } from "@/lib/boost-products";
 
 const STATUSES = new Set<string>(Object.values(CompanyBoostRequestStatus));
 
@@ -55,7 +56,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ request: serializeCompanyBoostRequest(full!) }, { status: 201 });
   } catch (error) {
     if (error instanceof ApiValidationError) return validationErrorResponse(error);
-    if (error instanceof ListingNotFoundError) return notFoundResponse(error.message);
+    if (error instanceof ListingNotFoundError || error instanceof BoostProductNotFoundError) return notFoundResponse(error.message);
+    if (error instanceof BoostProductInactiveError) return validationErrorResponse(new ApiValidationError({ boostProductId: [error.message] }));
     throw error;
   }
 }

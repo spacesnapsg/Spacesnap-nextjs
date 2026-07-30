@@ -2,7 +2,7 @@
 
 import { signOut } from "next-auth/react";
 import Link from "next/link";
-import { Home, Users, Gift, Banknote, UserCheck, Award, Megaphone, LogOut, Bell, FileBarChart } from "lucide-react";
+import { Home, Users, Gift, Banknote, UserCheck, Award, Megaphone, LogOut, Bell, FileBarChart, Zap } from "lucide-react";
 import Navbar from "./Navbar";
 import NavGroup, { NavItem } from "./NavGroup";
 import LogoBox from "./LogoBox";
@@ -12,6 +12,7 @@ import { useAdminNotificationsUnreadCount } from "@/lib/hooks/useAdminNotificati
 const MORE_MENU_ITEMS = [
   { label: "Notifications", href: "/admin-notifications", icon: <Bell size={16} /> },
   { label: "Reports", href: "/admin-reports", icon: <FileBarChart size={16} /> },
+  { label: "Boost Products", href: "/admin-boost-products", icon: <Zap size={16} /> },
 ];
 
 export default function AdminNavbar() {

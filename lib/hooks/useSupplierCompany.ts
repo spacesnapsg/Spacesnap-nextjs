@@ -1,12 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api-client";
 
-// Client-safe mirror of lib/company-credits.ts's BUMP_UNIT_COST_CREDITS —
-// that file imports prisma and can't be imported into a client component.
-// Display-only; the server route is what actually enforces/charges this.
-// Placeholder pricing, same flagged status as the server-side constant.
-export const BUMP_UNIT_COST_CREDITS_DISPLAY = 50;
-
 export type SupplierTier = "free" | "preferred" | "top";
 export type PayoutCadence = "monthly" | "biweekly" | "weekly";
 

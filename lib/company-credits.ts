@@ -4,6 +4,7 @@ import { ApiValidationError } from "@/lib/api-errors";
 import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 import { InsufficientCreditBalanceError } from "@/lib/credits";
 import { getCompanySupplierTier, type SupplierTier } from "@/lib/supplier-tiers";
+import { getBumpUnitPriceCredits } from "@/lib/boost-products";
 import type { ActivityQuery } from "@/lib/activity";
 
 // A per-COMPANY credit ledger — see CompanyTransaction's own schema comment
@@ -172,12 +173,6 @@ export async function getCompanyTransactionsPage(companyId: bigint, query: Activ
   return { items, total, page: query.page, pageSize: query.pageSize };
 }
 
-// Sprint 6.12 — placeholder pricing, explicitly NOT a real product-owner
-// number (per the "use a random figure for now" instruction this feature
-// was scoped under). Don't treat this as confirmed; flag it the same way
-// COMPANY_REBATE_PERCENT above was flagged before its real numbers landed.
-export const BUMP_UNIT_COST_CREDITS = 50;
-
 export class InsufficientCompanyPurchasedBalanceError extends Error {
   constructor() {
     super("Insufficient purchased credit balance for this purchase.");
@@ -188,10 +183,14 @@ export class InsufficientCompanyPurchasedBalanceError extends Error {
 // purchasedBalance via a purchased_spend row. Spending (not just holding)
 // company funds is gated to company admins at the route layer
 // (requireCompanyAdmin), stricter than purchased_topup's "any member" gate.
+// Price comes from the live BoostProduct row (admin-editable via
+// /admin-boost-products), not a hardcoded constant — see
+// getBumpUnitPriceCredits's own comment.
 export async function purchaseBumps(companyId: bigint, quantity: number, userId: string) {
-  const cost = new Prisma.Decimal(creditsToSgd(quantity * BUMP_UNIT_COST_CREDITS)).toDecimalPlaces(2);
-
   return prisma.$transaction(async (tx) => {
+    const unitPrice = await getBumpUnitPriceCredits(tx);
+    const cost = new Prisma.Decimal(creditsToSgd(quantity * unitPrice)).toDecimalPlaces(2);
+
     const balance = await getCompanyPurchasedBalance(companyId, tx);
     if (balance.lt(cost)) {
       throw new InsufficientCompanyPurchasedBalanceError();

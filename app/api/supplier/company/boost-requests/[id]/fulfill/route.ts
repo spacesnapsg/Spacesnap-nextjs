@@ -11,6 +11,7 @@ import {
   ListingNotFoundError,
   ListingNotAvailableError,
 } from "@/lib/company-boost-requests";
+import { BoostProductNotFoundError, BoostProductInactiveError } from "@/lib/boost-products";
 import { NotCompanyAdminError } from "@/lib/company-membership";
 
 // POST: the company admin approves a pending request — actually calls the
@@ -42,9 +43,12 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     if (error instanceof InsufficientCompanyPurchasedBalanceError) {
       return validationErrorResponse(new ApiValidationError({ quantity: [error.message] }));
     }
-    if (error instanceof ListingNotFoundError) return notFoundResponse(error.message);
+    if (error instanceof ListingNotFoundError || error instanceof BoostProductNotFoundError) return notFoundResponse(error.message);
     if (error instanceof ListingNotAvailableError) {
       return validationErrorResponse(new ApiValidationError({ listingId: [error.message] }));
+    }
+    if (error instanceof BoostProductInactiveError) {
+      return validationErrorResponse(new ApiValidationError({ boostProductId: [error.message] }));
     }
     throw error;
   }

@@ -16,10 +16,10 @@ import {
   createCompanyTopUp,
   parseCompanyTopUpAmount,
   purchaseBumps,
-  BUMP_UNIT_COST_CREDITS,
   InsufficientCompanyPurchasedBalanceError,
 } from "./company-credits";
-import { activateBump, ListingNotFoundError, NoBumpsAvailableError, purchaseAndApplyPin, ListingNotAvailableError, PIN_DURATION_COST_CREDITS } from "./listings";
+import { activateBump, ListingNotFoundError, NoBumpsAvailableError, purchaseAndApplyPin, ListingNotAvailableError } from "./listings";
+import { getBumpUnitPriceCredits, getPinDurationPriceCredits } from "./boost-products";
 import { ApiValidationError } from "./api-errors";
 
 const TEST_PAYMENT_METHOD_ID = "pm_card_visa";
@@ -195,7 +195,8 @@ describe("purchaseBumps (Sprint 6.12)", () => {
 
       const rows = await prisma.companyTransaction.findMany({ where: { companyId: company.id, type: "purchased_spend" } });
       assert.equal(rows.length, 1);
-      assert.equal(Number(rows[0].amount), -((3 * BUMP_UNIT_COST_CREDITS) / 10));
+      const unitPrice = await getBumpUnitPriceCredits();
+      assert.equal(Number(rows[0].amount), -((3 * unitPrice) / 10));
       assert.equal(rows[0].userId, admin.id);
     } finally {
       await cleanupCompanyAndUsers(company.id, [admin.id]);
@@ -281,7 +282,8 @@ describe("purchaseAndApplyPin (Sprint 6.12)", () => {
       assert.ok(days > 6.9 && days < 7.1, `expected ~7 days, got ${days}`);
 
       const balance = await getCompanyPurchasedBalance(company.id);
-      assert.equal(balance.toString(), (1000 - PIN_DURATION_COST_CREDITS[7] / 10).toString());
+      const durationPrices = await getPinDurationPriceCredits();
+      assert.equal(balance.toString(), (1000 - durationPrices[7] / 10).toString());
     } finally {
       await cleanupCompanyAndUsers(company.id, [admin.id]);
     }

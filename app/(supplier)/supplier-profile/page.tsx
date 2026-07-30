@@ -276,7 +276,9 @@ function TeamMembersCard() {
                     <p className="text-xs text-muted-text truncate">
                       {request.type === "bump"
                         ? `Buy ${request.quantity} Bump${request.quantity === 1 ? "" : "s"}`
-                        : `Pin "${request.listingName}" for ${request.durationDays} days`}
+                        : request.type === "pin"
+                          ? `Pin "${request.listingName}" for ${request.durationDays} days`
+                          : `Buy ${request.quantity}x ${request.boostProductName}`}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">

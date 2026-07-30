@@ -2,41 +2,55 @@
 
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { Zap, Pin as PinIcon, FileText, Megaphone, Mail } from "lucide-react";
+import { Zap, Pin as PinIcon, FileText, Megaphone, Mail, Star, Tag, type LucideIcon } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import Modal from "@/components/Modal";
-import { useSupplierCompany, usePurchaseBumps, usePurchasePin, BUMP_UNIT_COST_CREDITS_DISPLAY } from "@/lib/hooks/useSupplierCompany";
-import { useSupplierListings, PIN_DURATION_COST_CREDITS_DISPLAY } from "@/lib/hooks/useSupplierListings";
+import { useSupplierCompany, usePurchaseBumps, usePurchasePin } from "@/lib/hooks/useSupplierCompany";
+import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
+import { useSupplierBoostProducts, usePurchaseBoostProduct, type BoostProduct } from "@/lib/hooks/useBoostProducts";
 import { useCreateCompanyBoostRequest } from "@/lib/hooks/useCompanyBoostRequests";
 import { ApiRequestError } from "@/lib/api-client";
 
-// Sprint 6.12 — the listing-boost catalogue on Supplier Profile. Bumps and
-// Pin are real, wired to the Phase 6/7 purchase routes; Lab Digest, Ads,
-// and Newsletter space stay static placeholders ("Content/format TBD" per
-// the product owner's own framing) — confirmed this session as no-further-
-// design-this-pass, not an oversight.
+// Sprint 6.12 — the listing-boost catalogue on Supplier Profile. Fully
+// data-driven off BoostProduct (see its own schema comment): however many
+// active rows the admin panel (/admin-boost-products) has is however many
+// cards render below — no hardcoded slots. builtinEffect "bump"/"pin" keep
+// their dedicated purchase mechanics (BumpsCard/PinCard); "none" rows are
+// admin-authored custom products (CustomProductCard) — a generic per-unit
+// credit purchase with no automated inventory effect.
 //
 // 2026-07-28 — delegated spend. A member without companyCanPurchaseBoosts
 // (see User's own schema comment — ONE flag for the whole catalogue, not
 // one per product) doesn't get the direct Buy button here at all; instead
 // they get a "request" action that files a CompanyBoostRequest for their
 // company admin to approve/decline (supplier-profile's Pending Boost
-// Requests section). Whatever gets added to this catalogue next (Lab
-// Digest/Ads/Newsletter) reuses the exact same permission check and request
-// flow — no new plumbing per product.
+// Requests section). Every card type reuses the exact same permission check
+// and request flow.
 function useCanPurchaseBoosts() {
   const { data: session } = useSession();
   return Boolean(session?.user?.isCompanyAdmin || session?.user?.companyCanPurchaseBoosts);
 }
 
-function BumpsCard() {
+const ICON_MAP: Record<string, LucideIcon> = {
+  zap: Zap,
+  pin: PinIcon,
+  "file-text": FileText,
+  megaphone: Megaphone,
+  mail: Mail,
+  star: Star,
+  tag: Tag,
+};
+
+function BumpsCard({ product }: { product: BoostProduct }) {
   const canPurchase = useCanPurchaseBoosts();
   const { data: company } = useSupplierCompany();
   const purchase = usePurchaseBumps();
   const requestPurchase = useCreateCompanyBoostRequest();
   const [quantity, setQuantity] = useState(1);
   const [error, setError] = useState<string | null>(null);
+
+  const unitCost = product.priceCredits ?? 0;
 
   function handleBuy() {
     setError(null);
@@ -59,10 +73,10 @@ function BumpsCard() {
     <Card>
       <div className="flex items-center gap-2 mb-1">
         <Zap size={18} className="text-amber" />
-        <h4 className="text-sm font-semibold text-body-text">Bumps</h4>
+        <h4 className="text-sm font-semibold text-body-text">{product.name}</h4>
       </div>
       <p className="text-xs text-muted-text mb-3">
-        Move a listing to the front of the marketplace, as if newly posted. {BUMP_UNIT_COST_CREDITS_DISPLAY} credits each.
+        {product.description} {unitCost} credits each.
         {canPurchase && (
           <>
             {" "}
@@ -84,7 +98,7 @@ function BumpsCard() {
               ? "Buying…"
               : "Sending…"
             : canPurchase
-              ? `Buy (${quantity * BUMP_UNIT_COST_CREDITS_DISPLAY} credits)`
+              ? `Buy (${quantity * unitCost} credits)`
               : `Request ${quantity}`}
         </Button>
       </div>
@@ -99,7 +113,7 @@ function BumpsCard() {
   );
 }
 
-function PinCard() {
+function PinCard({ product }: { product: BoostProduct }) {
   const canPurchase = useCanPurchaseBoosts();
   const { data: listings } = useSupplierListings();
   const purchase = usePurchasePin();
@@ -110,6 +124,7 @@ function PinCard() {
 
   const activeListings = (listings ?? []).filter((l) => l.isAvailable);
   const pending = purchase.isPending || requestPurchase.isPending;
+  const durationPrices: Record<7 | 30, number> = { 7: product.pin7PriceCredits ?? 0, 30: product.pin30PriceCredits ?? 0 };
 
   function handlePin(listingId: string) {
     if (!picker) return;
@@ -140,15 +155,15 @@ function PinCard() {
     <Card>
       <div className="flex items-center gap-2 mb-1">
         <PinIcon size={18} className="text-amber" />
-        <h4 className="text-sm font-semibold text-body-text">Pin</h4>
+        <h4 className="text-sm font-semibold text-body-text">{product.name}</h4>
       </div>
-      <p className="text-xs text-muted-text mb-3">Pin a listing to the very top of marketplace results for a set duration.</p>
+      <p className="text-xs text-muted-text mb-3">{product.description}</p>
       <div className="flex items-center gap-2">
         <Button variant="ghost" onClick={() => setPicker(7)} className="h-9 !px-4 text-sm flex-1">
-          7 days ({PIN_DURATION_COST_CREDITS_DISPLAY[7]} credits)
+          7 days ({durationPrices[7]} credits)
         </Button>
         <Button variant="ghost" onClick={() => setPicker(30)} className="h-9 !px-4 text-sm flex-1">
-          30 days ({PIN_DURATION_COST_CREDITS_DISPLAY[30]} credits)
+          30 days ({durationPrices[30]} credits)
         </Button>
       </div>
       {!canPurchase && (
@@ -184,44 +199,101 @@ function PinCard() {
   );
 }
 
-function PlaceholderCard({ icon: Icon, title, description }: { icon: typeof FileText; title: string; description: string }) {
+// A builtinEffect "none" (admin-authored) product — a plain per-unit credit
+// purchase with no automated inventory effect (see purchaseBoostProduct's
+// own comment: the resulting CompanyTransaction row IS the sale record,
+// nothing further to fulfill inside the app).
+function CustomProductCard({ product }: { product: BoostProduct }) {
+  const canPurchase = useCanPurchaseBoosts();
+  const purchase = usePurchaseBoostProduct();
+  const requestPurchase = useCreateCompanyBoostRequest();
+  const [quantity, setQuantity] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+
+  const unitCost = product.priceCredits ?? 0;
+  const Icon = ICON_MAP[product.iconName] ?? Star;
+
+  function handleBuy() {
+    setError(null);
+    if (canPurchase) {
+      purchase.mutate(
+        { id: product.id, quantity },
+        { onError: (err) => setError(err instanceof ApiRequestError ? err.message : "Purchase failed.") }
+      );
+    } else {
+      requestPurchase.mutate(
+        { type: "product", boostProductId: product.id, quantity },
+        { onError: (err) => setError(err instanceof ApiRequestError ? err.message : "Request failed.") }
+      );
+    }
+  }
+
+  const pending = purchase.isPending || requestPurchase.isPending;
+  const requestSent = !canPurchase && requestPurchase.isSuccess;
+  const purchased = canPurchase && purchase.isSuccess;
+
   return (
-    <Card className="opacity-70">
+    <Card>
       <div className="flex items-center gap-2 mb-1">
-        <Icon size={18} className="text-muted-text" />
-        <h4 className="text-sm font-semibold text-body-text">{title}</h4>
+        <Icon size={18} className="text-amber" />
+        <h4 className="text-sm font-semibold text-body-text">{product.name}</h4>
       </div>
-      <p className="text-xs text-muted-text">{description}</p>
-      <span className="inline-block mt-2 text-xs font-medium text-muted-text bg-background border border-border/40 rounded-full px-2.5 py-1">
-        Coming soon
-      </span>
+      <p className="text-xs text-muted-text mb-3">
+        {product.description} {unitCost} credits each.
+      </p>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={1}
+          value={quantity}
+          onChange={(e) => setQuantity(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+          className="w-20 bg-background border border-border/40 text-body-text rounded h-9 px-3 focus:outline-none focus:border-supplier-purple-start transition-colors"
+        />
+        <Button onClick={handleBuy} disabled={pending} className="h-9 !px-4 text-sm">
+          {pending
+            ? canPurchase
+              ? "Buying…"
+              : "Sending…"
+            : canPurchase
+              ? `Buy (${quantity * unitCost} credits)`
+              : `Request ${quantity}`}
+        </Button>
+      </div>
+      {!canPurchase && (
+        <p className="text-xs text-muted-text mt-2">
+          You don&apos;t have permission to spend company funds directly — this sends a request to your company admin.
+        </p>
+      )}
+      {requestSent && <p className="text-xs text-success-green mt-2">Request sent — pending your company admin&apos;s approval.</p>}
+      {purchased && <p className="text-xs text-success-green mt-2">Purchased.</p>}
+      {error && <p className="text-xs text-error-red mt-2">{error}</p>}
     </Card>
   );
 }
 
 export default function ListingBoostCatalogueCard() {
+  const { data: products, isLoading, isError } = useSupplierBoostProducts();
+
   return (
     <div>
-      <h3 className="text-base font-semibold text-body-text mb-3">Boost Your Listings</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <BumpsCard />
-        <PinCard />
-        <PlaceholderCard
-          icon={FileText}
-          title="Lab Digest"
-          description="A purchasable report on who's new on SpaceSnap, buying trends, and more. Content/format TBD."
-        />
-        <PlaceholderCard
-          icon={Megaphone}
-          title="Ads"
-          description="Buy a popup ad slot shown to Members on sign-in, via the EDM popup mechanism above."
-        />
-        <PlaceholderCard
-          icon={Mail}
-          title="Newsletter"
-          description="Purchasable placement in a newsletter. Content TBD."
-        />
-      </div>
+      <h3 className="text-base font-semibold text-body-text mb-1">Boost Your Listings</h3>
+      <p className="text-sm text-muted-text mb-3">Use these to enhance your utilization rate!</p>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-text text-center py-8">Loading…</p>
+      ) : isError ? (
+        <p className="text-sm text-error-red text-center py-8">Failed to load the catalogue.</p>
+      ) : !products || products.length === 0 ? (
+        <p className="text-sm text-muted-text text-center py-8">No boost products available right now.</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {products.map((product) => {
+            if (product.builtinEffect === "bump") return <BumpsCard key={product.id} product={product} />;
+            if (product.builtinEffect === "pin") return <PinCard key={product.id} product={product} />;
+            return <CustomProductCard key={product.id} product={product} />;
+          })}
+        </div>
+      )}
     </div>
   );
 }

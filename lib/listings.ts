@@ -4,6 +4,7 @@ import { ApiValidationError } from "@/lib/api-errors";
 import type { ListingRatingAggregate } from "@/lib/ratings";
 import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
 import { getCompanyPurchasedBalance, InsufficientCompanyPurchasedBalanceError } from "@/lib/company-credits";
+import { getPinDurationPriceCredits } from "@/lib/boost-products";
 import { applyMarkup, type EffectivePricing as CompanyPricing } from "@/lib/pricing";
 
 // API contract uses the same field names as the Prisma model / DB columns
@@ -406,14 +407,6 @@ export async function activateBump(listingId: bigint, companyId: bigint) {
   });
 }
 
-// Sprint 6.12 — placeholder pricing, explicitly NOT a real product-owner
-// number (per the "use a random figure for now" instruction), same posture
-// as BUMP_UNIT_COST_CREDITS in lib/company-credits.ts.
-export const PIN_DURATION_COST_CREDITS: Record<7 | 30, number> = {
-  7: 200,
-  30: 600,
-};
-
 export class ListingNotAvailableError extends Error {
   constructor() {
     super("Only available listings can be pinned.");
@@ -425,10 +418,14 @@ export class ListingNotAvailableError extends Error {
 // company's own active listings it applies to), unlike Bumps' separate
 // buy-then-spend "ammo" flow. Re-pinning an already-pinned listing simply
 // extends/restarts its window (a new pinnedAt/pinnedUntil), not an error.
+// Price comes from the live BoostProduct row (admin-editable via
+// /admin-boost-products), not a hardcoded constant — see
+// getPinDurationPriceCredits's own comment.
 export async function purchaseAndApplyPin(companyId: bigint, listingId: bigint, durationDays: 7 | 30, userId: string) {
-  const cost = new Prisma.Decimal(creditsToSgd(PIN_DURATION_COST_CREDITS[durationDays])).toDecimalPlaces(2);
-
   return prisma.$transaction(async (tx) => {
+    const durationPrices = await getPinDurationPriceCredits(tx);
+    const cost = new Prisma.Decimal(creditsToSgd(durationPrices[durationDays])).toDecimalPlaces(2);
+
     const listing = await tx.listing.findUnique({ where: { id: listingId } });
     if (!listing || listing.companyId !== companyId) {
       throw new ListingNotFoundError();

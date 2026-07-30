@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { purchaseBumps, InsufficientCompanyPurchasedBalanceError } from "@/lib/company-credits";
 import { purchaseAndApplyPin, ListingNotFoundError, ListingNotAvailableError } from "@/lib/listings";
+import { purchaseBoostProduct, BoostProductNotFoundError, BoostProductInactiveError } from "@/lib/boost-products";
 import { NotCompanyAdminError } from "@/lib/company-membership";
 
 // 2026-07-28 "Boost catalogue — delegated spend" (Audit-LeftoverSprint.md's
@@ -45,7 +46,13 @@ interface ParsedPinBoostRequest {
   durationDays: 7 | 30;
 }
 
-export type ParsedCompanyBoostRequestFields = ParsedBumpBoostRequest | ParsedPinBoostRequest;
+interface ParsedProductBoostRequest {
+  type: "product";
+  boostProductId: bigint;
+  quantity: number;
+}
+
+export type ParsedCompanyBoostRequestFields = ParsedBumpBoostRequest | ParsedPinBoostRequest | ParsedProductBoostRequest;
 
 // Mirrors parseSpendRequestFields' shape (lib/buyer-org-spend-requests.ts) —
 // a narrower shape than the direct purchase routes' own body (no admin-only
@@ -54,8 +61,8 @@ export function parseCompanyBoostRequestFields(body: unknown): ParsedCompanyBoos
   const errors: Record<string, string[]> = {};
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
 
-  if (b.type !== "bump" && b.type !== "pin") {
-    errors.type = ["type must be one of bump, pin."];
+  if (b.type !== "bump" && b.type !== "pin" && b.type !== "product") {
+    errors.type = ["type must be one of bump, pin, product."];
   }
 
   if (b.type === "bump") {
@@ -70,6 +77,14 @@ export function parseCompanyBoostRequestFields(body: unknown): ParsedCompanyBoos
     if (b.durationDays !== 7 && b.durationDays !== 30) {
       errors.durationDays = ["durationDays must be 7 or 30."];
     }
+  } else if (b.type === "product") {
+    const rawProductId = typeof b.boostProductId === "number" ? String(b.boostProductId) : b.boostProductId;
+    if (typeof rawProductId !== "string" || !/^\d+$/.test(rawProductId)) {
+      errors.boostProductId = ["boostProductId is required."];
+    }
+    if (typeof b.quantity !== "number" || !Number.isInteger(b.quantity) || b.quantity < 1) {
+      errors.quantity = ["quantity must be an integer of at least 1."];
+    }
   }
 
   if (Object.keys(errors).length > 0) {
@@ -78,6 +93,10 @@ export function parseCompanyBoostRequestFields(body: unknown): ParsedCompanyBoos
 
   if (b.type === "bump") {
     return { type: "bump", quantity: b.quantity as number };
+  }
+  if (b.type === "product") {
+    const rawProductId = typeof b.boostProductId === "number" ? String(b.boostProductId) : (b.boostProductId as string);
+    return { type: "product", boostProductId: BigInt(rawProductId), quantity: b.quantity as number };
   }
   const rawListingId = typeof b.listingId === "number" ? String(b.listingId) : (b.listingId as string);
   return { type: "pin", listingId: BigInt(rawListingId), durationDays: b.durationDays as 7 | 30 };
@@ -88,7 +107,9 @@ export function parseCompanyBoostRequestFields(body: unknown): ParsedCompanyBoos
 // permitted member calling it too is harmless, just extra admin review). A
 // Pin request must reference one of the caller's OWN company's listings
 // (unlike a buyer-org spend request, which can target any marketplace
-// listing) — fail fast here rather than at fulfillment time.
+// listing) — fail fast here rather than at fulfillment time. A product
+// request must reference an active, custom (builtinEffect "none")
+// BoostProduct — same fail-fast reasoning.
 export async function createCompanyBoostRequest(
   requestedByUserId: string,
   companyId: bigint,
@@ -101,15 +122,26 @@ export async function createCompanyBoostRequest(
     }
   }
 
+  let productName: string | null = null;
+  if (fields.type === "product") {
+    const product = await prisma.boostProduct.findUnique({ where: { id: fields.boostProductId } });
+    if (!product || product.builtinEffect !== "none") throw new BoostProductNotFoundError();
+    if (!product.active) throw new BoostProductInactiveError();
+    productName = product.name;
+  }
+
   return prisma.$transaction(async (tx) => {
     const request = await tx.companyBoostRequest.create({
       data: {
         companyId,
         requestedByUserId,
-        type: fields.type === "bump" ? CompanyBoostRequestType.bump : CompanyBoostRequestType.pin,
+        type:
+          fields.type === "bump" ? CompanyBoostRequestType.bump : fields.type === "pin" ? CompanyBoostRequestType.pin : CompanyBoostRequestType.product,
         ...(fields.type === "bump"
           ? { quantity: fields.quantity }
-          : { listingId: fields.listingId, durationDays: fields.durationDays }),
+          : fields.type === "pin"
+            ? { listingId: fields.listingId, durationDays: fields.durationDays }
+            : { boostProductId: fields.boostProductId, quantity: fields.quantity }),
       },
     });
 
@@ -132,7 +164,9 @@ export async function createCompanyBoostRequest(
           message:
             fields.type === "bump"
               ? `${requester.name} wants to buy ${fields.quantity} Bump${fields.quantity === 1 ? "" : "s"} using company funds.`
-              : `${requester.name} wants to pin "${listingName ?? "a listing"}" for ${fields.durationDays} days using company funds.`,
+              : fields.type === "pin"
+                ? `${requester.name} wants to pin "${listingName ?? "a listing"}" for ${fields.durationDays} days using company funds.`
+                : `${requester.name} wants to buy ${fields.quantity}x ${productName} using company funds.`,
           relatedListingId: fields.type === "pin" ? fields.listingId : undefined,
         },
       });
@@ -143,7 +177,11 @@ export async function createCompanyBoostRequest(
 }
 
 const boostRequestListArgs = {
-  include: { requestedBy: { select: { id: true, name: true, email: true } }, listing: { select: { name: true } } },
+  include: {
+    requestedBy: { select: { id: true, name: true, email: true } },
+    listing: { select: { name: true } },
+    boostProduct: { select: { name: true } },
+  },
 } as const;
 
 export type CompanyBoostRequestWithRelations = Awaited<ReturnType<typeof getCompanyBoostRequests>>[number];
@@ -170,6 +208,11 @@ export function serializeCompanyBoostRequest(request: CompanyBoostRequestWithRel
     listingId: request.listingId ? request.listingId.toString() : null,
     listingName: request.listing?.name ?? null,
     durationDays: request.durationDays,
+    boostProductId: request.boostProductId ? request.boostProductId.toString() : null,
+    // Falls back once a referenced custom product has since been deleted
+    // (boostProductId goes null via onDelete: SetNull) — the request row
+    // itself is kept as a historical record either way.
+    boostProductName: request.boostProduct?.name ?? (request.type === "product" ? "a since-removed product" : null),
     declineReason: request.declineReason,
     createdAt: request.createdAt.toISOString(),
   };
@@ -198,12 +241,14 @@ export async function fulfillCompanyBoostRequest(
   }
 
   let notificationMessage: string;
+  let notificationTitle: string;
   if (request.type === CompanyBoostRequestType.bump) {
     const { bumpsAvailable } = await purchaseBumps(admin.companyId, request.quantity!, request.requestedByUserId);
     notificationMessage = `Your company admin approved your request — ${request.quantity} Bump${
       request.quantity === 1 ? "" : "s"
     } purchased (${bumpsAvailable} now available).`;
-  } else {
+    notificationTitle = "Bump purchase approved";
+  } else if (request.type === CompanyBoostRequestType.pin) {
     const listing = await purchaseAndApplyPin(
       admin.companyId,
       request.listingId!,
@@ -211,6 +256,16 @@ export async function fulfillCompanyBoostRequest(
       request.requestedByUserId
     );
     notificationMessage = `Your company admin approved your request — "${listing.name}" is now pinned for ${request.durationDays} days.`;
+    notificationTitle = "Pin purchase approved";
+  } else {
+    const { product, quantity } = await purchaseBoostProduct(
+      admin.companyId,
+      request.boostProductId!,
+      request.quantity!,
+      request.requestedByUserId
+    );
+    notificationMessage = `Your company admin approved your request — ${quantity}x ${product.name} purchased.`;
+    notificationTitle = "Purchase approved";
   }
 
   const updated = await prisma.companyBoostRequest.update({
@@ -221,7 +276,7 @@ export async function fulfillCompanyBoostRequest(
   await prisma.notification.create({
     data: {
       userId: request.requestedByUserId,
-      title: request.type === CompanyBoostRequestType.bump ? "Bump purchase approved" : "Pin purchase approved",
+      title: notificationTitle,
       message: notificationMessage,
       relatedListingId: request.listingId ?? undefined,
     },
@@ -260,7 +315,12 @@ export async function declineCompanyBoostRequest(
     await tx.notification.create({
       data: {
         userId: request.requestedByUserId,
-        title: request.type === CompanyBoostRequestType.bump ? "Bump purchase declined" : "Pin purchase declined",
+        title:
+          request.type === CompanyBoostRequestType.bump
+            ? "Bump purchase declined"
+            : request.type === CompanyBoostRequestType.pin
+              ? "Pin purchase declined"
+              : "Purchase declined",
         message: reason
           ? `Your company admin declined your request: ${reason}`
           : "Your company admin declined your request.",

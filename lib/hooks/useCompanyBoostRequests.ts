@@ -3,13 +3,15 @@ import { apiFetch } from "@/lib/api-client";
 
 export interface CompanyBoostRequest {
   id: string;
-  type: "bump" | "pin";
+  type: "bump" | "pin" | "product";
   status: "pending" | "fulfilled" | "declined";
   requestedBy: { id: string; name: string; email: string };
   quantity: number | null;
   listingId: string | null;
   listingName: string | null;
   durationDays: number | null;
+  boostProductId: string | null;
+  boostProductName: string | null;
   declineReason: string | null;
   createdAt: string;
 }
@@ -36,7 +38,8 @@ export function useCompanyBoostRequests(enabled: boolean, status?: string) {
 
 export type CreateCompanyBoostRequestInput =
   | { type: "bump"; quantity: number }
-  | { type: "pin"; listingId: string; durationDays: 7 | 30 };
+  | { type: "pin"; listingId: string; durationDays: 7 | 30 }
+  | { type: "product"; boostProductId: string; quantity: number };
 
 export function useCreateCompanyBoostRequest() {
   const invalidate = useInvalidateCompanyBoostRequests();
