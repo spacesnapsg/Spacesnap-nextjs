@@ -26,7 +26,7 @@ import {
   type Listing,
   type User,
 } from "../app/generated/prisma/client";
-import { getRevenueByCompany, getCompanyNetPayoutByTypeAndMonth, getRevenueTransactionFeed } from "./revenue";
+import { getCompanyNetPayoutByTypeAndMonth, getCompanyNetPayoutByOwner, getRevenueTransactionFeed } from "./revenue";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -111,14 +111,24 @@ async function purchaseTransaction(user: User, listing: Listing, type: Transacti
   return purchase;
 }
 
+// Sums a company's revenue-eligible transactions the same way
+// getRevenueByCompany used to (and the way getPlatformRevenueSummary still
+// does) — reconstructed via getRevenueTransactionFeed (same
+// REVENUE_TRANSACTION_TYPES filter + resolveCompany, company-scoped by
+// search) now that getRevenueByCompany itself was removed (superseded by
+// getCompanyRevenueBreakdown, lib/supplier-payables.ts, for the admin
+// "Revenue by Operator" table — see financial audit F5). The underlying
+// REVENUE_TRANSACTION_TYPES list is still live production code
+// (getPlatformRevenueSummary), so these regression assertions stay.
 async function revenueForCompany(companyId: bigint): Promise<string> {
-  const rows = await getRevenueByCompany();
-  const row = rows.find((r) => r.companyId === companyId.toString());
-  assert.ok(row, "company should appear in getRevenueByCompany output");
-  return row.revenue;
+  const { transactions } = await getRevenueTransactionFeed({ search: "Revenue Test Co" });
+  const total = transactions
+    .filter((t) => t.companyId === companyId.toString())
+    .reduce((sum, t) => sum + Number(t.amount), 0);
+  return total.toFixed(2);
 }
 
-describe("getRevenueByCompany — split-ledger F1 fix", () => {
+describe("REVENUE_TRANSACTION_TYPES — split-ledger F1 fix", () => {
   // The core regression: a real live booking charge (booking_payment) must
   // count as revenue. Before the F1 fix this returned "0.00".
   test("a live booking_payment charge counts as revenue", async () => {
@@ -281,6 +291,112 @@ describe("getCompanyNetPayoutByTypeAndMonth — net payout by type (F5)", () => 
       assert.equal(current.equipment || 0, 0);
     } finally {
       await cleanup(company, user);
+    }
+  });
+});
+
+describe("getCompanyNetPayoutByOwner — per-staff-member net earnings", () => {
+  async function createStaff(companyId: bigint) {
+    return prisma.user.create({
+      data: { name: `Staff ${uniq()}`, email: `revenue-owner-staff-${uniq()}@example.com`, password: "x", companyId },
+    });
+  }
+
+  async function ownedListing(companyId: bigint, ownerId: string | null) {
+    return prisma.listing.create({
+      data: {
+        companyId,
+        ownerId,
+        type: ListingType.space,
+        name: "Owner Test Listing",
+        priceDay: "10.00",
+        priceWeek: "60.00",
+        priceMonth: "200.00",
+      },
+    });
+  }
+
+  async function payableFor(companyId: bigint, buyer: User, listing: Listing, netAmountSgd: string, createdAt?: Date) {
+    const booking = await bookingTransaction(buyer, listing, TransactionType.booking_payment, `-${netAmountSgd}`);
+    await prisma.supplierPayable.create({
+      data: {
+        companyId,
+        bookingId: booking.id,
+        grossAmount: netAmountSgd,
+        commissionAmount: "0",
+        netAmount: netAmountSgd,
+        payoutCadence: PayoutCadence.biweekly,
+        ...(createdAt ? { createdAt } : {}),
+      },
+    });
+  }
+
+  test("attributes each payable to its listing's owner, splitting per staff member", async () => {
+    const { company, user: buyer } = await createFixture();
+    const staffA = await createStaff(company.id);
+    const staffB = await createStaff(company.id);
+    try {
+      const listingA = await ownedListing(company.id, staffA.id);
+      const listingB = await ownedListing(company.id, staffB.id);
+      await payableFor(company.id, buyer, listingA, "90.00");
+      await payableFor(company.id, buyer, listingB, "50.00");
+
+      const rows = await getCompanyNetPayoutByOwner(company.id);
+      const rowA = rows.find((r) => r.ownerId === staffA.id)!;
+      const rowB = rows.find((r) => r.ownerId === staffB.id)!;
+      assert.equal(rowA.netPayout, 900);
+      assert.equal(rowB.netPayout, 500);
+    } finally {
+      await cleanup(company, buyer);
+      await prisma.user.delete({ where: { id: staffA.id } });
+      await prisma.user.delete({ where: { id: staffB.id } });
+    }
+  });
+
+  test("a listing with no owner lands in the 'unassigned' bucket, not dropped", async () => {
+    const { company, user: buyer } = await createFixture();
+    try {
+      const listing = await ownedListing(company.id, null);
+      await payableFor(company.id, buyer, listing, "20.00");
+
+      const rows = await getCompanyNetPayoutByOwner(company.id);
+      const unassigned = rows.find((r) => r.ownerId === "unassigned")!;
+      assert.ok(unassigned, "unassigned bucket should be present when nonzero");
+      assert.equal(unassigned.ownerName, "Unassigned");
+      assert.equal(unassigned.netPayout, 200);
+    } finally {
+      await cleanup(company, buyer);
+    }
+  });
+
+  test("a staff member with zero sales still appears at 0; no unassigned row when it's zero", async () => {
+    const { company, user: buyer } = await createFixture();
+    const staff = await createStaff(company.id);
+    try {
+      const rows = await getCompanyNetPayoutByOwner(company.id);
+      const row = rows.find((r) => r.ownerId === staff.id)!;
+      assert.equal(row.netPayout, 0);
+      assert.ok(!rows.some((r) => r.ownerId === "unassigned"));
+    } finally {
+      await cleanup(company, buyer);
+      await prisma.user.delete({ where: { id: staff.id } });
+    }
+  });
+
+  test("a from/to range excludes a payable outside it", async () => {
+    const { company, user: buyer } = await createFixture();
+    const staff = await createStaff(company.id);
+    try {
+      const listing = await ownedListing(company.id, staff.id);
+      const longAgo = new Date("2020-01-01T00:00:00.000Z");
+      await payableFor(company.id, buyer, listing, "40.00", longAgo);
+
+      const rows = await getCompanyNetPayoutByOwner(company.id, { from: new Date("2026-01-01") });
+      const row = rows.find((r) => r.ownerId === staff.id)!;
+      assert.equal(row.netPayout, 0);
+    } finally {
+      await cleanup(company, buyer);
+      await prisma.user.delete({ where: { id: staff.id } });
     }
   });
 });

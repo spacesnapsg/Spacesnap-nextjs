@@ -26,3 +26,31 @@ export function useSupplierRevenueByType(range: { from?: string | null; to?: str
     select: (data) => data.months,
   });
 }
+
+export interface RevenueByOwner {
+  ownerId: string;
+  ownerName: string;
+  netPayout: number;
+}
+
+// "My Earnings" card's admin-only "By Supplier" toggle — each staff member's
+// own net payout in the given range. Admin-gated server-side
+// (requireCompanyAdmin); `enabled` lets the caller skip the fetch entirely
+// for non-admin viewers, who never see this view.
+export function useSupplierRevenueByMember(
+  enabled: boolean,
+  range: { from?: string | null; to?: string | null } = {}
+) {
+  const { from, to } = range;
+  const params = new URLSearchParams();
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const qs = params.toString();
+
+  return useQuery({
+    queryKey: ["supplier-revenue-by-member", from ?? null, to ?? null],
+    queryFn: () => apiFetch<{ members: RevenueByOwner[] }>(`/api/supplier/revenue/by-member${qs ? `?${qs}` : ""}`),
+    select: (data) => data.members,
+    enabled,
+  });
+}

@@ -7,6 +7,8 @@ export interface Listing {
   id: string;
   companyId: string;
   companyName?: string;
+  ownerId: string | null;
+  ownerName?: string | null;
   averageRating: number | null;
   ratingCount: number;
   type: ListingType;

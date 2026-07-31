@@ -11,7 +11,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ListingType, BookingType, TransactionType, PayoutCadence, Prisma, type Listing } from "../app/generated/prisma/client";
 import { createBookingWithDebit, confirmBookingWithAudit, declineBookingPendingResolution } from "./bookings";
 import { createCheckIn, checkOutCheckIn } from "./check-ins";
-import { getSupplierPendingPayableBalance, getPayableReconciliation } from "./supplier-payables";
+import { getSupplierPendingPayableBalance, getPayableReconciliation, getCompanyRevenueBreakdown } from "./supplier-payables";
 import { createPurchaseWithDebit } from "./purchases";
 
 const TEST_PAYMENT_METHOD_ID = "pm_card_visa";
@@ -332,6 +332,119 @@ describe("getSupplierPendingPayableBalance", () => {
       assert.equal(balance.toString(), "-0.5");
     } finally {
       await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+});
+
+describe("getCompanyRevenueBreakdown — Gross/Markup/Commission/Supplier's Cut split (F5)", () => {
+  function findRow(rows: Awaited<ReturnType<typeof getCompanyRevenueBreakdown>>, companyId: bigint) {
+    return rows.find((r) => r.companyId === companyId.toString())!;
+  }
+
+  // Same worked example as the F2 markup/commission test above: base 100,
+  // 50% markup, 10% commission → member paid 150 (=1500 credits). Markup is
+  // the 50% markup itself (50 SGD = 500 credits); commission is 10% of base
+  // (10 SGD = 100 credits); supplier keeps 90 SGD = 900 credits.
+  test("booking: base 100 @ 50% markup / 10% commission → markup 500, commission 100, supplierNet 900, gross 1500", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id, "100.00");
+      const booking = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(10),
+        endDate: daysFromNow(10),
+        cost: new Prisma.Decimal("150.00"),
+        baseAmount: new Prisma.Decimal("100.00"),
+        commissionPercent: new Prisma.Decimal("10"),
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await confirmBookingWithAudit(booking.id);
+      const checkIn = await createCheckIn({ userId: user.id, listingId: listing.id, bookingId: booking.id });
+      await checkOutCheckIn(checkIn.id);
+
+      const row = findRow(await getCompanyRevenueBreakdown(), company.id);
+      assert.equal(row.markup, 500);
+      assert.equal(row.commission, 100);
+      assert.equal(row.supplierNet, 900);
+      assert.equal(row.gross, 1500);
+      assert.equal(row.markup + row.commission + row.supplierNet, row.gross);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  // Consumables have no markup by construction — the whole commissionAmount
+  // is pure commission. RSP 100 (=1000 credits) @ 7%.
+  test("consumable: RSP 100 @ 7% → markup 0, commission 70, supplierNet 930, gross 1000", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createConsumableListing(company.id, "100.00");
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.purchased_topup, amount: "100.00", description: "test topup" },
+      });
+      await createPurchaseWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        quantity: 1,
+        cost: new Prisma.Decimal("100.00"),
+        unitPrice: new Prisma.Decimal("100.00"),
+      });
+
+      const row = findRow(await getCompanyRevenueBreakdown(), company.id);
+      assert.equal(row.markup, 0);
+      assert.equal(row.commission, 70);
+      assert.equal(row.supplierNet, 930);
+      assert.equal(row.gross, 1000);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  // A supplier-declined booking: the penalty is platform income (folds into
+  // "commission"), but no markup is attributed even though the original
+  // booking's sgdAmount/baseAmount are still nonzero — commissionAmount is 0
+  // on a decline row by construction, which is what gates markup off.
+  test("declined booking: penalty lands in commission, markup stays 0", async () => {
+    const company = await createCompany();
+    const user = await createUser();
+    try {
+      const listing = await createSpaceListing(company.id, "5.00");
+      const declining = await createBookingWithDebit({
+        userId: user.id,
+        listingId: listing.id,
+        bookingType: BookingType.daily,
+        startDate: daysFromNow(1), // < 3 days out — 100% penalty tier
+        endDate: daysFromNow(1),
+        cost: listing.priceDay!,
+        paymentMethodId: TEST_PAYMENT_METHOD_ID,
+      });
+      await declineBookingPendingResolution(declining.id);
+
+      const row = findRow(await getCompanyRevenueBreakdown(), company.id);
+      assert.equal(row.markup, 0);
+      assert.equal(row.commission, 5); // 100% of the 0.50 SGD penalty = 5 credits
+      assert.equal(row.supplierNet, -5);
+      assert.equal(row.gross, 0);
+      assert.equal(row.markup + row.commission + row.supplierNet, row.gross);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, [user.id]);
+    }
+  });
+
+  test("includes zero-revenue companies", async () => {
+    const company = await createCompany();
+    try {
+      const row = findRow(await getCompanyRevenueBreakdown(), company.id);
+      assert.equal(row.markup, 0);
+      assert.equal(row.commission, 0);
+      assert.equal(row.supplierNet, 0);
+      assert.equal(row.gross, 0);
+    } finally {
+      await cleanupCompanyAndUsers(company.id, []);
     }
   });
 });

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
 import { CalendarCheck, CalendarDays, CheckCircle2, Layers, Package, Star } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Card from "@/components/Card";
@@ -8,7 +9,7 @@ import Pagination from "@/components/Pagination";
 import DateRangePicker from "@/components/DateRangePicker";
 import { useSupplierBookings, useSupplierBookingsFeed, type BookingStatus } from "@/lib/hooks/useSupplierBookings";
 import { useSupplierListings } from "@/lib/hooks/useSupplierListings";
-import { useSupplierRevenueByType } from "@/lib/hooks/useSupplierRevenue";
+import { useSupplierRevenueByType, useSupplierRevenueByMember } from "@/lib/hooks/useSupplierRevenue";
 import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
 
 const STATUS_STYLES: Record<BookingStatus, string> = {
@@ -82,7 +83,16 @@ function RevenueTooltip({
 // superset (the same total, broken down by listing type, with a real range
 // picker), so useSupplierRevenue/GET /api/supplier/revenue were removed
 // rather than left as an unused duplicate.
+// Company-admin-only "By Supplier" toggle (2026-07-30) — attributes net
+// payout to whichever staff member owns the listing that earned it, so an
+// admin can see each teammate's own contribution, not just the company
+// total. Regular staff never see this toggle at all — they always get the
+// unconditional "By Listing Type" view below, same as before this existed.
 function PlatformRevenueCard() {
+  const { data: session } = useSession();
+  const isCompanyAdmin = Boolean(session?.user?.isCompanyAdmin);
+  const [view, setView] = useState<"type" | "member">("type");
+
   const range = useDateRangeFilter("all");
   const { data: months, isLoading, isError } = useSupplierRevenueByType({ from: range.from, to: range.to });
   const data = useMemo(
@@ -90,28 +100,74 @@ function PlatformRevenueCard() {
     [months]
   );
 
+  const {
+    data: memberRows,
+    isLoading: memberLoading,
+    isError: memberError,
+  } = useSupplierRevenueByMember(isCompanyAdmin && view === "member", { from: range.from, to: range.to });
+
   return (
     <Card className="mb-8">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
           <h2 className="text-lg font-semibold text-body-text">My Earnings</h2>
           <p className="text-xs text-muted-text mt-0.5">
-            Your net payout by listing type, per month (after SpaceSnap&apos;s commission).
+            {view === "member"
+              ? "Net payout by staff member, in the selected range (after SpaceSnap's commission)."
+              : "Your net payout by listing type, per month (after SpaceSnap's commission)."}
           </p>
         </div>
-        <DateRangePicker
-          preset={range.preset}
-          from={range.from}
-          to={range.to}
-          onPresetChange={range.changePreset}
-          onFromChange={range.changeFrom}
-          onToChange={range.changeTo}
-          accent="supplier"
-        />
+        <div className="flex flex-col items-start sm:items-end gap-2">
+          {isCompanyAdmin && (
+            <div className="flex gap-1.5">
+              {(["type", "member"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setView(option)}
+                  className={`h-7 px-2.5 rounded-full text-xs font-medium border transition-colors ${
+                    view === option
+                      ? "bg-supplier-purple-start/15 border-supplier-purple-start text-supplier-purple-start"
+                      : "bg-card border-border text-muted-text hover:text-body-text"
+                  }`}
+                >
+                  {option === "type" ? "By Listing Type" : "By Supplier"}
+                </button>
+              ))}
+            </div>
+          )}
+          <DateRangePicker
+            preset={range.preset}
+            from={range.from}
+            to={range.to}
+            onPresetChange={range.changePreset}
+            onFromChange={range.changeFrom}
+            onToChange={range.changeTo}
+            accent="supplier"
+          />
+        </div>
       </div>
 
       <div className="h-72">
-        {isLoading ? (
+        {view === "member" ? (
+          memberLoading ? (
+            <div className="h-full flex items-center justify-center text-sm text-muted-text">Loading…</div>
+          ) : memberError ? (
+            <div className="h-full flex items-center justify-center text-sm text-error-red">Failed to load revenue.</div>
+          ) : !memberRows || memberRows.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-sm text-muted-text">No staff members yet.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={memberRows}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                <XAxis dataKey="ownerName" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} />
+                <Tooltip content={<RevenueTooltip />} cursor={{ fill: "#ffffff", opacity: 0.06 }} />
+                <Bar dataKey="netPayout" name="Net Payout" fill="#9333ea" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          )
+        ) : isLoading ? (
           <div className="h-full flex items-center justify-center text-sm text-muted-text">Loading…</div>
         ) : isError ? (
           <div className="h-full flex items-center justify-center text-sm text-error-red">Failed to load revenue.</div>
@@ -130,17 +186,19 @@ function PlatformRevenueCard() {
         )}
       </div>
 
-      <div className="flex flex-wrap gap-4 mt-4">
-        <span className="flex items-center gap-1.5 text-xs text-muted-text">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#9333ea" }} /> Space
-        </span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-text">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#1a9d96" }} /> Equipment
-        </span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-text">
-          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#f59e0b" }} /> Consumables
-        </span>
-      </div>
+      {view === "type" && (
+        <div className="flex flex-wrap gap-4 mt-4">
+          <span className="flex items-center gap-1.5 text-xs text-muted-text">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#9333ea" }} /> Space
+          </span>
+          <span className="flex items-center gap-1.5 text-xs text-muted-text">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#1a9d96" }} /> Equipment
+          </span>
+          <span className="flex items-center gap-1.5 text-xs text-muted-text">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: "#f59e0b" }} /> Consumables
+          </span>
+        </div>
+      )}
     </Card>
   );
 }

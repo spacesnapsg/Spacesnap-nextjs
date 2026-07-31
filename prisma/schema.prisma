@@ -1555,6 +1555,7 @@ model User {
   buyerOrgSpendRequestsResolved BuyerOrgSpendRequest[]         @relation("BuyerOrgSpendRequestResolver")
   marketplaceEnquiriesMade      MarketplaceEnquiry[]           @relation("MarketplaceEnquiryRequester")
   marketplaceEnquiriesResolved  MarketplaceEnquiry[]           @relation("MarketplaceEnquiryResolver")
+  ownedListings                 Listing[]                      @relation("ListingOwner")
 
   accounts Account[]
   sessions Session[]
@@ -1769,8 +1770,15 @@ model Listing {
   acceptsInternalSignoff Boolean     @default(false) @map("accepts_internal_signoff")
   createdAt              DateTime    @default(now()) @map("created_at")
   updatedAt              DateTime    @updatedAt @map("updated_at")
+  // The individual staff member this listing is attributed to for per-supplier
+  // earnings reporting (company-admin "by individual supplier" toggle) —
+  // nullable, no backfill for pre-existing listings ("Unassigned"), same
+  // idiom as CompanyBoostRequest.boostProductId. Defaults to the creating
+  // user at POST time; reassignable only by a company admin thereafter.
+  ownerId                String?     @map("owner_id")
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner   User?   @relation("ListingOwner", fields: [ownerId], references: [id], onDelete: SetNull)
 
   requiredCertificates  ListingRequiredCertificate[]
   bookings              Booking[]

@@ -418,7 +418,16 @@ export default function AdminFinancialsPage() {
                     <tr className="border-b border-border">
                       <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text">Company</th>
                       <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
-                        Revenue
+                        Gross
+                      </th>
+                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
+                        Markup
+                      </th>
+                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
+                        Commission
+                      </th>
+                      <th className="py-3 px-6 text-xs font-medium uppercase tracking-wide text-muted-text text-right">
+                        Supplier&apos;s Cut
                       </th>
                     </tr>
                   </thead>
@@ -427,7 +436,16 @@ export default function AdminFinancialsPage() {
                       <tr key={row.companyId} className="border-b border-border/60 last:border-0">
                         <td className="py-3 px-6 text-sm text-body-text whitespace-nowrap">{row.companyName}</td>
                         <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">
-                          {row.revenue} credits
+                          {fmt(row.gross)} credits
+                        </td>
+                        <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">
+                          {fmt(row.markup)} credits
+                        </td>
+                        <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">
+                          {fmt(row.commission)} credits
+                        </td>
+                        <td className="py-3 px-6 text-sm text-body-text text-right whitespace-nowrap">
+                          {fmt(row.supplierNet)} credits
                         </td>
                       </tr>
                     ))}

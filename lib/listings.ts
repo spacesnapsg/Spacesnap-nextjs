@@ -20,7 +20,11 @@ const LISTING_TYPES = new Set<string>(Object.values(ListingType));
 // standard Prisma pattern for typing a query's `include` shape.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const listingWithCertificatesArgs = {
-  include: { requiredCertificates: { include: { certificate: true } }, company: { select: { name: true } } },
+  include: {
+    requiredCertificates: { include: { certificate: true } },
+    company: { select: { name: true } },
+    owner: { select: { name: true } },
+  },
 } satisfies Prisma.ListingDefaultArgs;
 
 export type ListingWithCertificates = Prisma.ListingGetPayload<typeof listingWithCertificatesArgs>;
@@ -65,6 +69,8 @@ export function serializeListing(
     id: listing.id.toString(),
     companyId: listing.companyId.toString(),
     companyName: "company" in listing ? listing.company.name : undefined,
+    ownerId: listing.ownerId,
+    ownerName: "owner" in listing ? (listing.owner?.name ?? null) : undefined,
     averageRating: ratingAggregate?.averageRating ?? null,
     ratingCount: ratingAggregate?.ratingCount ?? 0,
     type: listing.type,
@@ -125,6 +131,7 @@ interface ParsedFields {
   pricePerUnit?: number | null;
   stockQuantity?: number | null;
   packSize?: string | null;
+  ownerId?: string | null;
 }
 
 function isNullableString(value: unknown): value is string | null | undefined {
@@ -248,6 +255,17 @@ export function parseListingFields(body: unknown, opts: { partial: boolean }): P
       errors.packSize = ["packSize must be a string."];
     } else {
       result.packSize = b.packSize ?? null;
+    }
+  }
+
+  // Reassignment itself is gated (company-admin only, same-company target)
+  // at the route layer — this is just shape validation, same "pure parse"
+  // role the rest of this function plays.
+  if (has("ownerId")) {
+    if (!isNullableString(b.ownerId)) {
+      errors.ownerId = ["ownerId must be a string or null."];
+    } else {
+      result.ownerId = b.ownerId ?? null;
     }
   }
 

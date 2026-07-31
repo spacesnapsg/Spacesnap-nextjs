@@ -94,6 +94,90 @@ export function serializeReconciliation(r: PayableReconciliation) {
   };
 }
 
+export interface CompanyRevenueBreakdown {
+  companyId: string;
+  companyName: string;
+  gross: number;
+  markup: number;
+  commission: number;
+  supplierNet: number;
+}
+
+const revenueBreakdownPayableInclude = {
+  booking: { select: { sgdAmount: true, baseAmount: true } },
+} satisfies Prisma.SupplierPayableInclude;
+
+// System-admin "Revenue by Operator" table (financial audit F5) — a further
+// decomposition of getPayableReconciliation's commissionKept into pure
+// Markup vs pure Commission, per company. Recognized at COMPLETION (this
+// same SupplierPayable ledger), not at charge time — supersedes the old
+// Transaction-based getRevenueByCompany (lib/revenue.ts), which recognized
+// revenue the moment a member was charged, before a booking necessarily
+// completed.
+//
+// Prisma can't aggregate/groupBy across a relation join (booking.sgdAmount/
+// baseAmount), so this fetches every payable + its booking and reduces in
+// JS — same idiom getRevenueByCompany used for its own cross-relation sum.
+//
+// Per row: supplierNet = netAmount (always). penaltyDeduction always folds
+// into commission (it's platform income on a decline, same as
+// getPayableReconciliation's commissionKept). Markup only exists for a
+// NORMAL booking completion (booking set AND commissionAmount > 0) — a
+// decline/cancel row leaves commissionAmount at 0 by construction, so it can
+// never be misattributed as markup even though its original booking's
+// sgdAmount/baseAmount are still nonzero. Consumables have no markup by
+// definition (supplierGrossForConsumable is a pure percentage split), so
+// their whole commissionAmount is pure commission.
+//
+// Worked examples (lib/supplier-payables.test.ts): base 100 @ 50%
+// markup/10% commission → markup 50, commission 10, supplierNet 90, gross
+// 150. Consumable RSP 100 @ 7% → markup 0, commission 7, supplierNet 93,
+// gross 100. Identity preserved in every case: gross == markup + commission
+// + supplierNet (mirrors getPayableReconciliation's grossCollected ==
+// commissionKept + supplierNet, one level more granular).
+export async function getCompanyRevenueBreakdown(): Promise<CompanyRevenueBreakdown[]> {
+  const [companies, payables] = await Promise.all([
+    prisma.company.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    prisma.supplierPayable.findMany({ include: revenueBreakdownPayableInclude }),
+  ]);
+
+  const zero = new Prisma.Decimal(0);
+  const totals = new Map<string, { markup: Prisma.Decimal; commission: Prisma.Decimal; supplierNet: Prisma.Decimal }>();
+
+  for (const p of payables) {
+    const key = p.companyId.toString();
+    const acc = totals.get(key) ?? { markup: zero, commission: zero, supplierNet: zero };
+
+    let markup = zero;
+    let commission = p.penaltyDeduction;
+    if (p.booking && p.commissionAmount.gt(0)) {
+      markup = p.booking.sgdAmount.sub(p.booking.baseAmount);
+      commission = commission.add(p.commissionAmount.sub(markup));
+    } else {
+      commission = commission.add(p.commissionAmount);
+    }
+
+    totals.set(key, {
+      markup: acc.markup.add(markup),
+      commission: acc.commission.add(commission),
+      supplierNet: acc.supplierNet.add(p.netAmount),
+    });
+  }
+
+  return companies.map((c) => {
+    const t = totals.get(c.id.toString()) ?? { markup: zero, commission: zero, supplierNet: zero };
+    const gross = t.markup.add(t.commission).add(t.supplierNet);
+    return {
+      companyId: c.id.toString(),
+      companyName: c.name,
+      gross: sgdToCredits(Number(gross)),
+      markup: sgdToCredits(Number(t.markup)),
+      commission: sgdToCredits(Number(t.commission)),
+      supplierNet: sgdToCredits(Number(t.supplierNet)),
+    };
+  });
+}
+
 // Written once a booking's service is actually rendered — check-out flips
 // active -> completed (checkOutCheckIn, lib/check-ins.ts) — never for a
 // cancelled/declined booking, since that money was refunded to the user

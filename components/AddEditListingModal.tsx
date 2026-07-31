@@ -1,12 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
 import { Plus, Trash2, Image as ImageIcon, Check, X, Search } from "lucide-react";
 import Modal from "./Modal";
 import Button from "./Button";
 import Input from "./Input";
 import type { Listing, ListingType } from "@/lib/hooks/useListings";
 import { useCreateListing, useUpdateListing, type ListingFormFields } from "@/lib/hooks/useSupplierListings";
+import { useCompanyMembers } from "@/lib/hooks/useCompanyMembers";
 import { useCertificateCatalog, type Certificate } from "@/lib/hooks/useCertificates";
 import { useSubmitCertificate } from "@/lib/hooks/useSupplierCertificates";
 import { CERTIFICATE_CATEGORIES } from "@/lib/certificate-categories";
@@ -28,6 +30,7 @@ interface ListingFormState {
   isAvailable: boolean;
   requireApproval: boolean;
   acceptsInternalSignoff: boolean;
+  ownerId: string;
 }
 
 const EMPTY_FORM: ListingFormState = {
@@ -46,6 +49,7 @@ const EMPTY_FORM: ListingFormState = {
   isAvailable: true,
   requireApproval: false,
   acceptsInternalSignoff: false,
+  ownerId: "",
 };
 
 function buildInitialForm(listing?: Listing): ListingFormState {
@@ -67,10 +71,15 @@ function buildInitialForm(listing?: Listing): ListingFormState {
     isAvailable: listing.isAvailable,
     requireApproval: listing.requireApproval,
     acceptsInternalSignoff: listing.acceptsInternalSignoff,
+    ownerId: listing.ownerId ?? "",
   };
 }
 
-function toFields(form: ListingFormState): ListingFormFields {
+// `includeOwner` is only true when the viewer is a company admin editing an
+// existing listing — reassignment is admin-only (route-enforced), and a new
+// listing's owner always defaults server-side to its creator regardless of
+// what's sent, so there's nothing meaningful to send for the "add" form.
+function toFields(form: ListingFormState, includeOwner: boolean): ListingFormFields {
   const isConsumable = form.type === "consumables";
   return {
     name: form.name,
@@ -88,6 +97,7 @@ function toFields(form: ListingFormState): ListingFormFields {
     stockQuantity: isConsumable ? (form.stockQuantity ? Number(form.stockQuantity) : null) : null,
     packSize: isConsumable ? form.packSize || null : null,
     requiredCertificateIds: form.requiredCertificateIds,
+    ...(includeOwner ? { ownerId: form.ownerId || null } : {}),
   };
 }
 
@@ -99,6 +109,9 @@ interface AddEditListingModalProps {
 }
 
 export default function AddEditListingModal({ open, onClose, mode, listing }: AddEditListingModalProps) {
+  const { data: session } = useSession();
+  const isCompanyAdmin = Boolean(session?.user?.isCompanyAdmin);
+  const { data: members } = useCompanyMembers();
   const [form, setForm] = useState<ListingFormState>(() => buildInitialForm(listing));
   const [certDropdownOpen, setCertDropdownOpen] = useState(false);
   const [certSearch, setCertSearch] = useState("");
@@ -179,7 +192,7 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const fields = toFields(form);
+    const fields = toFields(form, mode === "edit" && isCompanyAdmin);
     if (mode === "edit" && listing) {
       updateListing.mutate({ id: listing.id, fields }, { onSuccess: onClose });
     } else {
@@ -497,6 +510,28 @@ export default function AddEditListingModal({ open, onClose, mode, listing }: Ad
             placeholder="Describe this listing..."
             className="w-full mt-1.5 bg-background border border-border/40 text-body-text placeholder:text-muted-text rounded px-4 py-3 focus:outline-none focus:border-supplier-purple-start transition-colors resize-none"
           />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-text">Owner</label>
+          {mode === "edit" && isCompanyAdmin ? (
+            <select
+              value={form.ownerId}
+              onChange={(e) => updateField("ownerId", e.target.value)}
+              className="w-full mt-1.5 bg-background border border-border/40 text-body-text rounded h-11 px-4 focus:outline-none focus:border-supplier-purple-start transition-colors"
+            >
+              <option value="">Unassigned</option>
+              {(members ?? []).map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="mt-1.5 text-sm text-body-text">
+              Owned by {mode === "edit" ? (listing?.ownerName ?? "Unassigned") : "you"}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border/40 pt-4">

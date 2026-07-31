@@ -7,10 +7,16 @@ export interface PlatformRevenueSummary {
   totalRevenue: string;
 }
 
-export interface CompanyRevenue {
+// Recognized at booking/sale COMPLETION (SupplierPayable ledger), not at
+// charge time — financial audit F5. gross == markup + commission +
+// supplierNet for every row.
+export interface CompanyRevenueBreakdown {
   companyId: string;
   companyName: string;
-  revenue: string;
+  gross: number;
+  markup: number;
+  commission: number;
+  supplierNet: number;
 }
 
 export interface RevenueTransactionRow {
@@ -25,7 +31,7 @@ export interface RevenueTransactionRow {
 
 interface AdminFinancials {
   summary: PlatformRevenueSummary;
-  revenueByCompany: CompanyRevenue[];
+  revenueByCompany: CompanyRevenueBreakdown[];
   transactionFeed: RevenueTransactionRow[];
   transactionFeedMeta: { page: number; perPage: number; total: number };
 }

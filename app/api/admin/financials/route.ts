@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSystemAdmin } from "@/lib/admin-auth";
-import {
-  getPlatformRevenueSummary,
-  getRevenueByCompany,
-  getRevenueTransactionFeed,
-} from "@/lib/revenue";
+import { getPlatformRevenueSummary, getRevenueTransactionFeed } from "@/lib/revenue";
+import { getCompanyRevenueBreakdown } from "@/lib/supplier-payables";
 
 // Backs both the Admin Overview stat cards (summary only) and the Admin
 // Financials page (revenue-by-operator + cross-company transaction feed) —
@@ -26,7 +23,7 @@ export async function GET(request: NextRequest) {
 
   const [summary, revenueByCompany, { transactions: transactionFeed, meta: transactionFeedMeta }] = await Promise.all([
     getPlatformRevenueSummary(),
-    getRevenueByCompany(),
+    getCompanyRevenueBreakdown(),
     getRevenueTransactionFeed({ search: feedSearch, page: feedPage }),
   ]);
 

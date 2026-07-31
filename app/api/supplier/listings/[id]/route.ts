@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireSupplier } from "@/lib/supplier-auth";
+import { requireSupplier, requireCompanyAdmin } from "@/lib/supplier-auth";
 import { ApiValidationError, forbiddenResponse, notFoundResponse, validationErrorResponse } from "@/lib/api-errors";
 import {
   assertPricingMatchesType,
@@ -40,6 +40,22 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       (body as Record<string, unknown>).requiredCertificateIds
     );
 
+    // Reassigning ownerId is a company-admin-only action (any supplier can
+    // edit a listing's other fields via requireSupplier() above) — mirrors
+    // the same "admin changes something belonging to a teammate" shape as
+    // lib/company-membership.ts/lib/promotions.ts.
+    if (fields.ownerId !== undefined) {
+      const adminAuth = await requireCompanyAdmin();
+      if ("error" in adminAuth) return adminAuth.error;
+
+      if (fields.ownerId !== null) {
+        const target = await prisma.user.findUnique({ where: { id: fields.ownerId }, select: { companyId: true } });
+        if (!target || target.companyId !== auth.companyId) {
+          return forbiddenResponse("Owner must be a member of the same company.");
+        }
+      }
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       await tx.listing.update({
         where: { id: listingId },
@@ -54,6 +70,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           ...(fields.acceptsInternalSignoff !== undefined
             ? { acceptsInternalSignoff: fields.acceptsInternalSignoff }
             : {}),
+          ...(fields.ownerId !== undefined ? { ownerId: fields.ownerId } : {}),
           type: effective.type,
           priceDay: effective.priceDay,
           priceWeek: effective.priceWeek,
@@ -75,7 +92,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
       return tx.listing.findUniqueOrThrow({
         where: { id: listingId },
-        include: { requiredCertificates: { include: { certificate: true } } },
+        include: { requiredCertificates: { include: { certificate: true } }, owner: { select: { name: true } } },
       });
     });
 

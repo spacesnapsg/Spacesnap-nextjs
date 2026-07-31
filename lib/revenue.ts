@@ -1,6 +1,7 @@
 import { Prisma, type TransactionType } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sgdToCredits } from "@/lib/credit-units";
+import { getCompanyMembers } from "@/lib/company-membership";
 
 // Every revenue figure this module returns is a formatted "credits" string
 // (this app's cosmetic display unit, see lib/credit-units.ts) — the
@@ -93,35 +94,6 @@ export async function getPlatformRevenueSummary(): Promise<PlatformRevenueSummar
     .negated();
 
   return { totalCompanies, totalBookings, totalRevenue: formatAsCredits(totalRevenue) };
-}
-
-export interface CompanyRevenue {
-  companyId: string;
-  companyName: string;
-  revenue: string;
-}
-
-// Admin Financials "revenue by operator" table — every company, including
-// ones with zero revenue so far.
-export async function getRevenueByCompany(): Promise<CompanyRevenue[]> {
-  const [companies, transactions] = await Promise.all([
-    prisma.company.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
-    getRevenueTransactions(),
-  ]);
-
-  const totals = new Map<string, Prisma.Decimal>();
-  for (const txn of transactions) {
-    const company = resolveCompany(txn);
-    if (!company) continue;
-    const key = company.companyId.toString();
-    totals.set(key, (totals.get(key) ?? new Prisma.Decimal(0)).plus(txn.amount));
-  }
-
-  return companies.map((c) => ({
-    companyId: c.id.toString(),
-    companyName: c.name,
-    revenue: formatAsCredits((totals.get(c.id.toString()) ?? new Prisma.Decimal(0)).negated()),
-  }));
 }
 
 export interface RevenueTransactionRow {
@@ -304,5 +276,64 @@ export async function getCompanyNetPayoutByTypeAndMonth(
     });
     cursor.setMonth(cursor.getMonth() + 1);
   }
+  return result;
+}
+
+export interface CompanyOwnerNetPayout {
+  ownerId: string; // or "unassigned"
+  ownerName: string; // "Unassigned" for the null-owner bucket
+  netPayout: number; // credits
+}
+
+// Company-admin "by individual supplier" toggle — each staff member's own
+// net earnings within the company (attributed via whichever Listing they
+// own, see Listing.ownerId's own schema comment), for a date range. A plain
+// total-in-range per staff member, NOT bucketed by month (unlike
+// getCompanyNetPayoutByTypeAndMonth above) — this stays a 2-axis view
+// (member x range), same complexity budget as the existing "by type" chart,
+// rather than a 3-axis owner x month breakdown.
+//
+// Prisma can't aggregate/groupBy across a relation join (listing.ownerId),
+// so this fetches every payable + its listing's owner and reduces in JS —
+// same idiom getCompanyNetPayoutByTypeAndMonth already uses for listing type.
+export async function getCompanyNetPayoutByOwner(
+  companyId: bigint,
+  { from, to }: { from?: Date; to?: Date } = {}
+): Promise<CompanyOwnerNetPayout[]> {
+  const ownerSelect = { listing: { select: { ownerId: true } } };
+  const [members, payables] = await Promise.all([
+    getCompanyMembers(companyId),
+    prisma.supplierPayable.findMany({
+      where: {
+        companyId,
+        ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+      },
+      select: {
+        netAmount: true,
+        booking: { select: ownerSelect },
+        purchase: { select: ownerSelect },
+        bulkOrderRequest: { select: ownerSelect },
+      },
+    }),
+  ]);
+
+  const totals = new Map<string, Prisma.Decimal>();
+  for (const p of payables) {
+    const listing = p.booking?.listing ?? p.purchase?.listing ?? p.bulkOrderRequest?.listing ?? null;
+    const key = listing?.ownerId ?? "unassigned";
+    totals.set(key, (totals.get(key) ?? new Prisma.Decimal(0)).plus(p.netAmount));
+  }
+
+  const result: CompanyOwnerNetPayout[] = members.map((m) => ({
+    ownerId: m.id,
+    ownerName: m.name,
+    netPayout: sgdToCredits(Number(totals.get(m.id) ?? new Prisma.Decimal(0))),
+  }));
+
+  const unassigned = totals.get("unassigned");
+  if (unassigned && !unassigned.isZero()) {
+    result.push({ ownerId: "unassigned", ownerName: "Unassigned", netPayout: sgdToCredits(Number(unassigned)) });
+  }
+
   return result;
 }

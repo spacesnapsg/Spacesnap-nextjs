@@ -26,6 +26,9 @@ export interface ListingFormFields {
   stockQuantity?: number | null;
   packSize?: string | null;
   requiredCertificateIds: string[];
+  // Company-admin-only reassignment — omit entirely for non-admins (the
+  // route silently allows omission, but a non-admin sending it gets a 403).
+  ownerId?: string | null;
 }
 
 function useInvalidateSupplierListings() {

@@ -20,7 +20,7 @@ export async function GET() {
 
   const listings = await prisma.listing.findMany({
     where: { companyId: auth.companyId },
-    include: { requiredCertificates: { include: { certificate: true } } },
+    include: { requiredCertificates: { include: { certificate: true } }, owner: { select: { name: true } } },
     orderBy: { id: "asc" },
   });
 
@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
     const listing = await prisma.listing.create({
       data: {
         companyId: auth.companyId,
+        ownerId: auth.userId,
         name: fields.name!,
         type: effective.type,
         location: fields.location ?? null,
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
           ? { requiredCertificates: { create: requiredCertificateIds.map((certificateId) => ({ certificateId })) } }
           : {}),
       },
-      include: { requiredCertificates: { include: { certificate: true } } },
+      include: { requiredCertificates: { include: { certificate: true } }, owner: { select: { name: true } } },
     });
 
     const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId }, select: { name: true } });
