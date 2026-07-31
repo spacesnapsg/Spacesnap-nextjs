@@ -613,17 +613,46 @@ describe("getBuyerOrgTransactions (real DB)", () => {
         data: { userId: outsider.id, type: TransactionType.topup, amount: "10.00", description: "Outsider row" },
       });
 
-      const page1 = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 1, pageSize: 3 });
+      const page1 = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 1, pageSize: 3 }, "all", admin.id);
       assert.equal(page1.total, 6); // 5 admin rows + 1 member row, not the outsider's
       assert.equal(page1.items.length, 3);
       assert.ok(page1.items.every((t) => t.description !== "Outsider row"));
 
-      const page2 = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 2, pageSize: 3 });
+      const page2 = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 2, pageSize: 3 }, "all", admin.id);
       assert.equal(page2.items.length, 3);
     } finally {
       await prisma.transaction.deleteMany({ where: { userId: { in: [admin.id, member.id, outsider.id] } } });
       await cleanupUsers([admin.id, member.id, outsider.id]);
       await cleanupOrgs([org.id, otherOrg.id]);
+    }
+  });
+
+  test("scope filters to the viewer's own rows (personal) or every other member's (others)", async () => {
+    const org = await prisma.buyerOrganization.create({ data: { name: `Transactions Scope Org ${Date.now()}` } });
+    const admin = await createUser({ buyerOrganizationId: org.id, isBuyerOrgAdmin: true });
+    const member = await createUser({ buyerOrganizationId: org.id });
+    try {
+      await prisma.transaction.create({
+        data: { userId: admin.id, type: TransactionType.topup, amount: "10.00", description: "Admin row" },
+      });
+      await prisma.transaction.create({
+        data: { userId: member.id, type: TransactionType.booking, amount: "-5.00", description: "Member row" },
+      });
+
+      const personal = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 1, pageSize: 10 }, "personal", admin.id);
+      assert.equal(personal.total, 1);
+      assert.equal(personal.items[0].description, "Admin row");
+
+      const others = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 1, pageSize: 10 }, "others", admin.id);
+      assert.equal(others.total, 1);
+      assert.equal(others.items[0].description, "Member row");
+
+      const all = await getBuyerOrgTransactions(org.id, { types: null, from: null, to: null, page: 1, pageSize: 10 }, "all", admin.id);
+      assert.equal(all.total, 2);
+    } finally {
+      await prisma.transaction.deleteMany({ where: { userId: { in: [admin.id, member.id] } } });
+      await cleanupUsers([admin.id, member.id]);
+      await cleanupOrgs([org.id]);
     }
   });
 });

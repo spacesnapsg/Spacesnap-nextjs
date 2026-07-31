@@ -363,14 +363,29 @@ export function serializeBuyerOrgStats(stats: Awaited<ReturnType<typeof getBuyer
   };
 }
 
+// "Personal" = the viewing admin's own rows, "Others" = every other member's
+// — the attribution split described (but never given a home) in the old
+// sprint plan's "Personal/Others toggle" note, now that there's an actual
+// pooled spend to attribute (buyer-org-funded bookings/purchases plus pool
+// top-ups all land in this same feed).
+export type BuyerOrgTransactionScope = "all" | "personal" | "others";
+
 // Paginated (10/page default), date-range-filterable credit-movement feed
 // across every member of the org — same ActivityQuery shape as
 // getBuyerOrgActivity below (its `types` field is simply unused here, no
 // separate parser needed). Backs the "Manage Organization" modal's Overview
 // tab Credit Movement section.
-export async function getBuyerOrgTransactions(buyerOrganizationId: bigint, query: ActivityQuery) {
+export async function getBuyerOrgTransactions(
+  buyerOrganizationId: bigint,
+  query: ActivityQuery,
+  scope: BuyerOrgTransactionScope,
+  viewerUserId: string
+) {
   const where = {
-    user: { buyerOrganizationId },
+    user: {
+      buyerOrganizationId,
+      ...(scope === "personal" ? { id: viewerUserId } : scope === "others" ? { id: { not: viewerUserId } } : {}),
+    },
     ...(query.from || query.to
       ? {
           createdAt: {
@@ -385,7 +400,7 @@ export async function getBuyerOrgTransactions(buyerOrganizationId: bigint, query
     prisma.transaction.findMany({
       where,
       include: {
-        user: { select: { name: true } },
+        user: { select: { id: true, name: true } },
         booking: { include: { listing: { select: { name: true } } } },
         bulkOrderRequest: { include: { listing: { select: { name: true } } } },
       },
@@ -402,6 +417,7 @@ export async function getBuyerOrgTransactions(buyerOrganizationId: bigint, query
 export function serializeBuyerOrgTransaction(t: Awaited<ReturnType<typeof getBuyerOrgTransactions>>["items"][number]) {
   return {
     id: t.id.toString(),
+    userId: t.user.id,
     userName: t.user.name,
     type: t.type,
     amount: sgdToCredits(Number(t.amount)),

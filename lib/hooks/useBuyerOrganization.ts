@@ -63,8 +63,11 @@ export interface BuyerOrgActivityEntry {
   createdAt: string;
 }
 
+export type BuyerOrgTransactionScope = "all" | "personal" | "others";
+
 export interface BuyerOrgTransaction {
   id: string;
+  userId: string;
   userName: string;
   type: string;
   amount: number;
@@ -201,15 +204,17 @@ export function useBuyerOrgActivity(
 export function useBuyerOrgTransactions(
   enabled: boolean,
   dateRange: { from: string | null; to: string | null },
-  page: number
+  page: number,
+  scope: BuyerOrgTransactionScope = "all"
 ) {
   const params = new URLSearchParams();
   if (dateRange.from) params.set("from", dateRange.from);
   if (dateRange.to) params.set("to", dateRange.to);
   params.set("page", String(page));
+  params.set("scope", scope);
 
   return useQuery({
-    queryKey: ["buyer-organization-transactions", dateRange, page],
+    queryKey: ["buyer-organization-transactions", dateRange, page, scope],
     queryFn: () =>
       apiFetch<BuyerOrgTransactionsPageResult>(`/api/buyer-organization/transactions?${params.toString()}`),
     enabled,

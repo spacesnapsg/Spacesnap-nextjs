@@ -20,6 +20,7 @@ import {
   useBuyerOrgSpendRequests,
   useFulfillBuyerOrgSpendRequest,
   useDeclineBuyerOrgSpendRequest,
+  type BuyerOrgTransactionScope,
 } from "@/lib/hooks/useBuyerOrganization";
 import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
 
@@ -105,11 +106,18 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
   );
 
   const transactionsRange = useDateRangeFilter("all");
+  const [transactionsScope, setTransactionsScope] = useState<BuyerOrgTransactionScope>("all");
   const { data: transactionsData, isLoading: transactionsLoading } = useBuyerOrgTransactions(
     open,
     { from: transactionsRange.from, to: transactionsRange.to },
-    transactionsRange.page
+    transactionsRange.page,
+    transactionsScope
   );
+
+  function changeTransactionsScope(next: BuyerOrgTransactionScope) {
+    setTransactionsScope(next);
+    transactionsRange.resetPage();
+  }
 
   function handleError(err: unknown) {
     setError(err instanceof ApiRequestError ? err.message : "Something went wrong.");
@@ -247,7 +255,7 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
               </Section>
 
               <Section icon={Coins} title="Credit Movement">
-                <div className="mb-3">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
                   <DateRangePicker
                     preset={transactionsRange.preset}
                     from={transactionsRange.from}
@@ -256,13 +264,31 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
                     onFromChange={transactionsRange.changeFrom}
                     onToChange={transactionsRange.changeTo}
                   />
+                  <div className="flex gap-1.5">
+                    {(["all", "personal", "others"] as const).map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => changeTransactionsScope(option)}
+                        className={`h-7 px-2.5 rounded-full text-xs font-medium border transition-colors ${
+                          transactionsScope === option
+                            ? "bg-user-teal-start/15 border-user-teal-start text-user-teal-end"
+                            : "bg-card border-border text-muted-text hover:text-body-text"
+                        }`}
+                      >
+                        {option === "all" ? "All" : option === "personal" ? "Personal" : "Others"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {transactionsLoading && !transactionsData ? (
                   <p className="text-sm text-muted-text py-2">Loading…</p>
                 ) : !transactionsData || transactionsData.transactions.length === 0 ? (
                   <p className="text-sm text-muted-text py-2">
-                    No credit movement {transactionsRange.from || transactionsRange.to ? "in the selected date range" : "yet"}.
+                    No credit movement
+                    {transactionsScope === "personal" ? " for you" : transactionsScope === "others" ? " from other members" : ""}
+                    {transactionsRange.from || transactionsRange.to ? " in the selected date range" : " yet"}.
                   </p>
                 ) : (
                   <>
