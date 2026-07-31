@@ -1000,8 +1000,12 @@ export async function declineBookingPendingResolution(
       });
     }
 
-    await tx.supplierPayable.create({
-      data: {
+    // upsert, not create — same bookingId-unique-collision risk as the
+    // cancel path below (see that call site's comment); `update: {}` leaves
+    // an existing row untouched rather than crashing or overwriting it.
+    await tx.supplierPayable.upsert({
+      where: { bookingId: updated.id },
+      create: {
         companyId: existing.listing.companyId,
         bookingId: updated.id,
         grossAmount: new Prisma.Decimal(0),
@@ -1013,6 +1017,7 @@ export async function declineBookingPendingResolution(
         netAmount: penaltyDeduction.negated(),
         payoutCadence,
       },
+      update: {},
     });
 
     let credit = null;
@@ -1377,8 +1382,17 @@ export async function cancelBookingWithRefund(
         });
       }
 
-      await tx.supplierPayable.create({
-        data: {
+      // upsert, not create: `bookingId` is @unique, and a booking can already
+      // carry a payable from an earlier lifecycle event (e.g. a decline
+      // penalty) despite still reading as pending/confirmed here — a bare
+      // create() 500s on the unique constraint in that case (found live
+      // 2026-07-31 UAT against booking #188, which has a paid decline-penalty
+      // payable but was never transitioned out of "pending"). The `update: {}`
+      // no-op deliberately leaves that existing row untouched rather than
+      // overwriting a real commission/penalty figure with this zero-effect one.
+      await tx.supplierPayable.upsert({
+        where: { bookingId: updated.id },
+        create: {
           companyId: existing.listing.companyId,
           bookingId: updated.id,
           grossAmount: new Prisma.Decimal(0),
@@ -1389,6 +1403,7 @@ export async function cancelBookingWithRefund(
           netAmount: new Prisma.Decimal(0),
           payoutCadence,
         },
+        update: {},
       });
 
       await tx.activityLog.create({

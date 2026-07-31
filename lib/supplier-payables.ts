@@ -196,8 +196,14 @@ export async function createCompletedBookingPayable(tx: Prisma.TransactionClient
   const commissionAmount = booking.sgdAmount.sub(grossAmount).toDecimalPlaces(2);
   const { tier } = await getCompanySupplierTier(booking.listing.companyId, tx);
 
-  await tx.supplierPayable.create({
-    data: {
+  // upsert, not create: `bookingId` is @unique on SupplierPayable, and — same
+  // risk as the cancel path in lib/bookings.ts (found live 2026-07-31 UAT,
+  // see that file's comment) — a booking could in principle already carry a
+  // payable from an earlier inconsistent state. `update: {}` leaves any
+  // existing row untouched rather than crashing or overwriting it.
+  await tx.supplierPayable.upsert({
+    where: { bookingId: booking.id },
+    create: {
       companyId: booking.listing.companyId,
       bookingId: booking.id,
       grossAmount,
@@ -206,6 +212,7 @@ export async function createCompletedBookingPayable(tx: Prisma.TransactionClient
       netAmount: grossAmount,
       payoutCadence: payoutCadenceForSupplierTier(tier),
     },
+    update: {},
   });
 }
 
