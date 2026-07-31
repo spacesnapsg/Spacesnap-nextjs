@@ -52,6 +52,19 @@ const BOOKING_STATUS_STYLES: Record<UserBooking["status"], string> = {
   declined_pending_resolution: "bg-red-400/15 text-red-400 border-red-400/30",
 };
 
+// `capitalize` (used at both BOOKING_STATUS_STYLES call sites below) only
+// title-cases whitespace-separated words, so it can't fix up a snake_case
+// value like declined_pending_resolution — every other status is one word,
+// which is why only this one needs an explicit label.
+const BOOKING_STATUS_LABELS: Record<UserBooking["status"], string> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  active: "Active",
+  completed: "Completed",
+  cancelled: "Cancelled",
+  declined_pending_resolution: "Declined – Pending Resolution",
+};
+
 const BULK_ORDER_STATUS_STYLES: Record<MyBulkOrderRequest["status"], string> = {
   pending: "bg-amber/15 text-amber border-amber/30",
   confirmed: "bg-success-green/15 text-success-green border-success-green/30",
@@ -218,9 +231,9 @@ function ActivityRow({
       {booking && (
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span
-            className={`rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${BOOKING_STATUS_STYLES[booking.status]}`}
+            className={`rounded-full border px-2.5 py-1 text-xs font-medium ${BOOKING_STATUS_STYLES[booking.status]}`}
           >
-            {booking.status}
+            {BOOKING_STATUS_LABELS[booking.status]}
           </span>
           {canRate &&
             (booking.rating ? (
@@ -271,9 +284,9 @@ function BookingRow({
 
       <div className="flex flex-col items-end gap-1 shrink-0">
         <span
-          className={`rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${BOOKING_STATUS_STYLES[booking.status]}`}
+          className={`rounded-full border px-2.5 py-1 text-xs font-medium ${BOOKING_STATUS_STYLES[booking.status]}`}
         >
-          {booking.status}
+          {BOOKING_STATUS_LABELS[booking.status]}
         </span>
         {actionable && (
           <div className="flex items-center gap-3">

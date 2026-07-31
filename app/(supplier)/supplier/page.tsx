@@ -21,6 +21,19 @@ const STATUS_STYLES: Record<BookingStatus, string> = {
   declined_pending_resolution: "bg-error-red/15 text-error-red border-error-red/30",
 };
 
+// The `capitalize` class below only title-cases whitespace-separated words —
+// it can't fix up a snake_case value like declined_pending_resolution, which
+// is why that status needs an explicit label instead (every other
+// BookingStatus is one word, so capitalize alone was enough for those).
+const STATUS_LABELS: Record<BookingStatus, string> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  active: "Active",
+  completed: "Completed",
+  cancelled: "Cancelled",
+  declined_pending_resolution: "Declined – Pending Resolution",
+};
+
 function StatCard({ label, value, icon: Icon }: { label: string; value: string; icon: typeof CalendarCheck }) {
   return (
     <Card className="flex flex-col gap-4">
@@ -324,9 +337,9 @@ export default function SupplierAnalyticsPage() {
                       <td className="py-3 pr-4 text-body-text whitespace-nowrap">{booking.supplierNet} credits</td>
                       <td className="py-3 pr-4 whitespace-nowrap">
                         <span
-                          className={`inline-block rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${STATUS_STYLES[booking.status]}`}
+                          className={`inline-block rounded-full border px-2.5 py-1 text-xs font-medium ${STATUS_STYLES[booking.status]}`}
                         >
-                          {booking.status}
+                          {STATUS_LABELS[booking.status]}
                         </span>
                       </td>
                       <td className="py-3 text-muted-text whitespace-nowrap">{booking.startDate}</td>
