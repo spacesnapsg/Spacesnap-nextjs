@@ -120,7 +120,19 @@ export default function RequestPurchaseModal({
                 <p className="text-body-text font-medium">1 unit</p>
                 <p className="text-body-text font-medium mt-2">{cost} credits</p>
               </div>
-              <FundingSourceSelector value={fundingSource} onChange={setFundingSource} permission="purchase" />
+              <FundingSourceSelector
+                value={fundingSource}
+                onChange={(value) => {
+                  setFundingSource(value);
+                  // Switching funding source can switch which mutation
+                  // backs `errorMessage` (createPurchase vs
+                  // createSpendRequest) — reset both so a stale error from
+                  // the previous source doesn't linger on screen.
+                  createPurchase.reset();
+                  createSpendRequest.reset();
+                }}
+                permission="purchase"
+              />
             </div>
           ) : (
             <div className="border-t border-border/40 pt-4 flex flex-col gap-1.5">

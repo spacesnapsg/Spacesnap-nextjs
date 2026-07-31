@@ -192,7 +192,7 @@ export default function FinancialsPage() {
             </span>
             <span className="text-white/80 text-sm">Purchased Credits</span>
           </div>
-          <p className="text-white text-3xl font-extrabold">{wallet.available} Credits</p>
+          <p className="text-white text-3xl font-extrabold">{wallet.purchased} Credits</p>
           <p className="text-white/70 text-xs mt-1 mb-4">
             {wallet.held > 0 ? `${wallet.balance} total · ${wallet.held} held on confirmed bulk orders` : `Spendable on consumables & cert fees`}
           </p>
