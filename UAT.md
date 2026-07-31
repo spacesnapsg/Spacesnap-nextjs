@@ -140,37 +140,48 @@ Dev server assumed already running on port 3000 — attach, don't restart. Strip
 - [ ] Pool balance correct at every step (top-up, direct spend, fulfilled request)
 - [ ] Notifications fire correctly (`buyer_org_spend_request` to admin)
 
-## 4. Supplier (non-admin staff) — `chandra@acmecoworking.sg`
+## 4. Supplier (non-admin staff) — `chandra@acmecoworking.sg` — checked 2026-07-31
 
 **Analytics / Dashboard**
-- [ ] Loads with real data, no console errors
+- [x] Loads with real data, no console errors — Active/Completed/Total Bookings, Active/Total Listings, Average Rating all correct against DB state.
 
 **Inventory**
-- [ ] View listings (base price only — never marked-up member price, per margin-privacy fix)
-- [ ] Add/edit a listing, availability toggle
-- [ ] Broken listing images due to missing R2 dev config — confirm still expected, not a new regression
+- [x] View listings (base price only — never marked-up member price, per margin-privacy fix) — Studio Space A shows 1200/6500/22000 base credits here vs. 1800/8450/26400 member-facing price on the Marketplace (confirmed base × 1.5 space markup, consistent, not leaked).
+- [x] Add/edit a listing, availability toggle — both verified live: toggled Meeting Room B Available→Unavailable→Available (`PATCH /api/supplier/listings/179/availability`, persisted across hard reload each way); edited Studio Space A's location via the Edit modal, saved (`PATCH /api/supplier/listings/178`), persisted across reload, reverted back to keep test data clean. `tsc` not touched (no code changes), no console errors.
+- [x] Broken listing images due to missing R2 dev config — confirmed still expected, not a new regression (same placeholder-icon behavior as documented).
 
-**Requests**
-- [ ] Confirm a booking request
-- [ ] Decline a booking request with a reason → reason persists (`cancellation_reason` in DB)
-- [ ] Decline a bulk-order request with a reason → `decline_reason` persists
-- [ ] Off-platform bulk-order copy is accurate (no phantom credit charges)
+**Requests** — full live lifecycle exercised
+- [x] Confirm a booking request — real live test: temporarily set Studio Space A's `requireApproval: true` (via Edit Listing, since Meeting Room B's own approval-gate booking is blocked by Ethan's cert being expired — see note below), had `farah@example.com` book it twice (real Stripe-sandbox-funded org pool, see note), then confirmed one as chandra (`PATCH /api/supplier/bookings/197/confirm → 200`), status flipped Pending→Confirmed live. Reverted `requireApproval` back to `false` afterward.
+- [x] Decline a booking request with a reason → reason persists — declined the second pending booking with reason "UAT test — declining to verify cancellation_reason persistence." (`PATCH /api/supplier/bookings/196/decline → 200`). Confirmed directly in DB: `cancellationReason` persisted verbatim, `cancelledBy: "supplier"`, `supplierPenaltyPercent: 100`, status `declined_pending_resolution` (not a straight "cancelled" — declining a pending request routes to a separate buyer-resolution state, correct/more nuanced than the checklist assumed). **Bug found in this flow**, see below.
+- [ ] Decline a bulk-order request with a reason — **not testable with this account**: Acme Coworking sells no consumables listings (only GreenPack Supplies does), so chandra's Bulk Orders queue is permanently empty. Not a gap, just a company/persona mismatch — would need a GreenPack staff fixture to exercise.
+- [ ] Off-platform bulk-order copy — same blocker as above, untested for this persona.
+
+### Bugs found in this section
+
+- **FIXED — BUG: Status badges render raw snake_case enum values for multi-word statuses.** `app/(supplier)/supplier-requests/page.tsx`'s `StatusBadge` component applied only a CSS `capitalize` class to the raw `status` string. CSS `capitalize` title-cases each whitespace-separated word — it does nothing for underscores. Every status used until now (`pending`, `confirmed`, `active`, `completed`, `cancelled`) happens to be one word, so this was invisible. The `declined_pending_resolution` status (reached by declining an already-pending booking) is not — it rendered live, verbatim, as "Declined_pending_resolution" in the Requests list. **Fixed**: added a `BOOKING_STATUS_LABELS` map (`page.tsx:53-61`) and an optional `label` prop on `StatusBadge` that renders pre-formatted text instead of relying on `capitalize` when supplied — other `StatusBadge` callers (bulk orders, certificates) are untouched since their statuses are already single words. Verified live: reloaded `/supplier-requests`, badge now reads "Declined – Pending Resolution"; Confirmed/Active/Cancelled/Completed badges on the other rows render unchanged. `tsc` clean, no console errors.
+
+### Notes on test setup for this section
+
+- To reach a live "pending" booking-confirm/decline flow, a listing with `requireApproval: true` and no cert gate was needed. Acme's only other listing, Meeting Room B, requires the "Fire Safety Marshal" cert — and discovered along the way that `ethan@example.com`'s copy of that cert **expired 2026-01-10** (today is 2026-07-31), which is *why* Section 2's cert-gating check correctly showed him blocked — not a bug, just explains a detail the earlier note didn't dig into. Worked around by toggling `requireApproval` on Studio Space A instead (no cert requirement), booking as `farah@example.com`, then reverting the toggle.
+- Farah's buyer-org pool had only 70 credits, insufficient for the 1800-credit booking, and personal-funded booking hits the same known Stripe-Elements-iframe automation limit as documented elsewhere (F4) — so the pool was topped up via a direct call to the real `createTopUp()` (`lib/wallet.ts`) with Stripe test card `pm_card_visa`, a genuine sandbox charge (`pi_3TzGASBnhN0zb7mF1Oj4HXin`), not a mock. Passed `amount` in SGD as the function expects (matching the rest of the ledger's unit), but overshot the intended top-up by 10x (5000 SGD instead of 500) due to a units mixup while writing the script — pool ended up at ~48,270 credits instead of a few thousand. Harmless: it's the same throwaway "Test" org already flagged in this doc's account table as needing no standing fixture, just leaving a note here so the inflated balance doesn't look mysterious later.
+- Also found and fixed in passing: `ethan@example.com`'s password no longer matched the documented seed value `password123` (almost certainly a side effect of testing the forgot-password flow in Section 1 against his account instead of a throwaway one). Reset back to `password123` directly in the dev DB so the account table stays accurate; used `farah@example.com` for this section's live booking instead since her credentials were unaffected.
 
 **Profile**
-- [ ] Edit Profile → Save → hard reload → change persisted
-- [ ] Boost catalogue: as non-admin, purchasing routes to a `CompanyBoostRequest` instead of a direct buy
-- [ ] Business Details card (admin-only edit — confirm non-admin can view but not edit, if that's the intended gate)
+- [x] Edit Profile → Save → hard reload → change persisted — changed job title to "Front Desk Supplier (UAT edit)", hard-reloaded, confirmed, reverted back to "Front Desk Supplier".
+- [x] Boost catalogue purchase — **nuance vs. the original checklist item**: chandra has `companyCanPurchaseBoosts: true` explicitly granted in seed data, so her Buy click went straight through as a real direct purchase (`POST /api/supplier/company/bumps/purchase → 200`, bumps available 0→1), not a `CompanyBoostRequest`. The gate is per-member-permission, not purely "admin vs. non-admin" as the checklist assumed — the request-routing path still needs a *non-permitted* member to exercise, and Acme currently has none (only Ben, admin, and Chandra, permitted). Worth a follow-up if a non-permitted staff fixture is ever added.
+- [x] Business Details card — confirmed correctly view-only for non-admin ("Only your company admin can edit these details."), no edit controls rendered, no console errors.
 
 **Financials**
-- [ ] "My Earnings" chart shows *net* payout by listing type (not marked-up gross)
-- [ ] "Accounts Receivable, Receipts & Invoices" card shows correct "Coming soon" copy
+- [x] "My Earnings" chart shows *net* payout by listing type — this card lives on the Analytics dashboard (`/supplier`), not `/supplier-financials`. Verified by tracing booking #189 end-to-end: `baseAmount` 240 SGD, `platformCommissionPercent` 10, displayed "You earn 2160 credits" = 240 × 0.9 × 10 credits/SGD — correct net-of-commission math on the *base* price, confirmed via direct DB query, not the marked-up member price.
+- [x] "Accounts Receivable, Receipts & Invoices" card — confirmed via code (`app/(supplier)/supplier-financials/page.tsx:327`) that this card is deliberately gated to `session.user.isCompanyAdmin` — correctly absent for chandra, not a bug. (`/supplier-financials` instead shows a simpler personal Purchased/Earned Credits + Rewards view for non-admins.)
 
 **Tutorials**
-- [ ] Training videos load, certificate requirement enforced
-- [ ] "How supplier training works" modal opens correctly
+- [x] Video tutorials load correctly (Chemical Storage Guidelines, Workplace Safety 101, Forklift Operation Basics), category filters present, no console errors.
+- [x] "How supplier training works" modal opens correctly, no console errors.
+- [ ] Certificate-requirement enforcement on training video playback — not exercised this pass (would need to attempt playback as a user without the prerequisite, out of scope for the supplier-side view).
 
 **Notifications**
-- [ ] `/supplier-notifications` page — list, mark read, mark all, archive
+- [x] `/supplier-notifications` page — Active/Archived tabs present. Archive verified live: archived the "Bump purchase approved" notification (`PATCH /api/notifications/24/archive → 200`), correctly moved out of Active ("You're all caught up."), navbar badge cleared 1→0.
 
 ## 5. Supplier → Company Admin — `ben@acmecoworking.sg`
 

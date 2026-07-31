@@ -50,6 +50,19 @@ const BOOKING_STATUS_STYLES: Record<BookingStatus, string> = {
   declined_pending_resolution: "bg-error-red/15 text-error-red border-error-red/30",
 };
 
+// StatusBadge's CSS `capitalize` only title-cases whitespace-separated words,
+// so it can't fix up a snake_case enum value like declined_pending_resolution
+// on its own — every other BookingStatus happens to be one word, which is
+// why this needs an explicit label map rather than relying on capitalize.
+const BOOKING_STATUS_LABELS: Record<BookingStatus, string> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  active: "Active",
+  completed: "Completed",
+  cancelled: "Cancelled",
+  declined_pending_resolution: "Declined – Pending Resolution",
+};
+
 const BULK_ORDER_STATUS_STYLES: Record<BulkOrderStatus, string> = {
   pending: "bg-amber/15 text-amber border-amber/30",
   confirmed: "bg-success-green/15 text-success-green border-success-green/30",
@@ -115,10 +128,10 @@ function FilterPills<T extends string>({
   );
 }
 
-function StatusBadge({ status, styles }: { status: string; styles: string }) {
+function StatusBadge({ status, label, styles }: { status: string; label?: string; styles: string }) {
   return (
-    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${styles}`}>
-      {status}
+    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium ${label ? "" : "capitalize"} ${styles}`}>
+      {label ?? status}
     </span>
   );
 }
@@ -162,7 +175,11 @@ function BookingRow({
         <p className="text-supplier-purple-end font-bold whitespace-nowrap" title="Your earnings on this booking">
           You earn {booking.supplierNet} credits
         </p>
-        <StatusBadge status={booking.status} styles={BOOKING_STATUS_STYLES[booking.status]} />
+        <StatusBadge
+          status={booking.status}
+          label={BOOKING_STATUS_LABELS[booking.status]}
+          styles={BOOKING_STATUS_STYLES[booking.status]}
+        />
         {booking.status === "pending" && (
           <div className="flex items-center gap-2">
             <Button
