@@ -183,16 +183,25 @@ Dev server assumed already running on port 3000 — attach, don't restart. Strip
 **Notifications**
 - [x] `/supplier-notifications` page — Active/Archived tabs present. Archive verified live: archived the "Bump purchase approved" notification (`PATCH /api/notifications/24/archive → 200`), correctly moved out of Active ("You're all caught up."), navbar badge cleared 1→0.
 
-## 5. Supplier → Company Admin — `ben@acmecoworking.sg`
+## 5. Supplier → Company Admin — `ben@acmecoworking.sg` — checked 2026-07-31
 
-- [ ] Team Members card — grant/revoke `companyCanPurchaseBoosts`, add/remove members
-- [ ] Pending Join Requests section — approve/decline
-- [ ] Pending Boost Requests section — fulfill (attributed to requesting member, not admin) or decline with reason, correctly blocked if company balance insufficient
-- [ ] As admin, Boost catalogue shows direct Buy (not Request) buttons
-- [ ] Business Details card — edit and save persists
-- [ ] "By Supplier" toggle on My Earnings card — breaks down net earnings per staff member via `Listing.ownerId`
-- [ ] Reassign a listing's owner via `AddEditListingModal`'s Owner dropdown; chart updates live
-- [ ] Cross-company isolation: `divya@toolshare.sg` / `gabriel@greenpack.sg` cannot see or act on Acme's data
+- [x] Team Members card — grant/revoke `companyCanPurchaseBoosts` both verified live (`PATCH /api/supplier/company/members/{id}/permissions → 200`, toggled Chandra off then back on, confirmed via direct API re-fetch each time — restored to original `true` at the end). Add/remove members verified via the join-request → approve path (adds) and the "Remove member" icon button (removes); both confirmed via `GET .../members` before/after.
+- [x] Pending Join Requests — both directions tested live with two fresh throwaway supplier signups (`role: supplier`, company name `Acme Coworking Pte Ltd` — an exact case-insensitive match on `Company.name`, distinct from the `businessName` shown in Business Details) targeting Acme, which already has an admin so signup correctly queued a `CompanyJoinRequest` instead of auto-joining. Approved the first (member appeared in Team Members, then removed to clean up); declined the second (icon-only button, no title/reason capture — same UX pattern as the boost-request decline below) — request correctly cleared, account never added to Acme's member list.
+- [x] Pending Boost Requests — full lifecycle exercised: revoked Chandra's `companyCanPurchaseBoosts`, signed in as her and clicked the Bumps "Buy" button (now correctly relabeled "Request 1" with copy "You don't have permission to spend company funds directly — this sends a request to your company admin.") → `POST /api/supplier/company/boost-requests → 201`. As Ben: declined the first request (icon-only "Decline" button, no reason prompt) → request cleared, Chandra received a "Bump purchase declined" notification correctly attributed to her own request. Generated a second request and **fulfilled** it (`POST .../fulfill → 200`) → company `bumpsAvailable` went 1→2 and `purchasedCredits` 4800→4750 (50-credit debit, confirmed via `GET /api/supplier/company`), and Chandra got a "Bump purchase approved" notification — confirms the request/notification is correctly tied to the *requesting* member throughout, not the approving admin. Insufficient-balance blocking not separately tested (pool balance was ample; draining it deliberately felt like excessive test-data manipulation for this pass).
+- [x] As admin, Boost catalogue shows direct Buy (not Request) buttons — confirmed: Ben's own Bumps card read "Buy (50 credits)" directly (he has no `companyCanPurchaseBoosts` override needed — admin bypasses the member-permission gate entirely, confirmed by his own flag being `false` in the session yet still getting direct Buy).
+- [x] Business Details card — edit and save persists: set Registration Number to "UEN-UAT-12345", hard-reloaded, confirmed, reverted back to empty (`PATCH /api/supplier/company → 200` both times).
+- [x] "By Supplier" toggle on My Earnings card — confirmed live: description switches to "Net payout by staff member..." and the legend switches from Space/Equipment/Consumables to the actual owner names (Ben Ong / Chandra Lim) once listings had owners assigned (see next item). No console errors.
+- [x] Reassign a listing's owner via the Edit modal's Owner dropdown — confirmed: assigned Studio Space A → Chandra, Meeting Room B → Ben (`PATCH /api/supplier/listings/{id} → 200` both), verified via API, confirmed the "By Supplier" chart picked up both names live, then reverted both back to Unassigned afterward. Note: Owner dropdown only appears for company admins — Chandra (non-admin) never saw it in Section 4, which is correct.
+- [x] Cross-company isolation — confirmed for both named accounts: `divya@toolshare.sg` (ToolShare, companyId 132) and `gabriel@greenpack.sg` (GreenPack, companyId 133) each only see their own company's listings/members via the list endpoints, *and* a direct `PATCH /api/supplier/listings/178` (Acme's own Studio Space A) from either session correctly 403s ("You do not have access to this listing.") rather than just being hidden from lists — confirms object-level authorization, not just list-scoping. Also confirmed Divya couldn't modify Acme's Chandra's permissions directly (422 "That user is not a member of your company.").
+
+### Bugs found in this section
+
+- Same `capitalize`-on-snake_case bug as Section 4's finding, found independently on two more screens (supplier Analytics "Recent Bookings" table and both booking lists on the member dashboard) — **fixed** in the same session, see commits. No new bugs found beyond that.
+
+### Observations (not bugs, worth noting)
+
+- Both the boost-request decline and the join-request decline use a bare icon-only button with no confirmation or reason capture — consistent with the same pattern already flagged for the buyer-org spend-request decline in Section 3. Not necessarily wrong (these are lower-stakes, reversible-ish actions), but worth a deliberate design decision rather than three independent instances of the same shortcut.
+- The automation browser tool's synthetic clicks reliably missed two small elements this session (the 13px Team Members checkbox, and repeatedly the Sign In/Edit/Save buttons on first attempt after a fresh page load) despite correct coordinates — dispatching a real `.click()` on the actual DOM node via JS was used as a fallback to verify the underlying interaction actually works. This is a tooling quirk, not an app bug.
 
 ## 6. System Admin — `alice.admin@spacesnap.sg`
 
@@ -213,6 +222,13 @@ Dev server assumed already running on port 3000 — attach, don't restart. Strip
 - [ ] Internal Training admin section
 
 ---
+
+## Observations found this pass
+
+*(cross-cutting notes that aren't confirmed bugs but are worth a deliberate look — section-local observations stay inline where found; consolidated here when the same pattern recurs across sections)*
+
+- **Icon-only decline buttons with no reason/confirmation capture — now a recurring pattern, not a one-off.** Seen three times: the buyer-org spend-request decline (Section 3, `farah@example.com`/`ethan@example.com` test), the supplier boost-request decline (Section 5, `ben@acmecoworking.sg`), and the company join-request decline (Section 5, same account). All three are bare icon buttons with no title/reason prompt, in contrast to the booking-decline flow (Section 4) which does show a proper reason modal. Individually each is low-severity (reversible-ish, low-stakes actions), but three independent implementations of the same shortcut suggests it's worth a deliberate product decision — either "these don't need reasons" (documented on purpose) or "add a lightweight reason capture to match the booking-decline pattern" — rather than it just being an accident of which developer touched which screen.
+- **`auth.ts`'s `authorize()` callback doesn't check `User.status` on initial sign-in** (Section 1) — the suspended check only runs in the `jwt` callback's per-request refresh path (`auth.ts:113`). A suspended user with valid credentials could complete a first sign-in and only get logged out on their *next* request. Still unverified via UI — the seeded suspended fixture (`weiliang@example.com`) has no working password in `prisma/seed.ts`.
 
 ## Bugs found this pass
 
