@@ -1,5 +1,6 @@
 import { CheckCircle2, Lock } from "lucide-react";
 import Modal from "@/components/Modal";
+import CertificateIcon from "@/components/CertificateIcon";
 import type { Certificate } from "@/lib/hooks/useCertificates";
 import type { Credential } from "@/lib/hooks/useCredentials";
 import { PROVENANCE_LABEL, getProvenanceTooltip } from "@/lib/credential-provenance";
@@ -41,7 +42,7 @@ export default function CertificateDetailModal({
       {certificate && (
         <div className="flex flex-col gap-4 pr-4">
           <div className="flex items-center gap-3">
-            <span className="text-3xl">{certificate.icon}</span>
+            <CertificateIcon icon={certificate.icon} size={30} className="text-body-text shrink-0" />
             <div>
               <h3 className="font-semibold text-body-text text-lg leading-snug">{certificate.name}</h3>
               {isHeld ? (

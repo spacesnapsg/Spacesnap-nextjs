@@ -353,6 +353,8 @@ export default function AdminOverviewPage() {
   const conciergeCount = pendingConcierge?.length ?? 0;
   const supplierConciergeCount = pendingSupplierConcierge?.length ?? 0;
   const marketplaceEnquiryCount = pendingMarketplaceEnquiries?.length ?? 0;
+  const totalPendingApprovals =
+    promotionCount + orgPromotionCount + certCount + conciergeCount + supplierConciergeCount + marketplaceEnquiryCount;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
@@ -386,7 +388,7 @@ export default function AdminOverviewPage() {
         <div className="flex items-center gap-2 mb-2">
           <h2 className="text-lg font-semibold text-body-text">Pending Approvals</h2>
           <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-gradient-to-r from-admin-red-start to-admin-orange-end text-white text-xs font-semibold">
-            {certCount}
+            {totalPendingApprovals}
           </span>
         </div>
 

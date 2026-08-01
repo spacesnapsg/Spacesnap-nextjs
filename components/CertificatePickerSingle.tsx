@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Search } from "lucide-react";
 import { useCertificateCatalog } from "@/lib/hooks/useCertificates";
+import CertificateIcon from "@/components/CertificateIcon";
 
 type CertificatePickerAccent = "ca" | "supplier" | "admin";
 
@@ -89,7 +90,7 @@ export default function CertificatePickerSingle({
       >
         {selected ? (
           <span className={`inline-flex items-center gap-1.5 border rounded-full px-2.5 py-1 text-xs ${styles.chip}`}>
-            {selected.icon} {selected.name}
+            <CertificateIcon icon={selected.icon} size={12} /> {selected.name}
           </span>
         ) : (
           <span className="text-muted-text text-sm px-1">Select a certificate...</span>
@@ -126,8 +127,8 @@ export default function CertificatePickerSingle({
                       isSelected ? styles.selectedRow : "text-body-text hover:bg-background"
                     }`}
                   >
-                    <span>
-                      {cert.icon} {cert.name}
+                    <span className="inline-flex items-center gap-1.5">
+                      <CertificateIcon icon={cert.icon} size={14} /> {cert.name}
                     </span>
                     {isSelected && <Check size={14} />}
                   </button>

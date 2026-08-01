@@ -9,6 +9,7 @@ import Modal from "@/components/Modal";
 import TrainingVideoModal, { type VideoFormRenderProps } from "@/components/TrainingVideoModal";
 import CertificatePickerSingle from "@/components/CertificatePickerSingle";
 import { VIDEO_CATEGORIES, type VideoCategory, type QuizQuestion } from "@/lib/mockTutorials";
+import { CERTIFICATE_CATEGORIES } from "@/lib/certificate-categories";
 import {
   useAdminCertificates,
   useApproveCertificate,
@@ -173,7 +174,18 @@ function AddCertificateModal({ open, onClose }: { open: boolean; onClose: () => 
         </div>
         <div>
           <label className="text-xs font-medium text-muted-text mb-1.5 block">Category (optional)</label>
-          <Input value={category} onChange={(e) => setCategory(e.target.value)} className="w-full focus:!border-admin-red-start" />
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full bg-background border border-border/40 text-body-text rounded h-11 px-4 focus:outline-none focus:border-admin-red-start transition-colors"
+          >
+            <option value="">No category</option>
+            {CERTIFICATE_CATEGORIES.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="text-xs font-medium text-muted-text mb-1.5 block">Description / Context</label>

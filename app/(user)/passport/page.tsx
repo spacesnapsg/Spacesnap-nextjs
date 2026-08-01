@@ -8,6 +8,7 @@ import Button from "@/components/Button";
 import Input from "@/components/Input";
 import Modal from "@/components/Modal";
 import CertificateDetailModal from "@/components/CertificateDetailModal";
+import CertificateIcon from "@/components/CertificateIcon";
 import HowCertificatesAreEarnedModal from "@/components/HowCertificatesAreEarnedModal";
 import TrainingSessionDetailModal from "@/components/TrainingSessionDetailModal";
 import BuyerOrganizationCard from "@/components/BuyerOrganizationCard";
@@ -350,7 +351,7 @@ function CertBadge({
       <span className="absolute top-1.5 right-1.5 h-3 w-3 rounded-full bg-user-teal-start flex items-center justify-center">
         <Check size={7} className="text-white" />
       </span>
-      <span className="text-lg">{certificate.icon}</span>
+      <CertificateIcon icon={certificate.icon} size={20} className="text-body-text" />
       <p className="text-xs font-semibold text-body-text leading-snug">{certificate.name}</p>
       {provenanceLabel && <p className="text-[10px] text-muted-text truncate w-full">{provenanceLabel}</p>}
     </button>
