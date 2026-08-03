@@ -166,10 +166,10 @@ export function useBuyerOrgJoinRequests() {
 export function useResolveBuyerOrgJoinRequest() {
   const invalidate = useInvalidateBuyerOrganization();
   return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: "approved" | "rejected" }) =>
+    mutationFn: ({ id, status, reason }: { id: string; status: "approved" | "rejected"; reason?: string }) =>
       apiFetch(`/api/buyer-organization/join-requests/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, reason }),
       }),
     onSuccess: invalidate,
   });

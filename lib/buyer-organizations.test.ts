@@ -235,7 +235,7 @@ describe("buyer org join-request queue (real DB)", () => {
       const rejectedRequest = pending.find((r) => r.requestedByUserId === rejected.id)!;
 
       await resolveBuyerOrgJoinRequest(admin.id, approvedRequest.id, "approved");
-      await resolveBuyerOrgJoinRequest(admin.id, rejectedRequest.id, "rejected");
+      await resolveBuyerOrgJoinRequest(admin.id, rejectedRequest.id, "rejected", "Org is at capacity");
 
       const approvedUser = await prisma.user.findUniqueOrThrow({ where: { id: approved.id } });
       assert.equal(approvedUser.buyerOrganizationId?.toString(), org.id.toString());
@@ -243,7 +243,19 @@ describe("buyer org join-request queue (real DB)", () => {
       const rejectedUser = await prisma.user.findUniqueOrThrow({ where: { id: rejected.id } });
       assert.equal(rejectedUser.buyerOrganizationId, null);
 
+      const rejectedRequestRow = await prisma.buyerOrganizationJoinRequest.findUniqueOrThrow({
+        where: { id: rejectedRequest.id },
+      });
+      assert.equal(rejectedRequestRow.declineReason, "Org is at capacity");
+
       assert.equal((await getPendingBuyerOrgJoinRequests(org.id)).length, 0);
+
+      // Cross-cutting UX fix (2026-08-03) — the requester should be told why,
+      // matching the same decline-reason notification already sent for
+      // boost/spend request declines.
+      const rejectedUserNotifications = await prisma.notification.findMany({ where: { userId: rejected.id } });
+      assert.equal(rejectedUserNotifications.length, 1);
+      assert.match(rejectedUserNotifications[0].message, /Org is at capacity/);
     } finally {
       await cleanupUsers([admin.id, approved.id, rejected.id]);
       await cleanupOrgs([org.id]);

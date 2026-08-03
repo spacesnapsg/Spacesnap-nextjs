@@ -6,6 +6,7 @@ import Modal from "@/components/Modal";
 import Button from "@/components/Button";
 import Pagination from "@/components/Pagination";
 import DateRangePicker from "@/components/DateRangePicker";
+import DeclineReasonModal from "@/components/DeclineReasonModal";
 import { ApiRequestError } from "@/lib/api-client";
 import {
   useBuyerOrgMembers,
@@ -25,6 +26,8 @@ import {
 import { useDateRangeFilter } from "@/lib/hooks/useDateRangeFilter";
 
 type Tab = "overview" | "members" | "requests" | "spend";
+
+type DeclineTarget = { id: string; name: string };
 
 interface ManageBuyerOrganizationModalProps {
   open: boolean;
@@ -86,6 +89,8 @@ function Section({
 export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBuyerOrganizationModalProps) {
   const [tab, setTab] = useState<Tab>("overview");
   const [error, setError] = useState<string | null>(null);
+  const [declineJoinTarget, setDeclineJoinTarget] = useState<DeclineTarget | null>(null);
+  const [declineSpendTarget, setDeclineSpendTarget] = useState<DeclineTarget | null>(null);
 
   const { data: stats, isLoading: statsLoading } = useBuyerOrgStats(open);
   const { data: members } = useBuyerOrgMembers();
@@ -121,6 +126,23 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
 
   function handleError(err: unknown) {
     setError(err instanceof ApiRequestError ? err.message : "Something went wrong.");
+  }
+
+  function handleDeclineJoinConfirm(reason: string) {
+    if (!declineJoinTarget) return;
+    setError(null);
+    resolveRequest.mutate(
+      { id: declineJoinTarget.id, status: "rejected", reason },
+      { onError: handleError }
+    );
+    setDeclineJoinTarget(null);
+  }
+
+  function handleDeclineSpendConfirm(reason: string) {
+    if (!declineSpendTarget) return;
+    setError(null);
+    declineSpendRequest.mutate({ id: declineSpendTarget.id, reason }, { onError: handleError });
+    setDeclineSpendTarget(null);
   }
 
   return (
@@ -441,14 +463,9 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
                   </Button>
                   <button
                     type="button"
+                    title="Decline"
                     disabled={resolveRequest.isPending}
-                    onClick={() => {
-                      setError(null);
-                      resolveRequest.mutate(
-                        { id: request.id, status: "rejected" },
-                        { onError: handleError }
-                      );
-                    }}
+                    onClick={() => setDeclineJoinTarget({ id: request.id, name: request.requestedBy.name })}
                     className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
                   >
                     <XIcon size={16} />
@@ -493,10 +510,7 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
                     type="button"
                     title="Decline"
                     disabled={declineSpendRequest.isPending}
-                    onClick={() => {
-                      setError(null);
-                      declineSpendRequest.mutate({ id: request.id }, { onError: handleError });
-                    }}
+                    onClick={() => setDeclineSpendTarget({ id: request.id, name: request.requestedBy.name })}
                     className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
                   >
                     <XIcon size={16} />
@@ -507,6 +521,19 @@ export default function ManageBuyerOrganizationModal({ open, onClose }: ManageBu
           )}
         </div>
       )}
+
+      <DeclineReasonModal
+        open={!!declineJoinTarget}
+        onClose={() => setDeclineJoinTarget(null)}
+        onConfirm={handleDeclineJoinConfirm}
+        requestName={declineJoinTarget?.name}
+      />
+      <DeclineReasonModal
+        open={!!declineSpendTarget}
+        onClose={() => setDeclineSpendTarget(null)}
+        onConfirm={handleDeclineSpendConfirm}
+        requestName={declineSpendTarget?.name}
+      />
     </Modal>
   );
 }

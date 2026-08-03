@@ -19,6 +19,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const body = await request.json().catch(() => null);
   const status = body && typeof body === "object" ? (body as Record<string, unknown>).status : undefined;
+  const reason = body && typeof body === "object" ? (body as Record<string, unknown>).reason : undefined;
   if (status !== "approved" && status !== "rejected") {
     return validationErrorResponse(
       new ApiValidationError({ status: ['status must be "approved" or "rejected".'] })
@@ -26,7 +27,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   try {
-    const updated = await resolveBuyerOrgJoinRequest(authResult.userId, requestId, status);
+    const updated = await resolveBuyerOrgJoinRequest(
+      authResult.userId,
+      requestId,
+      status,
+      typeof reason === "string" ? reason : undefined
+    );
     return NextResponse.json({
       request: { id: updated.id.toString(), status: updated.status },
     });

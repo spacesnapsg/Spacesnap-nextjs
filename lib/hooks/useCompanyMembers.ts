@@ -72,10 +72,10 @@ export function useCompanyJoinRequests() {
 export function useResolveCompanyJoinRequest() {
   const invalidate = useInvalidateCompanyMembers();
   return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: "approved" | "rejected" }) =>
+    mutationFn: ({ id, status, reason }: { id: string; status: "approved" | "rejected"; reason?: string }) =>
       apiFetch(`/api/supplier/company/join-requests/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, reason }),
       }),
     onSuccess: invalidate,
   });

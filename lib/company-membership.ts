@@ -186,7 +186,8 @@ export async function getPendingCompanyJoinRequests(companyId: bigint) {
 export async function resolveCompanyJoinRequest(
   actingAdminUserId: string,
   requestId: bigint,
-  decision: "approved" | "rejected"
+  decision: "approved" | "rejected",
+  reason?: string
 ) {
   const admin = await prisma.user.findUniqueOrThrow({ where: { id: actingAdminUserId } });
   if (!admin.isCompanyAdmin || !admin.companyId) throw new NotCompanyAdminError();
@@ -198,7 +199,12 @@ export async function resolveCompanyJoinRequest(
 
     const updated = await tx.companyJoinRequest.update({
       where: { id: requestId },
-      data: { status: decision, resolvedByUserId: actingAdminUserId, resolvedAt: new Date() },
+      data: {
+        status: decision,
+        declineReason: decision === "rejected" ? (reason ?? null) : null,
+        resolvedByUserId: actingAdminUserId,
+        resolvedAt: new Date(),
+      },
     });
 
     if (decision === "approved") {
@@ -215,6 +221,16 @@ export async function resolveCompanyJoinRequest(
         message: `${requestedByUser.name} is now a supplier at ${company.name}.`,
         relatedUserId: requestedByUser.id,
         relatedCompanyId: admin.companyId,
+      });
+    } else {
+      await tx.notification.create({
+        data: {
+          userId: request.requestedByUserId,
+          title: "Company join request declined",
+          message: reason
+            ? `Your request to join the company was declined: ${reason}`
+            : "Your request to join the company was declined.",
+        },
       });
     }
 

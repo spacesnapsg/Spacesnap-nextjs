@@ -239,7 +239,7 @@ describe("company join-request queue (real DB)", () => {
       const rejectedRequest = pending.find((r) => r.requestedByUserId === rejected.id)!;
 
       await resolveCompanyJoinRequest(admin.id, approvedRequest.id, "approved");
-      await resolveCompanyJoinRequest(admin.id, rejectedRequest.id, "rejected");
+      await resolveCompanyJoinRequest(admin.id, rejectedRequest.id, "rejected", "Not the right fit currently");
 
       const approvedUser = await prisma.user.findUniqueOrThrow({ where: { id: approved.id } });
       assert.equal(approvedUser.companyId?.toString(), company.id.toString());
@@ -247,6 +247,11 @@ describe("company join-request queue (real DB)", () => {
 
       const rejectedUser = await prisma.user.findUniqueOrThrow({ where: { id: rejected.id } });
       assert.equal(rejectedUser.companyId, null);
+
+      const rejectedRequestRow = await prisma.companyJoinRequest.findUniqueOrThrow({
+        where: { id: rejectedRequest.id },
+      });
+      assert.equal(rejectedRequestRow.declineReason, "Not the right fit currently");
 
       assert.equal((await getPendingCompanyJoinRequests(company.id)).length, 0);
 
@@ -257,6 +262,13 @@ describe("company join-request queue (real DB)", () => {
       assert.equal(approvedNotifications[0].type, "new_supplier");
       const rejectedNotifications = await prisma.adminNotification.findMany({ where: { relatedUserId: rejected.id } });
       assert.equal(rejectedNotifications.length, 0);
+
+      // Cross-cutting UX fix (2026-08-03) — the requester should be told why,
+      // matching the same decline-reason notification already sent for
+      // boost/spend request declines.
+      const rejectedUserNotifications = await prisma.notification.findMany({ where: { userId: rejected.id } });
+      assert.equal(rejectedUserNotifications.length, 1);
+      assert.match(rejectedUserNotifications[0].message, /Not the right fit currently/);
     } finally {
       await cleanupUsers([admin.id, approved.id, rejected.id]);
       await cleanupCompanies([company.id]);

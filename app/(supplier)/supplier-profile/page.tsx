@@ -25,6 +25,9 @@ import {
 import { ApiRequestError } from "@/lib/api-client";
 import SupplierEdmCard from "@/components/SupplierEdmCard";
 import ListingBoostCatalogueCard from "@/components/ListingBoostCatalogueCard";
+import DeclineReasonModal from "@/components/DeclineReasonModal";
+
+type DeclineTarget = { id: string; name: string };
 
 function getInitials(name: string) {
   return name
@@ -124,6 +127,8 @@ function TeamMembersCard() {
   const { data: requests } = useCompanyJoinRequests();
   const resolveRequest = useResolveCompanyJoinRequest();
   const [error, setError] = useState<string | null>(null);
+  const [declineJoinTarget, setDeclineJoinTarget] = useState<DeclineTarget | null>(null);
+  const [declineBoostTarget, setDeclineBoostTarget] = useState<DeclineTarget | null>(null);
 
   const isAdmin = Boolean(session?.user?.isCompanyAdmin);
 
@@ -133,6 +138,23 @@ function TeamMembersCard() {
 
   function handleError(err: unknown) {
     setError(err instanceof ApiRequestError ? err.message : "Something went wrong.");
+  }
+
+  function handleDeclineJoinConfirm(reason: string) {
+    if (!declineJoinTarget) return;
+    setError(null);
+    resolveRequest.mutate(
+      { id: declineJoinTarget.id, status: "rejected", reason },
+      { onError: handleError }
+    );
+    setDeclineJoinTarget(null);
+  }
+
+  function handleDeclineBoostConfirm(reason: string) {
+    if (!declineBoostTarget) return;
+    setError(null);
+    declineBoostRequest.mutate({ id: declineBoostTarget.id, reason }, { onError: handleError });
+    setDeclineBoostTarget(null);
   }
 
   return (
@@ -238,11 +260,9 @@ function TeamMembersCard() {
                     </Button>
                     <button
                       type="button"
+                      title="Decline"
                       disabled={resolveRequest.isPending}
-                      onClick={() => {
-                        setError(null);
-                        resolveRequest.mutate({ id: request.id, status: "rejected" }, { onError: handleError });
-                      }}
+                      onClick={() => setDeclineJoinTarget({ id: request.id, name: request.requestedBy.name })}
                       className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
                     >
                       <XIcon size={16} />
@@ -296,10 +316,7 @@ function TeamMembersCard() {
                       type="button"
                       title="Decline"
                       disabled={declineBoostRequest.isPending}
-                      onClick={() => {
-                        setError(null);
-                        declineBoostRequest.mutate({ id: request.id }, { onError: handleError });
-                      }}
+                      onClick={() => setDeclineBoostTarget({ id: request.id, name: request.requestedBy.name })}
                       className="h-8 w-8 flex items-center justify-center rounded text-muted-text hover:text-error-red transition-colors"
                     >
                       <XIcon size={16} />
@@ -311,6 +328,19 @@ function TeamMembersCard() {
           )}
         </div>
       )}
+
+      <DeclineReasonModal
+        open={!!declineJoinTarget}
+        onClose={() => setDeclineJoinTarget(null)}
+        onConfirm={handleDeclineJoinConfirm}
+        requestName={declineJoinTarget?.name}
+      />
+      <DeclineReasonModal
+        open={!!declineBoostTarget}
+        onClose={() => setDeclineBoostTarget(null)}
+        onConfirm={handleDeclineBoostConfirm}
+        requestName={declineBoostTarget?.name}
+      />
     </Card>
   );
 }

@@ -213,7 +213,8 @@ export async function getPendingBuyerOrgJoinRequests(buyerOrganizationId: bigint
 export async function resolveBuyerOrgJoinRequest(
   actingAdminUserId: string,
   requestId: bigint,
-  decision: "approved" | "rejected"
+  decision: "approved" | "rejected",
+  reason?: string
 ) {
   const admin = await prisma.user.findUniqueOrThrow({ where: { id: actingAdminUserId } });
   if (!admin.isBuyerOrgAdmin || !admin.buyerOrganizationId) throw new NotBuyerOrgAdminError();
@@ -227,13 +228,28 @@ export async function resolveBuyerOrgJoinRequest(
 
     const updated = await tx.buyerOrganizationJoinRequest.update({
       where: { id: requestId },
-      data: { status: decision, resolvedByUserId: actingAdminUserId, resolvedAt: new Date() },
+      data: {
+        status: decision,
+        declineReason: decision === "rejected" ? (reason ?? null) : null,
+        resolvedByUserId: actingAdminUserId,
+        resolvedAt: new Date(),
+      },
     });
 
     if (decision === "approved") {
       await tx.user.update({
         where: { id: request.requestedByUserId },
         data: { buyerOrganizationId: admin.buyerOrganizationId },
+      });
+    } else {
+      await tx.notification.create({
+        data: {
+          userId: request.requestedByUserId,
+          title: "Organization join request declined",
+          message: reason
+            ? `Your request to join the organization was declined: ${reason}`
+            : "Your request to join the organization was declined.",
+        },
       });
     }
 
