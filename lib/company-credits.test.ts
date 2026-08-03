@@ -7,7 +7,7 @@ import "dotenv/config";
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, ListingType, BookingType, type Listing } from "../app/generated/prisma/client";
+import { PrismaClient, ListingType, BookingType, CompanyTransactionType, type Listing } from "../app/generated/prisma/client";
 import { createBookingWithDebit, confirmBookingWithAudit } from "./bookings";
 import { createCheckIn, checkOutCheckIn } from "./check-ins";
 import {
@@ -109,6 +109,24 @@ describe("getCompanyPurchasedBalance / getCompanyEarnedBalance (real DB)", () =>
     const company = await createCompany();
     try {
       assert.equal((await getCompanyPurchasedBalance(company.id)).toString(), "0");
+      assert.equal((await getCompanyEarnedBalance(company.id)).toString(), "0");
+    } finally {
+      await cleanupCompanyAndUsers(company.id, []);
+    }
+  });
+
+  test("an earned_rebate row older than 1 year is excluded from earnedBalance (same FIFO expiry as lib/credits.ts — see its own test coverage)", async () => {
+    const company = await createCompany();
+    try {
+      await prisma.companyTransaction.create({
+        data: {
+          companyId: company.id,
+          type: CompanyTransactionType.earned_rebate,
+          amount: "40.00",
+          createdAt: new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000),
+        },
+      });
+
       assert.equal((await getCompanyEarnedBalance(company.id)).toString(), "0");
     } finally {
       await cleanupCompanyAndUsers(company.id, []);

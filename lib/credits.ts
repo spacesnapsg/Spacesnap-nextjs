@@ -98,15 +98,56 @@ export async function getPurchasedBalance(
   return result._sum.amount ?? new Prisma.Decimal(0);
 }
 
+const EARNED_CREDIT_EXPIRY_YEARS = 1;
+
+// Earned credits (reward-tier rebates, referral bonuses, decline/cancel
+// reversals) expire 1 year after they were granted. The ledger has no
+// per-grant lot tracking — an earned_spend row doesn't record which
+// earned_grant it drew from, it's just a blind SUM — so expiry can't be a
+// column filter on individual rows; it has to be computed by replaying the
+// ledger FIFO (oldest grant consumed by a spend first, same order a real
+// wallet depletes) and then dropping whatever's left in a grant older than
+// the cutoff. Lazily computed at read time, not a scheduled job — same
+// idiom as RewardGrant/CreditHold/BookingCredit's own expiry — so no
+// schema change and no migration. `rows` must already be ordered oldest
+// first (createdAt asc, id asc tiebreak); shared by the personal
+// (getEarnedBalance below) and company (getCompanyEarnedBalance,
+// lib/company-credits.ts) ledgers, which are structurally identical modulo
+// which Prisma model/enum they read.
+export function sumUnexpiredEarnedLedger(rows: { amount: Prisma.Decimal; createdAt: Date }[]): Prisma.Decimal {
+  const cutoff = new Date();
+  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - EARNED_CREDIT_EXPIRY_YEARS);
+
+  const lots: { remaining: Prisma.Decimal; createdAt: Date }[] = [];
+  for (const row of rows) {
+    if (row.amount.gt(0)) {
+      lots.push({ remaining: row.amount, createdAt: row.createdAt });
+      continue;
+    }
+    let toConsume = row.amount.abs();
+    for (const lot of lots) {
+      if (toConsume.lte(0)) break;
+      const consumed = Prisma.Decimal.min(lot.remaining, toConsume);
+      lot.remaining = lot.remaining.sub(consumed);
+      toConsume = toConsume.sub(consumed);
+    }
+  }
+
+  return lots
+    .filter((lot) => lot.createdAt >= cutoff)
+    .reduce((sum, lot) => sum.add(lot.remaining), new Prisma.Decimal(0));
+}
+
 export async function getEarnedBalance(
   userId: string,
   client: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Prisma.Decimal> {
-  const result = await client.transaction.aggregate({
+  const rows = await client.transaction.findMany({
     where: { userId, buyerOrganizationId: null, type: { in: [TransactionType.earned_grant, TransactionType.earned_spend] } },
-    _sum: { amount: true },
+    select: { amount: true, createdAt: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  return result._sum.amount ?? new Prisma.Decimal(0);
+  return sumUnexpiredEarnedLedger(rows);
 }
 
 // Reads the live balance inside the given transaction and throws

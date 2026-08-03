@@ -12,10 +12,15 @@ import { PrismaClient, TransactionType, Prisma } from "../app/generated/prisma/c
 import {
   getCreditBalance,
   getPurchasedBalance,
+  getEarnedBalance,
   getBuyerOrgPoolBalance,
   assertSufficientBuyerOrgPoolBalance,
   InsufficientCreditBalanceError,
 } from "./credits";
+
+function yearsAgo(years: number): Date {
+  return new Date(Date.now() - years * 365 * 24 * 60 * 60 * 1000);
+}
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -78,6 +83,59 @@ describe("getBuyerOrgPoolBalance / personal-balance scoping (real DB)", () => {
       );
     } finally {
       await cleanup(user.id, org.id);
+    }
+  });
+});
+
+describe("getEarnedBalance — 1-year FIFO expiry", () => {
+  test("a grant older than 1 year is excluded from the balance", async () => {
+    const user = await createUser();
+    try {
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.earned_grant, amount: "50.00", createdAt: yearsAgo(2) },
+      });
+
+      assert.equal((await getEarnedBalance(user.id)).toString(), "0");
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  test("a grant within the last year still counts", async () => {
+    const user = await createUser();
+    try {
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.earned_grant, amount: "30.00", createdAt: yearsAgo(0.5) },
+      });
+
+      assert.equal((await getEarnedBalance(user.id)).toString(), "30"); // 0.5 years is within the 1-year window
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  test("FIFO: a spend consumes the oldest grant first, so a later grant it never touched still counts after the old one ages out", async () => {
+    const user = await createUser();
+    try {
+      // Oldest first: a 20 grant two years ago, a 15 spend against it 1.5 years
+      // ago (leaving 5 of that lot), then a fresh 30 grant six months ago.
+      // Naively filtering out the expired grant and then subtracting every
+      // spend regardless of which lot it drew from would net to 30 - 15 = 15
+      // — wrong, because the spend already consumed the (now-expired) old
+      // lot, not the still-live one. FIFO gives the correct 30.
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.earned_grant, amount: "20.00", createdAt: yearsAgo(2) },
+      });
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.earned_spend, amount: "-15.00", createdAt: yearsAgo(1.5) },
+      });
+      await prisma.transaction.create({
+        data: { userId: user.id, type: TransactionType.earned_grant, amount: "30.00", createdAt: yearsAgo(0.5) },
+      });
+
+      assert.equal((await getEarnedBalance(user.id)).toString(), "30");
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
     }
   });
 });

@@ -2,7 +2,7 @@ import { Prisma, CompanyTransactionType, type CompanyTransaction } from "@/app/g
 import { prisma } from "@/lib/prisma";
 import { ApiValidationError } from "@/lib/api-errors";
 import { creditsToSgd, sgdToCredits } from "@/lib/credit-units";
-import { InsufficientCreditBalanceError } from "@/lib/credits";
+import { InsufficientCreditBalanceError, sumUnexpiredEarnedLedger } from "@/lib/credits";
 import { getCompanySupplierTier, type SupplierTier } from "@/lib/supplier-tiers";
 import { getBumpUnitPriceCredits } from "@/lib/boost-products";
 import type { ActivityQuery } from "@/lib/activity";
@@ -29,15 +29,19 @@ export async function getCompanyPurchasedBalance(
   return agg._sum.amount ?? new Prisma.Decimal(0);
 }
 
+// Same 1-year FIFO lazy expiry as the personal earned-credit ledger — see
+// sumUnexpiredEarnedLedger's own comment (lib/credits.ts) for why this
+// can't be a column filter and has to replay the ledger instead.
 export async function getCompanyEarnedBalance(
   companyId: bigint,
   client: Prisma.TransactionClient | typeof prisma = prisma
 ): Promise<Prisma.Decimal> {
-  const agg = await client.companyTransaction.aggregate({
+  const rows = await client.companyTransaction.findMany({
     where: { companyId, type: { in: [CompanyTransactionType.earned_rebate, CompanyTransactionType.earned_spend] } },
-    _sum: { amount: true },
+    select: { amount: true, createdAt: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  return agg._sum.amount ?? new Prisma.Decimal(0);
+  return sumUnexpiredEarnedLedger(rows);
 }
 
 // earned-balance counterpart to lib/credits.ts's assertSufficientEarnedBalance,
